@@ -1,6 +1,6 @@
 # Data Module
 
-This module contains data handling and statistical analysis classes for the FAO API. It provides:
+This module contains data handling and statistical analysis classes for the CRAF'd API. It provides:
 
 - Dataset abstractions for loading and manipulating prediction data
 - Geographic aggregation across multiple administrative levels
@@ -12,7 +12,7 @@ This module contains data handling and statistical analysis classes for the FAO 
 ```
 data/
 ├── __init__.py
-├── handlers.py      # Dataset classes for FAO predictions
+├── handlers.py      # Dataset classes for CRAF'd predictions
 └── README.md
 ```
 
@@ -20,7 +20,7 @@ data/
 
 ## handlers.py
 
-Contains the dataset hierarchy for handling FAO prediction data with geographic metadata.
+Contains the dataset hierarchy for handling CRAF'd prediction data with geographic metadata.
 
 ### Class Hierarchy
 
@@ -135,7 +135,7 @@ by `ForecastDataset._METADATA_COLS`:
 
 ### `ForecastDataset`
 
-The primary dataset class for FAO predictions with full geographic metadata support.
+The primary dataset class for CRAF'd predictions with full geographic metadata support.
 
 #### Constructor
 

@@ -11,7 +11,7 @@
 
 > **What is this class for?**
 
-`CrafdApiManager` orchestrates the views-faoapi FastAPI service. It manages the full API lifecycle -- startup, shutdown, endpoint routing, multi-tier caching, and data retrieval -- to deliver VIEWS conflict forecast data to the United Nations Food and Agriculture Organization. It is the single top-level entry point that wires together domain logic (`ForecastDataset`), infrastructure services (`PredictionStoreManager`, `AppWriteFileManager`), and the HTTP transport layer (FastAPI/uvicorn).
+`CrafdApiManager` orchestrates the views-faoapi FastAPI service. It manages the full API lifecycle -- startup, shutdown, endpoint routing, multi-tier caching, and data retrieval -- to deliver VIEWS conflict forecast data to the Complex Risk Analytics Fund (CRAF'd). It is the single top-level entry point that wires together domain logic (`ForecastDataset`), infrastructure services (`PredictionStoreManager`, `AppWriteFileManager`), and the HTTP transport layer (FastAPI/uvicorn).
 
 ---
 

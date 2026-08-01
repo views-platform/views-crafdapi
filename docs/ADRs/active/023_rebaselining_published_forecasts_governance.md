@@ -4,7 +4,7 @@
 **Date:** 2026-06-24  
 **Deciders:** Simon (PRIO), Claude Code  
 **Consulted:** ADR-021 (dense-grid fill semantics), risk register C-84, C-81, C-86, C-71  
-**Informed:** FAO API consumers  
+**Informed:** CRAF'd API consumers  
 
 ---
 

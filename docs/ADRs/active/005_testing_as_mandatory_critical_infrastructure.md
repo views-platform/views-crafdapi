@@ -8,7 +8,7 @@
 
 ## Context
 
-This repository is a FastAPI service that delivers VIEWS conflict forecast data to the United Nations Food and Agriculture Organization. Its outputs -- including MAP estimates, HDI credible intervals, posterior distribution summaries, and geographically aggregated fatality predictions -- directly inform humanitarian decision-making under uncertainty.
+This repository is a FastAPI service that delivers VIEWS conflict forecast data to the Complex Risk Analytics Fund (CRAF'd). Its outputs -- including MAP estimates, HDI credible intervals, posterior distribution summaries, and geographically aggregated fatality predictions -- directly inform humanitarian decision-making under uncertainty.
 
 In such systems, failure is not limited to crashes or exceptions.
 Failures may also include:

@@ -1,6 +1,6 @@
-# FAO Forecast API (views-faoapi)
+# CRAF'd Forecast API (views-crafdapi)
 
-FastAPI service for retrieving and analyzing FAO prediction data stored in Appwrite. It provides:
+FastAPI service for retrieving and analyzing CRAF'd prediction data stored in Appwrite. It provides:
 - Retrieval of latest historical and forecast prediction datasets
 - Flexible subsetting by time, entity, features, and samples
 - Computation of Highest Density Intervals (HDI) and MAP estimates
@@ -8,7 +8,7 @@ FastAPI service for retrieving and analyzing FAO prediction data stored in Appwr
 - Appwrite file browsing and cache management
 - Geospatial metadata enrichment based on PRIO-GRID
 
-This repository is part of the views-platform and focuses on exposing FAO predictions via HTTP.
+This repository is part of the views-platform and focuses on exposing CRAF'd predictions via HTTP.
 
 ## Platform seam contract (pinned)
 
@@ -38,7 +38,7 @@ This API is a consumer on the shared Appwrite seam and conforms to **The Appwrit
 ## Installation
 
 ```bash
-# From repository root (views-faoapi)
+# From repository root (views-crafdapi)
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip

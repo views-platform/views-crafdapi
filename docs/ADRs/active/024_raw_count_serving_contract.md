@@ -4,7 +4,7 @@
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** views-pipeline-core ADR-055 (Raw-Space Model I/O Contract), views-models ADR-012 (Target Scale and Prefix Convention), views-hydranet ADR-063 (Regression-head output activation), ADR-003 (Authority of Declarations over Inference), faoapi ADR-023 (re-baselining governance), register C-72 / C-81
-**Informed:** UN FAO API consumers
+**Informed:** UN CRAF'd API consumers
 
 ---
 

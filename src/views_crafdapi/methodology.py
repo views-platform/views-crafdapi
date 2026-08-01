@@ -17,5 +17,5 @@ Bump this string when a re-baselining change reaches `main` (see ADR-023). Histo
   a schema enrichment, not a value shift.
 """
 
-METHODOLOGY_VERSION = "faoapi-methodology/3"
+METHODOLOGY_VERSION = "crafdapi-methodology/3"
 """Monotonic identifier for the published-forecast methodology (ADR-023)."""

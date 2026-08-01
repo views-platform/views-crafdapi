@@ -4,7 +4,7 @@
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** ADR-024 (raw-count serving contract), ADR-023 (re-baselining governance), ADR-003 (declarations over inference), views-models ADR-012 (target scale/prefix), views-datafactory (`ged_*_best` naming), views-frames-summarize (`hdi_tower`, `tower_point`, `expected_shortfall`)
-**Informed:** UN FAO API consumers
+**Informed:** UN CRAF'd API consumers
 
 ---
 

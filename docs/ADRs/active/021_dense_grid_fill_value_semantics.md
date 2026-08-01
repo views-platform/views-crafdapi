@@ -4,7 +4,7 @@
 **Date:** 2026-05-31  
 **Deciders:** Simon (PRIO), Claude Code  
 **Consulted:** views-datafactory ADR-024 (compilation grid invariants), ADR-035 (V-Dem as democracy source)  
-**Informed:** FAO API consumers  
+**Informed:** CRAF'd API consumers  
 
 ---
 

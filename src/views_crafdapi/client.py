@@ -1,5 +1,5 @@
 """
-Lightweight client for the VIEWS FAO Prediction API.
+Lightweight client for the VIEWS CRAF'd Prediction API.
 
 Convenience wrappers for fetching data subsets and converting responses
 to pandas DataFrames. Intended for notebooks, scripts, and external consumers.
@@ -10,7 +10,7 @@ import requests
 
 
 class FaoApiClient:
-    """Stateless client for the VIEWS FAO Prediction API."""
+    """Stateless client for the VIEWS CRAF'd Prediction API."""
 
     def __init__(self, base_url: str, api_key: str, *, timeout: float = 30.0):
         self._base_url = base_url.rstrip("/")

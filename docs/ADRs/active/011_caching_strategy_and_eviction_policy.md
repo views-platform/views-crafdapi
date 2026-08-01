@@ -56,7 +56,7 @@ Adopt bounded, TTL-aware, versioned caching across all three tiers:
 
 ## Rationale
 
-- Unbounded caches in a long-running ASGI server are a well-known production failure mode. The FAO API serves multiple users with distinct API keys; each key creates separate cache entries across all three dicts.
+- Unbounded caches in a long-running ASGI server are a well-known production failure mode. The CRAF'd API serves multiple users with distinct API keys; each key creates separate cache entries across all three dicts.
 - Silent pickle deserialization failures mask the difference between "cache expired normally" and "deployment changed class definitions." These two cases require different operational responses.
 - `cachetools` is already in the dependency tree (`pyproject.toml:24`). Using it eliminates manual eviction logic and resolves the unused-dependency concern simultaneously.
 - The 3.5-week disk TTL is appropriate for monthly forecast data and does not need to change. The new schema version mechanism is orthogonal to TTL.

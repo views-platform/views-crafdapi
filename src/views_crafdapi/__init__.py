@@ -1,4 +1,4 @@
-"""VIEWS FAO Prediction API — Python client and utilities.
+"""VIEWS CRAF'd Prediction API — Python client and utilities.
 
 ``FaoApiClient`` is the supported entry point for consumers (notebooks, scripts, external
 users): ``from views_crafdapi import FaoApiClient``.
