@@ -10,14 +10,14 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from views_faoapi.managers.api import FAOApiManager
+from views_crafdapi.managers.api import CrafdApiManager
 
 pytestmark = pytest.mark.layer3_http
 
 
 @pytest.fixture
 def client(tmp_path):
-    mgr = FAOApiManager.from_config({}, cache_dir=tmp_path / "cache")
+    mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
     mgr.app = FastAPI()
     mgr._register_routes()
     return TestClient(mgr.app)

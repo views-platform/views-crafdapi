@@ -60,7 +60,7 @@ def _unique_filename(prefix="tierb"):
 
 @pytest.fixture(scope="module")
 def appwrite_config():
-    from views_faoapi.managers.appwrite import AppwriteConfig
+    from views_crafdapi.managers.appwrite import AppwriteConfig
 
     kwargs = dict(
         endpoint=os.getenv("APPWRITE_ENDPOINT"),
@@ -86,14 +86,14 @@ def appwrite_config():
 
 @pytest.fixture(scope="module")
 def file_manager(appwrite_config):
-    from views_faoapi.managers.appwrite import AppWriteFileManager
+    from views_crafdapi.managers.appwrite import AppWriteFileManager
 
     return AppWriteFileManager(appwrite_config)
 
 
 @pytest.fixture(scope="module")
 def prediction_manager(appwrite_config):
-    from views_faoapi.managers.prediction import PredictionStoreManager
+    from views_crafdapi.managers.prediction import PredictionStoreManager
 
     return PredictionStoreManager(appwrite_file_manager_config=appwrite_config)
 
@@ -105,7 +105,7 @@ def bucket_id(appwrite_config):
 
 @pytest.fixture(scope="module")
 def cached_file_manager(appwrite_config):
-    from views_faoapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
+    from views_crafdapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
 
     cache_dir = tempfile.mkdtemp(prefix="tierb_cache_")
     kwargs = dict(

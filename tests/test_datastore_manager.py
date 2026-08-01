@@ -3,12 +3,12 @@ from unittest.mock import Mock, patch
 from pathlib import Path
 import pandas as pd
 
-from views_faoapi.managers.prediction import (
+from views_crafdapi.managers.prediction import (
     PredictionMetadata,
     PredictionProvenance,
     PredictionStoreManager,
 )
-from views_faoapi.managers.appwrite import (
+from views_crafdapi.managers.appwrite import (
     AppwriteConfig,
     OperationResult,
     AuthMethod,
@@ -203,7 +203,7 @@ def mock_config(mock_path_manager):
 @pytest.fixture
 def mock_appwrite_manager():
     """Mock AppWriteFileManager"""
-    with patch("views_faoapi.managers.prediction.manager.AppWriteFileManager") as mock:
+    with patch("views_crafdapi.managers.prediction.manager.AppWriteFileManager") as mock:
         manager = mock.return_value
         
         # Mock metadata_manager
@@ -215,7 +215,7 @@ def mock_appwrite_manager():
 @pytest.fixture
 def prediction_store(mock_config, mock_appwrite_manager):
     """Create PredictionStoreManager instance with mocked dependencies"""
-    with patch("views_faoapi.managers.prediction.manager.AppWriteFileManager", return_value=mock_appwrite_manager):
+    with patch("views_crafdapi.managers.prediction.manager.AppWriteFileManager", return_value=mock_appwrite_manager):
         store = PredictionStoreManager(mock_config)
         yield store
 
@@ -224,7 +224,7 @@ def prediction_store(mock_config, mock_appwrite_manager):
 class TestPredictionStoreManager:
     def test_initialization(self, mock_config, mock_appwrite_manager):
         """Test PredictionStoreManager initialization"""
-        with patch("views_faoapi.managers.prediction.manager.AppWriteFileManager", return_value=mock_appwrite_manager):
+        with patch("views_crafdapi.managers.prediction.manager.AppWriteFileManager", return_value=mock_appwrite_manager):
             store = PredictionStoreManager(mock_config)
             
             assert store.model_path == mock_config.path_manager
@@ -951,7 +951,7 @@ class TestMethodologyVersionInProvenance:
     """ADR-023 / C-86: the provenance record carries the faoapi methodology version."""
 
     def test_provenance_includes_methodology_version(self, prediction_store, mock_appwrite_manager):
-        from views_faoapi.methodology import METHODOLOGY_VERSION
+        from views_crafdapi.methodology import METHODOLOGY_VERSION
 
         mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
             success=True,

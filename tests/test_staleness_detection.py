@@ -10,14 +10,14 @@ import pandas as pd
 import pytest
 from unittest.mock import MagicMock
 
-from views_faoapi.managers.api import FAOApiManager, StalenessResult
-from views_faoapi.managers.prediction import PredictionFileMetadata, PredictionStoreManager
+from views_crafdapi.managers.api import CrafdApiManager, StalenessResult
+from views_crafdapi.managers.prediction import PredictionFileMetadata, PredictionStoreManager
 
 pytestmark = pytest.mark.layer4_infra
 
 
 def _make_manager(tmp_path, staleness_hours=24.0):
-    return FAOApiManager.from_config(
+    return CrafdApiManager.from_config(
         {"staleness_threshold_hours": staleness_hours},
         cache_dir=tmp_path / "datasets",
     )

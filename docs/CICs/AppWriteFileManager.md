@@ -142,11 +142,11 @@ The following public methods are grouped by domain. All return `OperationResult`
 
 ## 7. Boundaries and Interactions
 
-- **Layer:** Infrastructure (`src/views_faoapi/managers/appwrite/`).
+- **Layer:** Infrastructure (`src/views_crafdapi/managers/appwrite/`).
 - **External dependency:** Appwrite Python SDK (`appwrite.client`, `appwrite.services.storage`, `appwrite.services.databases`, `appwrite.services.account`, `appwrite.services.users`). The class wraps all SDK calls and never exposes raw Appwrite types to callers.
 - **Callers:**
   - `PredictionStoreManager` (`managers/prediction/manager.py`) -- constructs an `AppWriteFileManager` from `AppwriteConfig` and delegates all file operations to it.
-  - `FAOApiManager` (`managers/api.py`) -- maintains a cache of `AppWriteFileManager` instances keyed by API key hash.
+  - `CrafdApiManager` (`managers/api.py`) -- maintains a cache of `AppWriteFileManager` instances keyed by API key hash.
 - **Internal composition:**
   - `AuthManager` (via `AuthFactory`) -- handles authentication setup. Abstract base with `ApiKeyAuth` and `SessionAuth` implementations.
   - `CacheManager` -- manages local file cache with TTL validation and metadata persistence.
@@ -161,7 +161,7 @@ The following public methods are grouped by domain. All return `OperationResult`
 **Upload a file with metadata:**
 
 ```python
-from views_faoapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
+from views_crafdapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
 
 config = AppwriteConfig(
     endpoint="https://cloud.appwrite.io/v1",
@@ -268,8 +268,8 @@ result = manager.upload_file_with_metadata(
 
 ## 11. Evolution Notes
 
-- **Stable:** The `OperationResult` return pattern is a cross-cutting contract used by all callers. Changing its shape requires updating `PredictionStoreManager`, `FAOApiManager`, and all tests.
-- **Stable:** The `AppwriteConfig` dataclass is the single configuration entry point. Its fields are referenced by `PredictionStoreManager` and `FAOApiManager`.
+- **Stable:** The `OperationResult` return pattern is a cross-cutting contract used by all callers. Changing its shape requires updating `PredictionStoreManager`, `CrafdApiManager`, and all tests.
+- **Stable:** The `AppwriteConfig` dataclass is the single configuration entry point. Its fields are referenced by `PredictionStoreManager` and `CrafdApiManager`.
 - **Candidate for change (resolved):** The commented-out code blocks were removed in a prior cleanup pass.
 - **Candidate for change:** `upload_file_from_bytes_with_metadata()` attempts rollback (deleting the uploaded file) on metadata failure, but `upload_file_with_metadata()` does not. This inconsistency may be unified.
 - **Stable (conditional):** The dual-SDK normalization layer (`_as_dict`, `_get`) is a current constraint while production runs SDK 13.3.0. When production upgrades to SDK 19.x, the dict passthrough branch remains useful but the layer could be simplified. Any modification to `_as_dict()` must preserve the `to_dict()` + flatten strategy for models with `_data` PrivateAttr --- reverting to `model_dump()` reintroduces C-22.

@@ -6,8 +6,8 @@ import pytest
 from views_frames import PredictionFrame, SpatialLevel, TargetFrame
 from views_frames.conformance import assert_frame_contract
 
-from views_faoapi.data.handlers import FAO_PGMDataset
-from views_faoapi.forecast.frames.builder import build_prediction_frame, build_target_frame
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.forecast.frames.builder import build_prediction_frame, build_target_frame
 from tests.conftest import make_fao_df
 
 pytestmark = pytest.mark.layer2_data
@@ -29,7 +29,7 @@ def test_build_target_frame_is_n_by_1():
 
 
 def test_dataset_to_frames_forecast():
-    ds = FAO_PGMDataset(make_fao_df(n_cells=4, n_months=2, n_samples=9, seed=5))
+    ds = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=9, seed=5))
     frames = ds.to_frames()
     assert set(frames) == {"pred_test", "pred_other"}
     pf = frames["pred_test"]

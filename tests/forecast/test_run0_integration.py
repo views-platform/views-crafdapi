@@ -21,8 +21,8 @@ import pytest
 from fastapi import HTTPException
 
 from tests.test_dataset_service_wire import HASH, _service
-from views_faoapi.managers import freshness
-from views_faoapi.managers.prediction import SHARD_ARTIFACT_TYPE, SIDECAR_ARTIFACT_TYPE
+from views_crafdapi.managers import freshness
+from views_crafdapi.managers.prediction import SHARD_ARTIFACT_TYPE, SIDECAR_ARTIFACT_TYPE
 
 pytestmark = pytest.mark.layer4_infra
 

@@ -62,9 +62,9 @@ The following classes in views-faoapi are explicitly identified as non-trivial a
 
 - **`PosteriorDistributionAnalyzer`** -- Stateful statistical analyzer that computes MAP estimates, empirical HDIs, and enforces HDI nesting and MAP containment. Encodes domain logic that directly shapes the numbers delivered to the FAO.
 
-- **`FAO_PGMDataset`** -- Dataset class with geographic metadata alignment, PRIO-GRID to GAUL aggregation, and element-wise distribution summation. Maintains internal state (geo_metadata, levels, tensor caches) and enforces structural invariants (MultiIndex shape, metadata column presence).
+- **`ForecastDataset`** -- Dataset class with geographic metadata alignment, PRIO-GRID to GAUL aggregation, and element-wise distribution summation. Maintains internal state (geo_metadata, levels, tensor caches) and enforces structural invariants (MultiIndex shape, metadata column presence).
 
-- **`FAOApiManager`** -- API orchestration class managing the full lifecycle of the FastAPI application, including multi-tier caching (in-memory, disk, remote Appwrite), API key authentication, and route registration. Coordinates between `PredictionStoreManager`, `AppWriteFileManager`, and `FAO_PGMDataset`.
+- **`CrafdApiManager`** -- API orchestration class managing the full lifecycle of the FastAPI application, including multi-tier caching (in-memory, disk, remote Appwrite), API key authentication, and route registration. Coordinates between `PredictionStoreManager`, `AppWriteFileManager`, and `ForecastDataset`.
 
 - **`AppWriteFileManager`** -- Storage abstraction over the Appwrite SDK with file deduplication (hash-based), cache management, metadata database orchestration, and authentication delegation. Acts as the boundary between the application and remote storage.
 

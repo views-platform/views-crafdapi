@@ -6,8 +6,8 @@ from collections import defaultdict
 import numpy as np
 import pytest
 
-from views_faoapi.data.handlers import ForecastDataset
-from views_faoapi.forecast.ingestion import wire_reader
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.forecast.ingestion import wire_reader
 
 from ._wire_fixtures import make_multi_shard_run
 
@@ -127,9 +127,9 @@ def test_assembler_column_order_tracks_whole_run_not_month_one(tmp_path):
 def test_staging_dir_unique_and_discardable(tmp_path):
     """S6b-2 review (resource): staging dirs are unique per call (no collision with write()'s tmp
     or a concurrent ingest) and fully removable."""
-    from views_faoapi.managers.disk_cache import FAODiskCacheManager
+    from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager
 
-    dc = FAODiskCacheManager(tmp_path)
+    dc = CrafdDiskCacheManager(tmp_path)
     a = dc.staging_dir("h", "forecast")
     b = dc.staging_dir("h", "forecast")
     assert a != b and a.exists() and b.exists()

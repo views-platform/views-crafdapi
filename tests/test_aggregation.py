@@ -1,11 +1,11 @@
-"""Tests for geographic aggregation pipeline in FAO_PGMDataset (C-06 partial, C-27 partial)."""
+"""Tests for geographic aggregation pipeline in ForecastDataset (C-06 partial, C-27 partial)."""
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
+from views_crafdapi.data.handlers import ForecastDataset
 
 pytestmark = pytest.mark.layer2_data
 

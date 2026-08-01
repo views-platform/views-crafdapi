@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from views_faoapi.forecast.ingestion import wire_reader
+from views_crafdapi.forecast.ingestion import wire_reader
 
 pytestmark = pytest.mark.layer2_data
 

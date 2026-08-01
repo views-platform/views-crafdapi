@@ -1,4 +1,4 @@
-"""Tests for FAO_PGMDataset pre-construction schema validation (C-13)."""
+"""Tests for ForecastDataset pre-construction schema validation (C-13)."""
 
 import copy
 
@@ -6,11 +6,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from views_faoapi.data.handlers import FAO_PGMDataset
+from views_crafdapi.data.handlers import ForecastDataset
 
 pytestmark = pytest.mark.layer2_data
 
-_METADATA_COLS = FAO_PGMDataset._METADATA_COLS
+_METADATA_COLS = ForecastDataset._METADATA_COLS
 
 
 def _make_df(
@@ -40,36 +40,36 @@ class TestFAOPGMDatasetValidation:
     def test_missing_pred_columns_raises(self):
         df = _make_df(pred_cols=())
         with pytest.raises(ValueError, match="No prediction columns"):
-            FAO_PGMDataset(df)
+            ForecastDataset(df)
 
     def test_wrong_index_names_raises(self):
         df = _make_df(index_names=("time_id", "grid_id"))
         with pytest.raises(ValueError, match="MultiIndex must be"):
-            FAO_PGMDataset(df)
+            ForecastDataset(df)
 
     def test_non_multiindex_raises(self):
         df = _make_df(use_multiindex=False)
         with pytest.raises(ValueError, match="2-level MultiIndex"):
-            FAO_PGMDataset(df)
+            ForecastDataset(df)
 
     def test_valid_dataframe_passes(self):
         df = _make_df()
-        dataset = FAO_PGMDataset(df)
+        dataset = ForecastDataset(df)
         assert hasattr(dataset, "dataframe")
         assert len(dataset.targets) > 0
 
     def test_priogrid_gid_accepted_and_renamed(self):
         df = _make_df(index_names=("month_id", "priogrid_gid"))
-        dataset = FAO_PGMDataset(df)
+        dataset = ForecastDataset(df)
         assert dataset.dataframe.index.names[1] == "priogrid_id"
 
     def test_fill_value_default_is_zero(self):
         df = _make_df(n_rows=2)
-        dataset = FAO_PGMDataset(df)
+        dataset = ForecastDataset(df)
         assert dataset._fill_value == 0
 
     def test_fill_value_nan_produces_nan_in_filled_cells(self):
-        from views_faoapi.data.handlers import _GridDataset
+        from views_crafdapi.data.handlers import _GridDataset
 
         index = pd.MultiIndex.from_tuples(
             [(600, 100), (601, 100), (601, 101)],
@@ -88,27 +88,27 @@ class TestDeepCopyOptimization:
 
     def test_deepcopy_preserves_dataframe(self):
         df = _make_df()
-        original = FAO_PGMDataset(df)
+        original = ForecastDataset(df)
         cloned = copy.deepcopy(original)
         assert cloned.dataframe.shape == original.dataframe.shape
         assert list(cloned.dataframe.columns) == list(original.dataframe.columns)
 
     def test_deepcopy_preserves_levels(self):
         df = _make_df()
-        original = FAO_PGMDataset(df)
+        original = ForecastDataset(df)
         cloned = copy.deepcopy(original)
         assert cloned.levels == original.levels
         assert cloned.levels is not original.levels
 
     def test_deepcopy_preserves_geo_metadata(self):
         df = _make_df()
-        original = FAO_PGMDataset(df)
+        original = ForecastDataset(df)
         cloned = copy.deepcopy(original)
         assert cloned.geo_metadata.shape == original.geo_metadata.shape
 
     def test_deepcopy_isolates_dataframe_mutation(self):
         df = _make_df()
-        original = FAO_PGMDataset(df)
+        original = ForecastDataset(df)
         orig_shape = original.dataframe.shape
         cloned = copy.deepcopy(original)
         # Mutate the clone's container (post-S4d a prediction `.dataframe` has no sample
@@ -119,7 +119,7 @@ class TestDeepCopyOptimization:
 
     def test_deepcopy_isolates_geo_metadata_mutation(self):
         df = _make_df()
-        original = FAO_PGMDataset(df)
+        original = ForecastDataset(df)
         orig_cols = list(original.geo_metadata.columns)
         cloned = copy.deepcopy(original)
         cloned.geo_metadata.drop(cloned.geo_metadata.columns[0], axis=1, inplace=True)

@@ -1,6 +1,6 @@
 """C-66: shutdown must NOT delete the durable on-disk dataset cache.
 
-`FAODiskCacheManager` (`cache/datasets/`) is a 3.5-week cross-restart cache (ADR-011).
+`CrafdDiskCacheManager` (`cache/datasets/`) is a 3.5-week cross-restart cache (ADR-011).
 `_shutdown` previously ran `shutil.rmtree(self._model_path.cache)`, wiping it on every
 SIGTERM — under a `systemd Restart=always` service that meant a full cold rebuild
 (~2 min for the 5.7M-row historical set) on *every* restart.
@@ -17,9 +17,9 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
-from views_faoapi.managers.api import FAOApiManager
-from views_faoapi.managers.disk_cache import FAODiskCacheManager
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.managers.api import CrafdApiManager
+from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -28,11 +28,11 @@ def _dataset(seed: int = 1) -> ForecastDataset:
     return ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=16, seed=seed))
 
 
-def _manager_with_disk_cache(cache_root: Path) -> FAOApiManager:
+def _manager_with_disk_cache(cache_root: Path) -> CrafdApiManager:
     """Test manager whose durable cache lives at ``<cache_root>/datasets``, with
     ``_model_path.cache == cache_root`` — reproducing the production layout where the
     old ``_shutdown`` rmtree'd the parent and took the ``datasets/`` store with it."""
-    mgr = FAOApiManager.from_config({}, cache_dir=cache_root / "datasets")
+    mgr = CrafdApiManager.from_config({}, cache_dir=cache_root / "datasets")
     mgr._model_path = types.SimpleNamespace(cache=cache_root)
     return mgr
 
@@ -69,8 +69,8 @@ class TestDiskCacheSurvivesRestart:
         """Write via one cache manager, then read via a fresh one on the same dir
         (a new process after a restart) — a hit, not a cold rebuild."""
         datasets_dir = tmp_path / "datasets"
-        FAODiskCacheManager(datasets_dir).write("hash1", "forecast", _dataset(), "file_1")
+        CrafdDiskCacheManager(datasets_dir).write("hash1", "forecast", _dataset(), "file_1")
 
-        fresh = FAODiskCacheManager(datasets_dir)  # simulates the post-restart process
+        fresh = CrafdDiskCacheManager(datasets_dir)  # simulates the post-restart process
         hit = fresh.read("hash1", "forecast")
         assert hit is not None and hit["file_id"] == "file_1"

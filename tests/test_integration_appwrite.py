@@ -34,7 +34,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.layer1_storage, skip_no_creds
 
 @pytest.fixture(scope="module")
 def appwrite_config():
-    from views_faoapi.managers.appwrite import AppwriteConfig
+    from views_crafdapi.managers.appwrite import AppwriteConfig
 
     return AppwriteConfig(
         endpoint=os.getenv("APPWRITE_ENDPOINT"),
@@ -53,14 +53,14 @@ def appwrite_config():
 
 @pytest.fixture(scope="module")
 def file_manager(appwrite_config):
-    from views_faoapi.managers.appwrite import AppWriteFileManager
+    from views_crafdapi.managers.appwrite import AppWriteFileManager
 
     return AppWriteFileManager(appwrite_config)
 
 
 @pytest.fixture(scope="module")
 def prediction_manager(appwrite_config):
-    from views_faoapi.managers.prediction import PredictionStoreManager
+    from views_crafdapi.managers.prediction import PredictionStoreManager
 
     return PredictionStoreManager(appwrite_file_manager_config=appwrite_config)
 
@@ -147,11 +147,11 @@ class TestFormatDetectionAndParsing:
         ), f"No pred_* columns found. Columns: {list(df.columns)[:20]}"
 
     def test_has_metadata_columns(self, forecast_bytes):
-        from views_faoapi.data.handlers import FAO_PGMDataset
+        from views_crafdapi.data.handlers import ForecastDataset
 
         df = self._try_parse(forecast_bytes)
         missing = [
-            c for c in FAO_PGMDataset._METADATA_COLS if c not in df.columns
+            c for c in ForecastDataset._METADATA_COLS if c not in df.columns
         ]
         assert (
             len(missing) == 0
@@ -180,7 +180,7 @@ class TestFormatDetectionAndParsing:
 
 
 class TestDatasetConstruction:
-    """Tests that downloaded data can be wrapped in FAO_PGMDataset."""
+    """Tests that downloaded data can be wrapped in ForecastDataset."""
 
     @pytest.fixture(scope="class")
     def forecast_df(self, prediction_manager):
@@ -194,36 +194,36 @@ class TestDatasetConstruction:
         return TestFormatDetectionAndParsing._try_parse(result.data["file_bytes"])
 
     def test_fao_pgm_dataset_constructs(self, forecast_df):
-        from views_faoapi.data.handlers import FAO_PGMDataset
+        from views_crafdapi.data.handlers import ForecastDataset
 
-        dataset = FAO_PGMDataset(forecast_df)
+        dataset = ForecastDataset(forecast_df)
         assert dataset.dataframe is not None
         assert len(dataset.dataframe) > 0
 
     def test_dataset_has_geo_metadata(self, forecast_df):
-        from views_faoapi.data.handlers import FAO_PGMDataset
+        from views_crafdapi.data.handlers import ForecastDataset
 
-        dataset = FAO_PGMDataset(forecast_df)
+        dataset = ForecastDataset(forecast_df)
         assert dataset.geo_metadata is not None
         assert len(dataset.geo_metadata) == len(dataset.dataframe)
 
     def test_dataset_has_targets(self, forecast_df):
-        from views_faoapi.data.handlers import FAO_PGMDataset
+        from views_crafdapi.data.handlers import ForecastDataset
 
-        dataset = FAO_PGMDataset(forecast_df)
+        dataset = ForecastDataset(forecast_df)
         assert len(dataset.targets) > 0, "Dataset detected no targets"
 
     def test_dataset_has_aggregation_levels(self, forecast_df):
-        from views_faoapi.data.handlers import FAO_PGMDataset
+        from views_crafdapi.data.handlers import ForecastDataset
 
-        dataset = FAO_PGMDataset(forecast_df)
+        dataset = ForecastDataset(forecast_df)
         assert "country" in dataset.levels
         assert "gaul0" in dataset.levels
         assert "gaul1" in dataset.levels
         assert "gaul2" in dataset.levels
 
     def test_dataset_validates_indices(self, forecast_df):
-        from views_faoapi.data.handlers import FAO_PGMDataset
+        from views_crafdapi.data.handlers import ForecastDataset
 
-        dataset = FAO_PGMDataset(forecast_df)
+        dataset = ForecastDataset(forecast_df)
         dataset.validate_indices()

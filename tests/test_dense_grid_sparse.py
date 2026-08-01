@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import FAO_PGMDataset
+from views_crafdapi.data.handlers import ForecastDataset
 
 pytestmark = pytest.mark.layer2_data
 
@@ -24,7 +24,7 @@ def test_recreated_cell_gets_sample_length_array_not_scalar():
     # dense grid must recreate this cell.
     df = df.drop(index=(600, 100))
 
-    ds = FAO_PGMDataset(df)  # must not raise
+    ds = ForecastDataset(df)  # must not raise
 
     # The recreated cell exists in the canonical store and carries an 8-length float
     # array, not a scalar. Sourced via the frame-canonical subset (S4d: cells no longer
@@ -40,7 +40,7 @@ def test_recreated_cell_roundtrips_through_to_tensor():
     """A recreated cell must not poison the tensor path (the original crash site)."""
     df = make_fao_df(n_cells=4, n_months=2, n_samples=8, seed=12)
     df = df.drop(index=(600, 102))  # non-last month → cell is recreated by the fill
-    ds = FAO_PGMDataset(df)
+    ds = ForecastDataset(df)
     tensor = ds.to_tensor()
     assert np.isfinite(tensor).all()
 
@@ -53,13 +53,13 @@ def test_entity_absent_from_last_month_fails_loud():
     df = df.drop(index=(601, 103))
 
     with pytest.raises(ValueError, match="C-87"):
-        FAO_PGMDataset(df)
+        ForecastDataset(df)
 
 
 def test_dense_input_is_unaffected():
     """A fully dense grid must still construct and keep every cell."""
     df = make_fao_df(n_cells=4, n_months=2, n_samples=8, seed=14)
-    ds = FAO_PGMDataset(df)
+    ds = ForecastDataset(df)
     assert ds.num_entities == 4
     assert ds.num_time_steps == 2
     assert len(ds.dataframe) == 8

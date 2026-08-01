@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from views_faoapi.managers.model import ModelPathManager, ModelManager
+from views_crafdapi.managers.model import ModelPathManager, ModelManager
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -255,9 +255,9 @@ class TestConfigsProperty:
 
 class TestModelManagerInit:
 
-    @patch("views_faoapi.managers.model.ModelManager._ModelManager__ascii_splash")
-    @patch("views_faoapi.managers.model.ModelManager._ModelManager__load_config")
-    @patch("views_faoapi.managers.model.LoggingModule")
+    @patch("views_crafdapi.managers.model.ModelManager._ModelManager__ascii_splash")
+    @patch("views_crafdapi.managers.model.ModelManager._ModelManager__load_config")
+    @patch("views_crafdapi.managers.model.LoggingModule")
     def test_init_loads_three_configs(self, mock_logging_cls, mock_load_config, mock_splash):
         mock_logging_cls.return_value.get_logger.return_value = MagicMock()
         mock_load_config.side_effect = [
@@ -277,9 +277,9 @@ class TestModelManagerInit:
         assert mgr._config_hyperparameters == {"lr": 0.01}
         assert mgr._config_meta == {"name": "test"}
 
-    @patch("views_faoapi.managers.model.ModelManager._ModelManager__ascii_splash")
-    @patch("views_faoapi.managers.model.ModelManager._ModelManager__load_config")
-    @patch("views_faoapi.managers.model.LoggingModule")
+    @patch("views_crafdapi.managers.model.ModelManager._ModelManager__ascii_splash")
+    @patch("views_crafdapi.managers.model.ModelManager._ModelManager__load_config")
+    @patch("views_crafdapi.managers.model.LoggingModule")
     def test_init_handles_missing_configs(self, mock_logging_cls, mock_load_config, mock_splash):
         mock_logging_cls.return_value.get_logger.return_value = MagicMock()
         mock_load_config.return_value = None
@@ -391,19 +391,19 @@ class TestImportDiscipline:
         return imports
 
     def test_model_py_no_module_level_wandb(self):
-        model_py = Path(__file__).resolve().parent.parent / "src" / "views_faoapi" / "managers" / "model.py"
+        model_py = Path(__file__).resolve().parent.parent / "src" / "views_crafdapi" / "managers" / "model.py"
         imports = self._get_top_level_imports(model_py)
         wandb_imports = [i for i in imports if "wandb" in i]
         assert wandb_imports == [], f"model.py has module-level wandb imports: {wandb_imports}"
 
     def test_log_py_no_import_from_model(self):
-        log_py = Path(__file__).resolve().parent.parent / "src" / "views_faoapi" / "managers" / "log.py"
+        log_py = Path(__file__).resolve().parent.parent / "src" / "views_crafdapi" / "managers" / "log.py"
         imports = self._get_top_level_imports(log_py)
         model_imports = [i for i in imports if "model" in i]
         assert model_imports == [], f"log.py imports from model: {model_imports}"
 
     def test_model_py_imports_log_at_module_level(self):
-        model_py = Path(__file__).resolve().parent.parent / "src" / "views_faoapi" / "managers" / "model.py"
+        model_py = Path(__file__).resolve().parent.parent / "src" / "views_crafdapi" / "managers" / "model.py"
         imports = self._get_top_level_imports(model_py)
-        assert any("views_faoapi.managers.log" in i for i in imports), \
+        assert any("views_crafdapi.managers.log" in i for i in imports), \
             "model.py should import LoggingModule at module level"

@@ -3,14 +3,14 @@
 **Status:** Accepted
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
-**Consulted:** ADR-024 (raw-count serving), ADR-025 (output schema & naming), ADR-022 (deployment strategy), ADR-008 (observability & explicit failure), ADR-018 (SDK response normalization), the live route table in `src/views_faoapi/managers/api.py`
+**Consulted:** ADR-024 (raw-count serving), ADR-025 (output schema & naming), ADR-022 (deployment strategy), ADR-008 (observability & explicit failure), ADR-018 (SDK response normalization), the live route table in `src/views_crafdapi/managers/api.py`
 **Informed:** UN FAO / FSFC API consumers
 
 ---
 
 ## Context
 
-faoapi exposes VIEWS conflict data to UN FAO over HTTP. The route table grew organically in `managers/api.py` (`FAOApiManager._register_routes`) and has never been described in a decision record. Issue #4 ("add_api_adrs") asks for the API's design to be made explicit before it is treated as a stable, FAO-facing contract; issue #22 ("api_docs") asks for end-user documentation built on top of that record. Both need a single authoritative statement of **what the API surface is and why it is shaped that way** — the data it serves, the resource model, the URL grammar, and the response envelope — so the documentation, the tests, and any future endpoint can be checked against one source of truth rather than re-derived from the code each time.
+faoapi exposes VIEWS conflict data to UN FAO over HTTP. The route table grew organically in `managers/api.py` (`CrafdApiManager._register_routes`) and has never been described in a decision record. Issue #4 ("add_api_adrs") asks for the API's design to be made explicit before it is treated as a stable, FAO-facing contract; issue #22 ("api_docs") asks for end-user documentation built on top of that record. Both need a single authoritative statement of **what the API surface is and why it is shaped that way** — the data it serves, the resource model, the URL grammar, and the response envelope — so the documentation, the tests, and any future endpoint can be checked against one source of truth rather than re-derived from the code each time.
 
 A decision is needed now because: (a) FAO has live access and will build tooling against these paths, so the surface is becoming a contract (cf. ADR-025's amendment of Release Note 01); (b) the views-frames adoption (epic #87) is reshaping the internals behind these endpoints, and the *external* surface must be pinned independently of that churn; and (c) without a documented grammar, every new level or operation risks an ad-hoc path that breaks the pattern.
 
@@ -104,7 +104,7 @@ This ADR governs the **HTTP surface and resource grammar**. It does *not* govern
 
 ## Implementation Notes
 
-- The surface lives in `src/views_faoapi/managers/api.py` (`FAOApiManager._register_routes`); the level loop is the canonical list of levelled routes. FastAPI auto-generates OpenAPI at `/docs` and `/openapi.json`, which the #22 documentation should reference rather than restate.
+- The surface lives in `src/views_crafdapi/managers/api.py` (`CrafdApiManager._register_routes`); the level loop is the canonical list of levelled routes. FastAPI auto-generates OpenAPI at `/docs` and `/openapi.json`, which the #22 documentation should reference rather than restate.
 - Query-parameter parsing helpers (`parse_list_param`, `parse_string_list_param`) are shared by `subset` and `hdi-map`; `country` entity IDs parse as strings, other levels as integers.
 - Any new endpoint should return the Decision-4 envelope and raise `HTTPException` with an explicit status, not return an error object inside a `200`.
 
@@ -121,6 +121,6 @@ This ADR governs the **HTTP surface and resource grammar**. It does *not* govern
 ## References
 
 - faoapi **ADR-024** (raw-count serving), **ADR-025** (output schema & naming), **ADR-027** (authentication & per-key isolation), **ADR-028** (terminal-consumer boundary), **ADR-022** (deployment), **ADR-011** (caching), **ADR-008** (observability & explicit failure)
-- Live surface: `src/views_faoapi/managers/api.py` (`FAOApiManager._register_routes`)
+- Live surface: `src/views_crafdapi/managers/api.py` (`CrafdApiManager._register_routes`)
 - Risk register: **C-86** (provenance), **C-70** (aggregation joint-sum), **C-144** (credible-level reconciliation)
 - Issues **#4** (API ADRs), **#22** (API documentation)

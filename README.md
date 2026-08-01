@@ -47,7 +47,7 @@ pip install -e .
 
 ## Configuration
 
-The API reads environment variables via `.env` at runtime (loaded in `FAOApiManager.__init__` and located in `views-models`). Set the following:
+The API reads environment variables via `.env` at runtime (loaded in `CrafdApiManager.__init__` and located in `views-models`). Set the following:
 
 ```bash
 # .env
@@ -62,8 +62,8 @@ APPWRITE_METADATA_DATABASE_NAME=metadata-db-name
 ```
 
 Notes:
-- `historical_targets` is read by `FAO_PGMDataset(...)` when category is historical.
-- Keep shapefiles in `src/views_faoapi/shapefiles` (already included).
+- `historical_targets` is read by `ForecastDataset(...)` when category is historical.
+- Keep shapefiles in `src/views_crafdapi/shapefiles` (already included).
 - The API requires `X-API-Key` header in each request.
 
 ## Running the API
@@ -72,7 +72,7 @@ From the project root:
 
 ```bash
 source .venv/bin/activate
-uvicorn views_faoapi.managers.api:create_app --factory --host 0.0.0.0 --port 8000
+uvicorn views_crafdapi.managers.api:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
 See ADR-012 for the factory pattern rationale. The API requires `APPWRITE_*` environment variables (see `.env.example` or ADR-013).
@@ -91,7 +91,7 @@ Every endpoint requires `X-API-Key: <your appwrite key>`. The server validates k
 ## Data Model
 
 - Prediction files are fetched from Appwrite and parsed into pandas DataFrames.
-- `FAO_PGMDataset` expects geospatial metadata columns:
+- `ForecastDataset` expects geospatial metadata columns:
   - pg_xcoord, pg_ycoord, country_iso_a3,
   - admin1_gaul1_code, admin1_gaul1_name,
   - admin1_gaul0_code, admin1_gaul0_name,
@@ -240,17 +240,17 @@ print(r.json())
 
 ## Geospatial Mapping
 
-- Shapefiles under `src/views_faoapi/shapefiles`:
+- Shapefiles under `src/views_crafdapi/shapefiles`:
   - Natural Earth countries
   - PRIO-GRID
   - GAUL Level 1/2
-- `FAO_PGMDataset` joins/aggregates results using metadata columns and supports:
+- `ForecastDataset` joins/aggregates results using metadata columns and supports:
   - level: `country|gaul1|gaul2`
   - aggregation: sum for pred_* targets, first for constant metadata
 
 ## Development
 
-- Code lives under `src/views_faoapi`.
+- Code lives under `src/views_crafdapi`.
 - Key modules:
   - `managers/api.py` — FastAPI routes and lifecycle
   - `managers/appwrite.py` — Appwrite file access

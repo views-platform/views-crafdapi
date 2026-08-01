@@ -1,4 +1,4 @@
-"""Characterization tests for ``views_faoapi.managers.log.LoggingModule`` (register C-60).
+"""Characterization tests for ``views_crafdapi.managers.log.LoggingModule`` (register C-60).
 
 Pins the observable behaviour of the logging setup: the log directory is created,
 `get_logger` returns and caches a configured root logger, the YAML config loads,
@@ -10,7 +10,7 @@ import logging
 
 import pytest
 
-from views_faoapi.managers.log import LoggingModule
+from views_crafdapi.managers.log import LoggingModule
 
 pytestmark = pytest.mark.layer4_infra
 

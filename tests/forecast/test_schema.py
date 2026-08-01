@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from views_faoapi.forecast.serialize import schema
-from views_faoapi.forecast.summarize.estimator import collapse
+from views_crafdapi.forecast.serialize import schema
+from views_crafdapi.forecast.summarize.estimator import collapse
 
 pytestmark = pytest.mark.layer2_data
 
@@ -64,7 +64,7 @@ def test_series_of_ambiguous_fails_loud():
 def test_identity_sources_are_real_metadata_columns():
     """Every identity source column must exist in the 9-column GAUL metadata contract —
     so a rename upstream can't leave the schema pointing at a phantom column."""
-    from views_faoapi.data.handlers import ForecastDataset
+    from views_crafdapi.data.handlers import ForecastDataset
 
     meta = set(ForecastDataset._METADATA_COLS)
     for consumer, source in schema.IDENTITY_SOURCE.items():

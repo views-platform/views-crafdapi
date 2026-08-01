@@ -12,10 +12,10 @@ import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset, _GridDataset
-from views_faoapi.forecast.serialize import schema
-from views_faoapi.forecast.summarize.estimator import collapse
-from views_faoapi.managers.disk_cache import FAODiskCacheManager
+from views_crafdapi.data.handlers import ForecastDataset, _GridDataset
+from views_crafdapi.forecast.serialize import schema
+from views_crafdapi.forecast.summarize.estimator import collapse
+from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager
 
 pytestmark = pytest.mark.layer2_data
 
@@ -109,7 +109,7 @@ def test_disk_served_run_uses_mmap_store_and_serves_identically(tmp_path):
     """A disk-served run's `_sample_store` is a read-only memmap (paged, not resident), and it
     serves byte-identical HDI/MAP to the in-RAM dataset."""
     ds = ForecastDataset(make_fao_df(n_cells=4, n_months=4, n_samples=40, seed=3))
-    cache = FAODiskCacheManager(tmp_path)
+    cache = CrafdDiskCacheManager(tmp_path)
     cache.write("h", "forecast", ds, "file_1", source_kind="wire", provenance={"run_id": "r"})
 
     out = cache.read("h", "forecast")

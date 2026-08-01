@@ -220,3 +220,11 @@ graphify-out/
 
 # local Claude Code working instructions (kept local, not tracked)
 CLAUDE.md
+
+# The W&B run-log ignore above must NOT swallow the source subpackage:
+!src/views_crafdapi/wandb/
+!src/views_crafdapi/wandb/**
+
+# Golden test fixtures must be tracked even though *.parquet/*.zip are ignored:
+!tests/forecast/golden/
+!tests/forecast/golden/**

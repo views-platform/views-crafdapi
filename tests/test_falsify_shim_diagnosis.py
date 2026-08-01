@@ -29,7 +29,7 @@ class TestP1_MigrationTestCoverageGap:
     def test_api_py_also_references_priogrid_gid(self):
         """api.py:587 has priogrid_gid in the index exclusion set.
         The migration test misses this file entirely."""
-        api_py = SRC_ROOT / "views_faoapi" / "managers" / "api.py"
+        api_py = SRC_ROOT / "views_crafdapi" / "managers" / "api.py"
         source = api_py.read_text()
         refs = re.findall(r"priogrid_gid", source)
         assert len(refs) == 0, (
@@ -44,7 +44,7 @@ class TestP2_ShimIsTestedBehavior:
 
     def test_existing_tests_exercise_priogrid_gid_rename(self):
         """At least one test outside the falsification suite constructs
-        FAO_PGMDataset with priogrid_gid and asserts it gets renamed."""
+        ForecastDataset with priogrid_gid and asserts it gets renamed."""
         test_files = [
             REPO_ROOT / "tests" / "test_dataset_validation.py",
             REPO_ROOT / "tests" / "test_falsify_sprint2_completeness.py",
@@ -67,13 +67,13 @@ class TestP3_TwoIndependentShims:
     in two different classes."""
 
     def test_fao_pgm_init_has_own_priogrid_gid_path(self):
-        """FAO_PGMDataset.__init__ (around line 1181) accepts priogrid_gid
+        """ForecastDataset.__init__ (around line 1181) accepts priogrid_gid
         as a flat column for auto-indexing — independent from the
         _GridDataset._init_dataframe shim at line 92."""
         # handlers.py was split into a package (S11, #336); the two independent
         # priogrid_gid paths now live in grid_dataset.py (_GridDataset) and
-        # forecast_dataset.py (ForecastDataset/FAO_PGMDataset). Scan the whole package.
-        pkg = SRC_ROOT / "views_faoapi" / "data" / "handlers"
+        # forecast_dataset.py (ForecastDataset/ForecastDataset). Scan the whole package.
+        pkg = SRC_ROOT / "views_crafdapi" / "data" / "handlers"
         source = "\n".join(p.read_text() for p in sorted(pkg.glob("*.py")))
         lines = source.splitlines()
         shim_locations = []
@@ -110,14 +110,14 @@ class TestP4_CICDocumentsShimAsContract:
         )
 
     def test_fao_pgm_cic_does_not_guarantee_priogrid_gid(self):
-        """The FAO_PGMDataset CIC should not document priogrid_gid acceptance
+        """The ForecastDataset CIC should not document priogrid_gid acceptance
         if it is truly dead code to be removed."""
-        cic = DOCS_ROOT / "CICs" / "FAO_PGMDataset.md"
+        cic = DOCS_ROOT / "CICs" / "ForecastDataset.md"
         if not cic.exists():
             pytest.skip("CIC not found")
         content = cic.read_text()
         guarantees = re.findall(r"priogrid_gid", content)
         assert len(guarantees) == 0, (
-            f"FAO_PGMDataset CIC mentions priogrid_gid {len(guarantees)} time(s) as "
+            f"ForecastDataset CIC mentions priogrid_gid {len(guarantees)} time(s) as "
             "accepted input. Removing the shim violates the contract."
         )

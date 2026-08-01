@@ -44,7 +44,7 @@ jobs:
       # --cov-fail-under (a gate would recreate the red-by-default trap C-74/C-76).
       run: >-
         uv run pytest tests/ -m "not integration" -ra
-        --cov=src/views_faoapi --cov-report=term-missing --cov-report=xml
+        --cov=src/views_crafdapi --cov-report=term-missing --cov-report=xml
 
     - name: Coverage summary
       if: always()

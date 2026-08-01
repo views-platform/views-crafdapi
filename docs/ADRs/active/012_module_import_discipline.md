@@ -15,11 +15,11 @@
 
 Three interrelated import discipline violations create fragility in the `managers/` layer:
 
-**Module-level app creation (C-02).** `managers/api.py` formerly executed `app = create_app()` at module level (originally at line 1472-1473). This line was reached whenever any symbol was imported from `api.py` for any purpose --- tests, type checking, IDE tooling, or other modules importing shared classes. The `create_app()` function (now at `api.py:1303`) triggered a cascade: `APIPathManager("un_fao")` instantiation, `pyprojroot` root discovery, `.env` loading via `load_dotenv()`, `FAOApiManager` construction (which reads all `APPWRITE_*` env vars), FastAPI app instantiation with all route registrations, and `SIGINT`/`SIGTERM` signal handler installation via the lifespan context manager. The module was untestable in isolation because importing it required the full project directory structure and a valid `.env` file.
+**Module-level app creation (C-02).** `managers/api.py` formerly executed `app = create_app()` at module level (originally at line 1472-1473). This line was reached whenever any symbol was imported from `api.py` for any purpose --- tests, type checking, IDE tooling, or other modules importing shared classes. The `create_app()` function (now at `api.py:1303`) triggered a cascade: `APIPathManager("un_fao")` instantiation, `pyprojroot` root discovery, `.env` loading via `load_dotenv()`, `CrafdApiManager` construction (which reads all `APPWRITE_*` env vars), FastAPI app instantiation with all route registrations, and `SIGINT`/`SIGTERM` signal handler installation via the lifespan context manager. The module was untestable in isolation because importing it required the full project directory structure and a valid `.env` file.
 
 **Circular import chain (C-04).** `managers/log.py` formerly imported `APIPathManager` from `api.py` (at line 7). `api.py` imports from `model.py`. `model.py` lazily imported `LoggingModule` from `log.py` inside `ModelManager.__init__`. The cycle was: `log.py` -> `api.py` -> `model.py` -> `log.py`. The cycle was broken only by the deferred import, which was fragile --- moving that import to module level would have triggered an `ImportError`. `log.py`'s import of `APIPathManager` from `api.py` was unnecessary: `LoggingModule.__init__` accepts a `ModelPathManager` (the parent class, defined in `model.py`), not specifically an `APIPathManager`. Now resolved: `log.py` no longer imports from `api.py`; `model.py:13` imports `LoggingModule` at module level without cycle.
 
-**Topology violation (C-10).** `managers/model.py` formerly imported `wandb_alert` from `views_faoapi.wandb.utils` and `wandb` directly at module level (lines 12-13). ADR-002 declares that Infrastructure (`managers/`) must not depend on Observability (`wandb/`). The imports were used at `model.py:748` (`wandb.init()`) and `model.py:770` (`wandb_alert()`). This coupled the entire manager inheritance chain (`ModelPathManager` -> `ModelManager` -> `APIManager` -> `FAOApiManager`) to WandB, making it impossible to import or test any manager class without WandB installed. Now resolved: wandb imports are lazy inside `APIManager.run()` at `model.py:792-793`; no module-level wandb imports remain.
+**Topology violation (C-10).** `managers/model.py` formerly imported `wandb_alert` from `views_crafdapi.wandb.utils` and `wandb` directly at module level (lines 12-13). ADR-002 declares that Infrastructure (`managers/`) must not depend on Observability (`wandb/`). The imports were used at `model.py:748` (`wandb.init()`) and `model.py:770` (`wandb_alert()`). This coupled the entire manager inheritance chain (`ModelPathManager` -> `ModelManager` -> `APIManager` -> `CrafdApiManager`) to WandB, making it impossible to import or test any manager class without WandB installed. Now resolved: wandb imports are lazy inside `APIManager.run()` at `model.py:792-793`; no module-level wandb imports remain.
 
 ---
 
@@ -39,7 +39,7 @@ Three interrelated import discipline violations create fragility in the `manager
 
 - Module-level side effects violate the principle of least surprise. Python's import system is not an application lifecycle manager; conflating the two creates coupling between unrelated concerns.
 - The circular import chain is currently held together by a single deferred import. Any refactoring that moves `model.py:516` to module level breaks the entire manager layer. This is a structural fragility, not a style concern.
-- The wandb topology violation prevents testing `ModelManager` or `FAOApiManager` in environments without WandB credentials, which includes CI and local development without WandB configuration.
+- The wandb topology violation prevents testing `ModelManager` or `CrafdApiManager` in environments without WandB credentials, which includes CI and local development without WandB configuration.
 - Uvicorn's `--factory` flag exists precisely for this use case: it calls the factory function at worker startup, not at import time, preserving proper lifecycle ordering.
 
 ---
@@ -61,7 +61,7 @@ Three interrelated import discipline violations create fragility in the `manager
 ### Alternative C: Full dependency injection via constructor parameters
 
 - **Pros:** Cleanest architectural separation. Each class receives its dependencies explicitly. Fully testable with mocks.
-- **Cons:** Largest refactor. Requires changing the constructor signatures of `ModelManager`, `APIManager`, and `FAOApiManager`. Requires a composition root that wires dependencies.
+- **Cons:** Largest refactor. Requires changing the constructor signatures of `ModelManager`, `APIManager`, and `CrafdApiManager`. Requires a composition root that wires dependencies.
 - **Reason for rejection:** Correct long-term direction but disproportionate effort for the immediate problem. The targeted fixes in this ADR are prerequisites for DI regardless.
 
 ---
@@ -78,9 +78,9 @@ Three interrelated import discipline violations create fragility in the `manager
 
 ### Negative
 
-- The uvicorn invocation must change from `uvicorn views_faoapi.managers.api:app` to `uvicorn views_faoapi.managers.api:create_app --factory`. This affects the deployment entrypoint (`views-models/apis/un_fao/main.py`) and CI configurations that start the server.
+- The uvicorn invocation must change from `uvicorn views_crafdapi.managers.api:app` to `uvicorn views_crafdapi.managers.api:create_app --factory`. This affects the deployment entrypoint (`views-models/apis/un_fao/main.py`) and CI configurations that start the server.
 - Lazy wandb imports add a small overhead on first call to `APIManager.run()`. This is negligible since `run()` is called once at server startup, not per-request.
-- Any code that currently relies on `from views_faoapi.managers.api import app` to get a pre-initialized app instance will break. Such code must call `create_app()` explicitly.
+- Any code that currently relies on `from views_crafdapi.managers.api import app` to get a pre-initialized app instance will break. Such code must call `create_app()` explicitly.
 
 ---
 
@@ -90,16 +90,16 @@ Three interrelated import discipline violations create fragility in the `manager
 
 2. **Change uvicorn invocation** in all entrypoints (deployment scripts, `pyproject.toml` scripts) from:
    ```
-   uvicorn views_faoapi.managers.api:app
+   uvicorn views_crafdapi.managers.api:app
    ```
    to:
    ```
-   uvicorn views_faoapi.managers.api:create_app --factory
+   uvicorn views_crafdapi.managers.api:create_app --factory
    ```
 
 3. **`log.py` import target fixed.** `log.py` no longer imports from `api.py`. The `APIPathManager` import was removed entirely; `LoggingModule` does not require it. `model.py:13` now imports `LoggingModule` at module level without circular dependency.
 
-4. **wandb imports deferred in `model.py`.** Module-level wandb imports removed. Both `import wandb` and `from views_faoapi.wandb.utils import wandb_alert` are now lazy inside `APIManager.run()` at `model.py:792-793`.
+4. **wandb imports deferred in `model.py`.** Module-level wandb imports removed. Both `import wandb` and `from views_crafdapi.wandb.utils import wandb_alert` are now lazy inside `APIManager.run()` at `model.py:792-793`.
 
 5. **Audit for other module-level side effects** in `managers/` files. Ensure no other module executes functions, opens connections, or modifies global state at import time.
 
@@ -107,8 +107,8 @@ Three interrelated import discipline violations create fragility in the `manager
 
 ## Validation & Monitoring
 
-- **Import isolation test:** A test that imports `views_faoapi.managers.api` in a subprocess without `.env` or Appwrite credentials must succeed without raising exceptions. This test should be added to the CI suite.
-- **Circular import detection:** Run `python -c "import views_faoapi.managers.log"` in a clean environment. It must not trigger `api.py` side effects.
+- **Import isolation test:** A test that imports `views_crafdapi.managers.api` in a subprocess without `.env` or Appwrite credentials must succeed without raising exceptions. This test should be added to the CI suite.
+- **Circular import detection:** Run `python -c "import views_crafdapi.managers.log"` in a clean environment. It must not trigger `api.py` side effects.
 - **Topology enforcement:** A static analysis check (e.g., `import-linter` or a custom grep-based CI check) should verify that `managers/` files do not contain module-level imports from `wandb/`.
 - **Failure signal:** If `create_app()` is accidentally called at import time again (e.g., via a global variable reassignment), tests that import `api.py` will fail with environment errors, providing immediate feedback.
 

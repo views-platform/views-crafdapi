@@ -45,7 +45,7 @@ PRODUCER_METHODS = frozenset(
     }
 )
 
-_SRC = Path(__file__).resolve().parents[1] / "src" / "views_faoapi"
+_SRC = Path(__file__).resolve().parents[1] / "src" / "views_crafdapi"
 
 # The serving path: the FastAPI routes + lifecycle (api.py), the read
 # orchestration (dataset_service.py), and the value cache (disk_cache.py). AST

@@ -14,8 +14,8 @@ import filelock
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
-from views_faoapi.managers.disk_cache import FAODiskCacheManager, CACHE_SCHEMA_VERSION
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager, CACHE_SCHEMA_VERSION
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -32,7 +32,7 @@ class TestDiskCacheSchemaVersion:
         assert CACHE_SCHEMA_VERSION >= 1
 
     def test_write_disk_cache_includes_schema_version(self, tmp_path):
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
         cache.write("testhash", "forecast", _make_dataset(), "file_123")
 
         meta_path = cache._meta_path("testhash", "forecast")
@@ -42,7 +42,7 @@ class TestDiskCacheSchemaVersion:
         assert meta["schema_version"] == CACHE_SCHEMA_VERSION
 
     def test_read_disk_cache_rejects_version_mismatch(self, tmp_path):
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
         cache.write("testhash", "forecast", _make_dataset(), "file_123")
 
         meta_path = cache._meta_path("testhash", "forecast")
@@ -58,7 +58,7 @@ class TestDiskCacheSchemaVersion:
         `pickle.load` surface (C-149), and with no value dir the read is a clean miss. The
         pre-S5 pickle janitor was retired in S6/#331 — a stray pickle is simply ignored, never
         deserialized (the safety property that matters), never a crash."""
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
         # A real pickle at the old raw-hash label; deserializing it would be the C-149 regression.
         pkl_path = tmp_path / "testhash_forecast_dataset.pkl"
         with open(pkl_path, "wb") as f:
@@ -77,12 +77,12 @@ class TestCacheSchemaAutoDerivation:
     """C-42: CACHE_SCHEMA_VERSION is auto-derived; C-138: decoupled from class identity."""
 
     def test_version_is_deterministic(self):
-        from views_faoapi.managers.disk_cache import _derive_cache_schema_version
+        from views_crafdapi.managers.disk_cache import _derive_cache_schema_version
         assert _derive_cache_schema_version() == _derive_cache_schema_version()
 
     def test_version_changes_if_meta_fields_change(self):
-        from views_faoapi.managers.disk_cache import _derive_cache_schema_version
-        import views_faoapi.managers.disk_cache as dc
+        from views_crafdapi.managers.disk_cache import _derive_cache_schema_version
+        import views_crafdapi.managers.disk_cache as dc
         original = _derive_cache_schema_version()
         saved = dc._META_FIELDS
         try:
@@ -94,8 +94,8 @@ class TestCacheSchemaAutoDerivation:
 
     def test_version_changes_if_value_schema_version_changes(self):
         """An actual on-disk value-format change must invalidate old caches."""
-        from views_faoapi.managers.disk_cache import _derive_cache_schema_version
-        import views_faoapi.data.value_format as vf
+        from views_crafdapi.managers.disk_cache import _derive_cache_schema_version
+        import views_crafdapi.data.value_format as vf
         original = _derive_cache_schema_version()
         saved = vf._VALUE_SCHEMA_VERSION
         try:
@@ -108,23 +108,23 @@ class TestCacheSchemaAutoDerivation:
     def test_version_independent_of_init_signature(self):
         """C-138 fix: a dataset-constructor signature change no longer churns the cache
         version (the old fingerprint coupled to `inspect.signature(__init__)`)."""
-        from views_faoapi.managers.disk_cache import _derive_cache_schema_version
-        from views_faoapi.data.handlers import FAO_PGMDataset
+        from views_crafdapi.managers.disk_cache import _derive_cache_schema_version
+        from views_crafdapi.data.handlers import ForecastDataset
         original = _derive_cache_schema_version()
-        orig_init = FAO_PGMDataset.__init__
+        orig_init = ForecastDataset.__init__
         try:
-            FAO_PGMDataset.__init__ = lambda self, source, targets=None, extra=None: None
+            ForecastDataset.__init__ = lambda self, source, targets=None, extra=None: None
             assert _derive_cache_schema_version() == original
         finally:
-            FAO_PGMDataset.__init__ = orig_init
+            ForecastDataset.__init__ = orig_init
 
     def test_meta_fields_match_write_output(self, tmp_path):
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
         cache.write("testhash", "forecast", _make_dataset(), "file_123")
         meta_path = cache._meta_path("testhash", "forecast")
         meta = json.loads(meta_path.read_text())
         written_fields = sorted(k for k in meta if k != "schema_version")
-        from views_faoapi.managers.disk_cache import _META_FIELDS
+        from views_crafdapi.managers.disk_cache import _META_FIELDS
         assert tuple(written_fields) == tuple(sorted(_META_FIELDS))
 
 
@@ -135,7 +135,7 @@ class TestConcurrentDiskCacheAccess:
         """Threads writing the same key — verify no corruption; the value dir is never torn."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
 
         def write_dataset(thread_id):
             return cache.write("same_key", "forecast", _make_dataset(thread_id), f"file_{thread_id}")
@@ -155,7 +155,7 @@ class TestConcurrentDiskCacheAccess:
         """Reader during write — must get a clean reconstruction or None, never partial."""
         import threading
 
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
         cache.write("rw_key", "forecast", _make_dataset(1), "initial")
 
         barrier = threading.Barrier(2, timeout=5)
@@ -185,7 +185,7 @@ class TestConcurrentDiskCacheAccess:
         """Simulate held lock — reader returns None (fallback), not crash."""
         from unittest.mock import patch
 
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
         cache.write("lock_key", "forecast", _make_dataset(), "file_1")
 
         with patch.object(filelock.FileLock, "acquire", side_effect=filelock.Timeout("lock_key")):
@@ -195,7 +195,7 @@ class TestConcurrentDiskCacheAccess:
 
     def test_check_file_id_after_concurrent_write(self, tmp_path):
         """Staleness detection after overwrites."""
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
         cache.write("stale_key", "forecast", _make_dataset(), "original_file")
         assert cache.check_file_id("stale_key", "forecast", "original_file") is True
 
@@ -204,17 +204,17 @@ class TestConcurrentDiskCacheAccess:
         assert cache.check_file_id("stale_key", "forecast", "new_file") is True
 
 
-class TestFAOApiManagerDiskCacheIntegration:
-    """FAOApiManager.from_config exposes the disk cache; round-trip serves identically."""
+class TestCrafdApiManagerDiskCacheIntegration:
+    """CrafdApiManager.from_config exposes the disk cache; round-trip serves identically."""
 
     def test_from_config_creates_disk_cache_manager(self, tmp_path):
-        from views_faoapi.managers.api import FAOApiManager
-        manager = FAOApiManager.from_config({}, cache_dir=tmp_path / "datasets")
-        assert isinstance(manager._disk_cache, FAODiskCacheManager)
+        from views_crafdapi.managers.api import CrafdApiManager
+        manager = CrafdApiManager.from_config({}, cache_dir=tmp_path / "datasets")
+        assert isinstance(manager._disk_cache, CrafdDiskCacheManager)
 
     def test_round_trip_through_api_manager(self, tmp_path):
-        from views_faoapi.managers.api import FAOApiManager
-        manager = FAOApiManager.from_config({}, cache_dir=tmp_path / "datasets")
+        from views_crafdapi.managers.api import CrafdApiManager
+        manager = CrafdApiManager.from_config({}, cache_dir=tmp_path / "datasets")
         ds = _make_dataset()
         manager._disk_cache.write("keyhash", "forecast", ds, "fid_1")
         result = manager._disk_cache.read("keyhash", "forecast")

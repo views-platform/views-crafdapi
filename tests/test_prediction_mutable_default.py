@@ -1,6 +1,6 @@
 import inspect
 import pytest
-from views_faoapi.managers.prediction import PredictionStoreManager
+from views_crafdapi.managers.prediction import PredictionStoreManager
 
 pytestmark = pytest.mark.layer5_audit
 

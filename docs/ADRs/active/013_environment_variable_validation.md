@@ -40,7 +40,7 @@ The commented-out validation (`api.py:383-396`) only checked 5 of these 8 variab
 
 2. **Validation must collect ALL missing variables and report them in a single error.** The system must not fail on the first missing variable and leave the operator to discover the remaining ones through repeated restart cycles.
 
-3. **Validation must run at app startup**, inside the `create_app()` -> `FAOApiManager.__init__()` -> first `_create_appwrite_config()` call path. It must not be deferred to the first data request.
+3. **Validation must run at app startup**, inside the `create_app()` -> `CrafdApiManager.__init__()` -> first `_create_appwrite_config()` call path. It must not be deferred to the first data request.
 
 4. **No `None` values may propagate into `AppwriteConfig` for required fields.** The `AppwriteConfig` constructor must receive validated, non-None string values for all 8 required parameters.
 
@@ -99,7 +99,7 @@ The commented-out validation (`api.py:383-396`) only checked 5 of these 8 variab
 
 1. **Commented-out validation replaced** with the module-level `_validate_appwrite_env()` function at `api.py:40-46` and `_REQUIRED_APPWRITE_ENV_VARS` constant at `api.py:28-37`. All 8 variables are validated. Missing vars produce a single `ValueError` listing all missing names, preceded by a `logger.critical()` call.
 
-2. **Validation called at startup** via `FAOApiManager.__init__()` at `api.py:208` and inside `_create_appwrite_config()` at `api.py:302`, which returns the validated env dict for direct use in `AppwriteConfig` construction.
+2. **Validation called at startup** via `CrafdApiManager.__init__()` at `api.py:208` and inside `_create_appwrite_config()` at `api.py:302`, which returns the validated env dict for direct use in `AppwriteConfig` construction.
 
 3. **`_REQUIRED_APPWRITE_ENV_VARS` is a module-level constant** at `api.py:28-37`, referenceable by tests and health checks.
 

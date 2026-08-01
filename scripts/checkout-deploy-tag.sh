@@ -10,7 +10,7 @@
 #
 # Fail-loud: a missing/empty tag file or an unknown tag stops the start entirely
 # (systemd shows the failure) rather than silently serving whatever is checked out.
-# The tag-file path matches src/views_faoapi/version.py (FAOAPI_DEPLOY_TAG_FILE),
+# The tag-file path matches src/views_crafdapi/version.py (FAOAPI_DEPLOY_TAG_FILE),
 # so GET /version reports the same tag this gate deployed.
 set -euo pipefail
 

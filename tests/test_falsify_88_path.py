@@ -18,12 +18,12 @@ These guards fill the C-70 test gap and pin the aggregation contract any #88 rew
 import numpy as np
 import pandas as pd
 
-from views_faoapi.data.handlers import FAO_PGMDataset
+from views_crafdapi.data.handlers import ForecastDataset
 
 
 def test_elementwise_sum_preserves_sample_axis_alignment():
     """Aggregation must sum the SAME sample index across cells (joint draws), not reshuffle."""
-    agg = FAO_PGMDataset._elementwise_sum
+    agg = ForecastDataset._elementwise_sum
     a = np.array([1.0, 2.0, 3.0])
     b = np.array([10.0, 20.0, 30.0])
     np.testing.assert_array_equal(agg(None, pd.Series([a, b])), np.array([11.0, 22.0, 33.0]))
@@ -31,7 +31,7 @@ def test_elementwise_sum_preserves_sample_axis_alignment():
 
 def test_aggregation_is_cell_order_independent():
     """Summation is commutative — a rewrite that sorted/reordered per-cell samples would break this."""
-    agg = FAO_PGMDataset._elementwise_sum
+    agg = ForecastDataset._elementwise_sum
     a, b, c = np.array([1.0, 2.0]), np.array([10.0, 20.0]), np.array([100.0, 200.0])
     np.testing.assert_array_equal(
         agg(None, pd.Series([a, b, c])), agg(None, pd.Series([c, a, b]))
@@ -45,7 +45,7 @@ def test_joint_vs_independent_aggregation_diverge_pins_C70():
     flip it without a red test."""
     rng = np.random.default_rng(0)
     base = rng.normal(5.0, 1.0, 4000)
-    joint = FAO_PGMDataset._elementwise_sum(None, pd.Series([base, base, base]))  # correlated draws
+    joint = ForecastDataset._elementwise_sum(None, pd.Series([base, base, base]))  # correlated draws
     independent = base + rng.normal(5.0, 1.0, 4000) + rng.normal(5.0, 1.0, 4000)  # independent draws
     # joint sum of 3 correlated draws spreads ~3x; independent ~sqrt(3)x — they must diverge.
     assert np.std(joint) > np.std(independent) * 1.3

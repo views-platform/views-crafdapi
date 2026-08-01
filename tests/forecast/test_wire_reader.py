@@ -6,7 +6,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from views_faoapi.forecast.ingestion import wire_reader
+from views_crafdapi.forecast.ingestion import wire_reader
 
 from ._wire_fixtures import make_wire_run
 

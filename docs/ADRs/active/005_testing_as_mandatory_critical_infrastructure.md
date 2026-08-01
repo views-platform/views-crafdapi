@@ -62,7 +62,7 @@ Red team tests deliberately attempt to **break, exploit, or misuse the system** 
 
 In views-faoapi, red team tests should include:
 - injecting NaN and Inf values into prediction arrays and verifying that `PosteriorDistributionAnalyzer` raises or handles them explicitly,
-- constructing malformed MultiIndex DataFrames (wrong level names, duplicate indices, missing entity IDs) and verifying that `FAO_PGMDataset` rejects them,
+- constructing malformed MultiIndex DataFrames (wrong level names, duplicate indices, missing entity IDs) and verifying that `ForecastDataset` rejects them,
 - submitting out-of-range `month_id` values or nonexistent `priogrid_id` values through the API,
 - requesting HDI credible intervals with adversarial alpha values (0.0, 1.0, negative, greater than 1),
 - sending malformed or missing API keys to the authentication boundary,
@@ -113,7 +113,7 @@ Green team tests focus on **ensuring the system works as intended** under expect
 
 In views-faoapi, green team tests should include:
 - HDI nesting enforcement: verifying that for any set of credible masses, the narrower interval is always contained within the wider one,
-- tensor reshape roundtrip correctness: converting a `FAO_PGMDataset` to tensor and back to DataFrame and confirming exact equality,
+- tensor reshape roundtrip correctness: converting a `ForecastDataset` to tensor and back to DataFrame and confirming exact equality,
 - geographic aggregation consistency: verifying that element-wise summation of cell-level distributions produces the same result regardless of cell ordering,
 - cache TTL validation: confirming that the 3.5-week disk cache TTL expires correctly and that stale data is never served after expiry,
 - metadata completeness: ensuring all required `_METADATA_COLS` are present and correctly aligned after `_preprocess_dataframe` fills missing combinations,

@@ -6,7 +6,7 @@
 **Related ADRs:** ADR-003 (declared parameters, not inferred), ADR-006 (this contract)  
 
 > **Superseded.** `PosteriorDistributionAnalyzer` (the v1 hand-rolled histogram MAP + HDI
-> estimator, `src/views_faoapi/data/statistics.py`) was **removed** in favour of the
+> estimator, `src/views_crafdapi/data/statistics.py`) was **removed** in favour of the
 > views-frames tower estimator (`forecast/summarize/estimator.tower_collapse`), which had long
 > been the sole serving path. This contract is retained for historical reference only and is no
 > longer enforced. See ADR-030 (representation migration) and epic #222.
@@ -19,7 +19,7 @@
 
 `PosteriorDistributionAnalyzer` computes empirical MAP (Maximum A Posteriori) estimates and HDI (Highest Density Interval) credibility intervals from posterior distribution samples. It provides a lightweight, histogram-based alternative to full Bayesian density estimation, designed for fast summarization of prediction ensemble outputs.
 
-**Location:** `src/views_faoapi/data/statistics.py`
+**Location:** `src/views_crafdapi/data/statistics.py`
 
 ---
 
@@ -91,7 +91,7 @@
 
 ## 7. Boundaries and Interactions
 
-- **Layer:** Domain (`src/views_faoapi/data/statistics.py`).
+- **Layer:** Domain (`src/views_crafdapi/data/statistics.py`).
 - **Callers:**
   - `_ViewsDataset._analyze_samples()` in `data/handlers.py` -- creates `PosteriorDistributionAnalyzer().analyze(...)` inline.
   - `_ViewsDataset._compute_single_map()` in `data/handlers.py` -- creates a fresh instance per call.
@@ -107,7 +107,7 @@
 **Standard analysis on a fresh instance:**
 
 ```python
-from views_faoapi.data.statistics import PosteriorDistributionAnalyzer
+from views_crafdapi.data.statistics import PosteriorDistributionAnalyzer
 import numpy as np
 
 samples = np.random.normal(loc=5.0, scale=2.0, size=1000)

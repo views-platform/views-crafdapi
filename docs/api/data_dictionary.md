@@ -1,7 +1,7 @@
 # FAO Forecast API — data dictionary (for analysts)
 
 *What every served column means, in one place. Authoritative source: ADR-024 (raw-count contract),
-ADR-025 §4 (output schema), and `src/views_faoapi/forecast/serialize/schema.py`. This page is the
+ADR-025 §4 (output schema), and `src/views_crafdapi/forecast/serialize/schema.py`. This page is the
 analyst-facing summary.*
 
 ## Read this first
@@ -54,7 +54,7 @@ and are clipped, since fatality counts cannot be below zero.
 
 | Column | Meaning |
 |---|---|
-| `month_id` | VIEWS integer month id. `month_id 1 = January 1980`; `month_id = (year−1980)×12 + month`. Use `views_faoapi.time` helpers. |
+| `month_id` | VIEWS integer month id. `month_id 1 = January 1980`; `month_id = (year−1980)×12 + month`. Use `views_crafdapi.time` helpers. |
 | `priogrid_id` | PRIO-GRID cell id (a fixed 0.5°×0.5° global grid, 720×360 cells). |
 | `pg_xcoord` / `pg_ycoord` | Longitude / latitude of the cell **centre** (quarter-degrees, e.g. `41.25`). |
 | `country_iso_a3` | ISO-3166 alpha-3 country code (from GAUL admin-0). |

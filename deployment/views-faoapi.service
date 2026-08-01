@@ -23,7 +23,7 @@ WorkingDirectory=/home/views-faoapi-deploy/views-faoapi
 EnvironmentFile=/home/views-faoapi-deploy/.env.faoapi
 ExecStartPre=/usr/bin/env bash /home/views-faoapi-deploy/views-faoapi/scripts/checkout-deploy-tag.sh
 ExecStart=/home/views-faoapi-deploy/views-faoapi/.venv/bin/uvicorn \
-    views_faoapi.managers.api:create_app \
+    views_crafdapi.managers.api:create_app \
     --factory --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5

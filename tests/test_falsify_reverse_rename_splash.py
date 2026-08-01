@@ -26,7 +26,7 @@ class TestP1_APIResponseExposesColumnName:
 
         (dataframe_to_dict was extracted from api.py to serialization.py in
         epic #144 / S1; this probe follows it to its new home.)"""
-        serde_py = SRC_ROOT / "views_faoapi" / "managers" / "serialization.py"
+        serde_py = SRC_ROOT / "views_crafdapi" / "managers" / "serialization.py"
         source = serde_py.read_text()
         assert "reset_index" in source, (
             "dataframe_to_dict no longer calls reset_index — "

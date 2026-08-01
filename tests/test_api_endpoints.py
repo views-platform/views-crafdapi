@@ -10,17 +10,17 @@ from fastapi.testclient import TestClient
 from unittest.mock import MagicMock
 
 from tests.conftest import make_fao_df
-from views_faoapi.managers.api import FAOApiManager
-from views_faoapi.managers.appwrite import OperationResult
-from views_faoapi.data.handlers import FAO_PGMDataset
+from views_crafdapi.managers.api import CrafdApiManager
+from views_crafdapi.managers.appwrite import OperationResult
+from views_crafdapi.data.handlers import ForecastDataset
 
 pytestmark = pytest.mark.layer3_http
 
 
 @pytest.fixture
 def app_client(tmp_path):
-    """FAOApiManager with FastAPI app, routes, and mocked dependencies."""
-    mgr = FAOApiManager.from_config(
+    """CrafdApiManager with FastAPI app, routes, and mocked dependencies."""
+    mgr = CrafdApiManager.from_config(
         {"deployment": {"host": "0.0.0.0", "port": 80}},
         cache_dir=tmp_path / "cache",
     )
@@ -31,7 +31,7 @@ def app_client(tmp_path):
     # Pre-populate cache with a valid dataset. Conforming series targets so the forecast
     # endpoint's consumer rename (schema.series_of) resolves sb/ns/os (#222/S4).
     df = make_fao_df(targets=("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os"))
-    dataset = FAO_PGMDataset(df)
+    dataset = ForecastDataset(df)
     api_key_hash = mgr._get_api_key_hash("test-api-key")
     mgr._dataframe_cache[api_key_hash] = {
         "historical": {
@@ -511,7 +511,7 @@ class TestProvenanceEndpoint:
     """C-86: /provenance/{category} exposes the lineage record of the served artifact."""
 
     def test_provenance_returns_record(self, app_client):
-        from views_faoapi.managers.prediction import PredictionProvenance
+        from views_crafdapi.managers.prediction import PredictionProvenance
 
         client, _, mock_pm = app_client
         mock_pm.get_latest_provenance.return_value = PredictionProvenance(
@@ -545,7 +545,7 @@ class TestProvenanceEndpoint:
         """S7 (#252, ADR-033 observability): /provenance/forecast reports the full *served* decision
         — artifact_id, mode, status, freshness, and refusal_reason when degraded — sourced from the
         served run (authoritative), not merely the store's newest record."""
-        from views_faoapi.managers.prediction import PredictionProvenance
+        from views_crafdapi.managers.prediction import PredictionProvenance
 
         client, mgr, mock_pm = app_client
         mock_pm.get_latest_provenance.return_value = PredictionProvenance(
@@ -572,7 +572,7 @@ class TestProvenanceEndpoint:
         """#290: when a wire run is served, name/filename/created_at must reflect THAT run — not
         the store's newest legacy record. Otherwise stale labels (e.g. "orange_ensemble") bleed
         through a live rusty_bucket serve and read as still-serving-the-placeholder."""
-        from views_faoapi.managers.prediction import PredictionProvenance
+        from views_crafdapi.managers.prediction import PredictionProvenance
 
         client, mgr, mock_pm = app_client
         mock_pm.get_latest_provenance.return_value = PredictionProvenance(
@@ -604,7 +604,7 @@ class TestProvenanceEndpoint:
         """#290 hardening: a wire run cached by a PRE-fix build carries no name/filename in its
         served provenance (only source/run_id/mode). /provenance must still reconstruct them from
         source/run_id so the legacy label never survives — self-heals without a force_refresh."""
-        from views_faoapi.managers.prediction import PredictionProvenance
+        from views_crafdapi.managers.prediction import PredictionProvenance
 
         client, mgr, mock_pm = app_client
         mock_pm.get_latest_provenance.return_value = PredictionProvenance(
@@ -633,7 +633,7 @@ class TestProvenanceEndpoint:
     def test_provenance_surfaces_grace_fallback_state(self, app_client):
         """S4 (#249, ADR-033 §6): when a bounded grace fallback is active, /provenance/forecast
         flags it under `serving_state` so a consumer sees the newest run was refused."""
-        from views_faoapi.managers.prediction import PredictionProvenance
+        from views_crafdapi.managers.prediction import PredictionProvenance
 
         client, mgr, mock_pm = app_client
         mock_pm.get_latest_provenance.return_value = PredictionProvenance(
