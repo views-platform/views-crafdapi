@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from views_faoapi.forecast.summarize.estimator import tower_collapse
+from views_crafdapi.forecast.summarize.estimator import tower_collapse
 
 pytestmark = pytest.mark.layer2_data
 
@@ -58,6 +58,6 @@ def test_tower_collapse_preserves_exact_zero_on_zero_dominated_cells():
 
 def test_serving_path_does_not_import_legacy_analyzer():
     """#89: PosteriorDistributionAnalyzer is dropped from the serving module (handlers)."""
-    import views_faoapi.data.handlers as h
+    import views_crafdapi.data.handlers as h
 
     assert not hasattr(h, "PosteriorDistributionAnalyzer")

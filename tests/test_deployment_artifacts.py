@@ -26,7 +26,7 @@ class TestSystemdUnit:
         assert "ExecStartPre=" in _UNIT and "checkout-deploy-tag.sh" in _UNIT
 
     def test_serves_the_factory_app_on_localhost_8000(self):
-        assert "views_faoapi.managers.api:create_app" in _UNIT
+        assert "views_crafdapi.managers.api:create_app" in _UNIT
         assert "--factory" in _UNIT
         assert "--host 127.0.0.1" in _UNIT  # nginx upstream contract — never 0.0.0.0
         assert "--port 8000" in _UNIT
@@ -46,7 +46,7 @@ class TestDeployGateScript:
     def test_tag_file_convention_matches_version_endpoint(self):
         """The gate and GET /version must read the same file, so the served
         version is verifiable remotely (S4 x S6)."""
-        from views_faoapi import version as version_mod
+        from views_crafdapi import version as version_mod
         assert version_mod._DEFAULT_DEPLOY_TAG_FILE == "~/.views-faoapi-deploy-tag"
         assert ".views-faoapi-deploy-tag" in _GATE
         assert "FAOAPI_DEPLOY_TAG_FILE" in _GATE  # same override env var
@@ -83,7 +83,7 @@ class TestReleaseVersionConsistency:
         import tomllib
 
         lock = tomllib.loads((_ROOT / "uv.lock").read_text())
-        pkg = next(p for p in lock["package"] if p["name"] == "views-faoapi")
+        pkg = next(p for p in lock["package"] if p["name"] == "views-crafdapi")
         return pkg["version"]
 
     def test_pyproject_and_lock_declare_the_same_version(self):

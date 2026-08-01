@@ -7,7 +7,7 @@
 
 > **AMENDMENT (S8, #162 / epic #154, 2026-06-28 — register D-21):** the inheritance chain was rationalized from three classes to two. `_ViewsDataset` is **renamed `_GridDataset`** — the generic, geo-less `(time, entity)`-grid sample dataset that is now **frame-native** (the canonical store is the `(N,S)` `_sample_store`; the object-dtype spine epic #154 set out to drain is gone, S4). `_PGDataset` is **retired** (its lone `priogrid_id` check folded into `ForecastDataset.validate_indices`). The chain is **kept at two levels deliberately**: `_GridDataset` is the geo-less unit the parity/validation suites instantiate directly and the vehicle `check_integrity` uses to round-trip a metadata-free subset; a full single-class merge was **rejected** (D-21) as complecting the generic and FAO responsibilities and relocating a UN-facing fail-loud. This supersedes the C-139 "delete the chain" intent — the intent (drain the swamp) was met at S4; the means (delete `_ViewsDataset`) was retired.  
 
-> **NOTE (Phase 4a of #87, #112):** the chain's leaf was renamed `FAO_PGMDataset → ForecastDataset` (see `ForecastDataset.md`), and the extracted single-responsibility modules are contracted in `forecast_package.md`.  
+> **NOTE (Phase 4a of #87, #112):** the chain's leaf was renamed `ForecastDataset → ForecastDataset` (see `ForecastDataset.md`), and the extracted single-responsibility modules are contracted in `forecast_package.md`.  
 
 > **AMENDMENT (M1, 2026 — register C-81):** MAP/HDI is now computed by the **views-frames tower
 > estimator** (`views_frames_summarize.tower_point` / `hdi_tower`) via the vectorized
@@ -44,10 +44,10 @@
 ## 2. Non-Goals (Explicit Exclusions)
 
 - This class does **not** perform I/O. It accepts an already-loaded DataFrame; it does not read files, query databases, or fetch from network sources.
-- This class does **not** perform geographic aggregation. Aggregation from PRIO-GRID cells to administrative units is the responsibility of `FAO_PGMDataset` (grandchild class).
+- This class does **not** perform geographic aggregation. Aggregation from PRIO-GRID cells to administrative units is the responsibility of `ForecastDataset` (grandchild class).
 - This class does **not** interact with Appwrite or any external storage backend.
 - This class does **not** own model training, inference, or prediction generation. It only wraps and reshapes prediction outputs that were produced elsewhere.
-- This class does **not** manage API routing, caching strategies, or HTTP concerns. Those belong to `FAOApiManager`.
+- This class does **not** manage API routing, caching strategies, or HTTP concerns. Those belong to `CrafdApiManager`.
 - This class does **not** perform density estimation or statistical computation directly. HDI/MAP calculation is delegated to `PosteriorDistributionAnalyzer`.
 
 ---
@@ -114,11 +114,11 @@
 
 ## 7. Boundaries and Interactions
 
-- **Layer:** Domain (`src/views_faoapi/data/handlers/grid_dataset.py`).
+- **Layer:** Domain (`src/views_crafdapi/data/handlers/grid_dataset.py`).
 - **Children (subclasses):**
   - `_PGDataset` -- adds `priogrid_id` index validation.
-  - `FAO_PGMDataset` (via `_PGDataset`) -- adds geographic metadata columns, aggregation to admin units, and Shapefile-based spatial operations.
-- **Callers:** `FAO_PGMDataset` (child), `FAOApiManager` (via child). Test fixtures in `conftest.py`.
+  - `ForecastDataset` (via `_PGDataset`) -- adds geographic metadata columns, aggregation to admin units, and Shapefile-based spatial operations.
+- **Callers:** `ForecastDataset` (child), `CrafdApiManager` (via child). Test fixtures in `conftest.py`.
 - **Dependencies:**
   - `PosteriorDistributionAnalyzer` (domain peer in `data/statistics.py`) -- instantiated fresh per sample vector inside `_analyze_samples`, `_compute_single_map`, and `_calculate_single_hdi`.
   - `pandas`, `numpy` -- structural dependencies for DataFrame/tensor operations.
@@ -239,15 +239,15 @@ ds = _GridDataset(df)  # Raises ValueError: "Prediction dataframe should only co
   - Index mapping consistency: `_time_values` and `_entity_values` remain sorted and complete after preprocessing.
   - `priogrid_gid` -> `priogrid_id` rename: legacy index name is transparently corrected.
 
-- **Fixtures:** `conftest.py` provides a shared `FAO_PGMDataset` fixture (`fao_dataset`) and `make_fao_df` helper. `_GridDataset` instances are constructed inline in individual test files.
+- **Fixtures:** `conftest.py` provides a shared `ForecastDataset` fixture (`fao_dataset`) and `make_fao_df` helper. `_GridDataset` instances are constructed inline in individual test files.
 
 ---
 
 ## 11. Evolution Notes
 
-- **Stable:** The tensor layout `(time x entity x samples x features)`, MultiIndex contract, and dense grid fill semantics are used by all downstream consumers. Changing these would require updating `_PGDataset`, `FAO_PGMDataset`, and `FAOApiManager`.
+- **Stable:** The tensor layout `(time x entity x samples x features)`, MultiIndex contract, and dense grid fill semantics are used by all downstream consumers. Changing these would require updating `_PGDataset`, `ForecastDataset`, and `CrafdApiManager`.
 - **Stable:** The `pred_*` column naming convention for auto-detecting prediction mode is a public contract.
-- **Leading underscore:** The `_GridDataset` prefix marks this as an internal base class. It is not part of the public API and should not be instantiated directly in production code -- only through `ForecastDataset` (of which `FAO_PGMDataset` is a back-compat alias). `_PGDataset` was retired (S8, #162).
+- **Leading underscore:** The `_GridDataset` prefix marks this as an internal base class. It is not part of the public API and should not be instantiated directly in production code -- only through `ForecastDataset` (of which `ForecastDataset` is a back-compat alias). `_PGDataset` was retired (S8, #162).
 - **Candidate for change:** The constructor signature accepts `Union[pd.DataFrame, str, Path]` but only `pd.DataFrame` is implemented. The `str`/`Path` branches were removed; the type signature should be narrowed.
 - **Candidate for change:** `tqdm_joblib` is a static utility method that patches `joblib.Parallel` globally. It could be extracted to a standalone utility.
 - **Would require contract revision:** Changing the fill value default, modifying the tensor axis ordering, adding new index levels, or changing the `pred_*` auto-detection convention.

@@ -1,7 +1,7 @@
-"""_GridDataset and FAO_PGMDataset invariant tests (C-57).
+"""_GridDataset and ForecastDataset invariant tests (C-57).
 
 Validates CIC guarantees for the core domain class hierarchy:
-the generic `_GridDataset` base → the `ForecastDataset` (FAO_PGMDataset) facade.
+the generic `_GridDataset` base → the `ForecastDataset` (ForecastDataset) facade.
 """
 
 import copy
@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import _GridDataset, FAO_PGMDataset
+from views_crafdapi.data.handlers import _GridDataset, ForecastDataset
 
 pytestmark = pytest.mark.layer2_data
 
@@ -73,7 +73,7 @@ class TestConstruction:
     def test_dense_grid_on_complete_input(self):
         """A complete grid (all time×entity combinations present) must stay dense."""
         df = make_fao_df(n_cells=4, n_months=3, n_samples=10)
-        ds = FAO_PGMDataset(df)
+        ds = ForecastDataset(df)
         time_vals = ds.dataframe.index.get_level_values(0).unique()
         entity_vals = ds.dataframe.index.get_level_values(1).unique()
         expected_rows = len(time_vals) * len(entity_vals)
@@ -110,12 +110,12 @@ class TestTensorOperations:
         assert ds.check_integrity() is True
 
     def test_check_integrity_on_fao_subset_does_not_raise(self):
-        # C-68 regression: FAO_PGMDataset.get_subset_dataframe defaults to
+        # C-68 regression: ForecastDataset.get_subset_dataframe defaults to
         # with_metadata=True, so the integrity round-trip used to re-wrap the 9
         # geo-metadata columns as features and raise ValueError. The
         # _subset_for_integrity seam excludes them; subset check_integrity must
         # now return a bool without raising.
-        ds = FAO_PGMDataset(make_fao_df(n_cells=4, n_months=2, n_samples=10))
+        ds = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=10))
         months = ds.dataframe.index.get_level_values(0).unique().tolist()
         result = ds.check_integrity(time_ids=months[:1])
         assert isinstance(result, bool)
@@ -245,7 +245,7 @@ class TestHdiMap:
 
 
 # ============================================================
-# Group F: FAO_PGMDataset Validation
+# Group F: ForecastDataset Validation
 # ============================================================
 
 
@@ -253,39 +253,39 @@ class TestFAOPGMDataset:
 
     def test_valid_construction(self):
         df = make_fao_df()
-        ds = FAO_PGMDataset(df)
+        ds = ForecastDataset(df)
         assert ds.dataframe is not None
 
     def test_inherits_grid_dataset(self):
         df = make_fao_df()
-        ds = FAO_PGMDataset(df)
+        ds = ForecastDataset(df)
         assert isinstance(ds, _GridDataset)  # the generic base (S8: _PGDataset retired)
 
     def test_missing_metadata_columns_rejected(self):
         df = make_fao_df()
         df = df.drop(columns=["pg_xcoord", "country_iso_a3"])
         with pytest.raises(ValueError, match="metadata columns"):
-            FAO_PGMDataset(df)
+            ForecastDataset(df)
 
     def test_no_pred_columns_and_no_targets_rejected(self):
         df = make_fao_df()
         df = df.drop(columns=[c for c in df.columns if c.startswith("pred_")])
         with pytest.raises(ValueError, match="pred_"):
-            FAO_PGMDataset(df)
+            ForecastDataset(df)
 
     def test_priogrid_id_index_required(self):
         rng = np.random.default_rng(42)
         idx = pd.MultiIndex.from_arrays(
             [[600, 600], [1, 2]], names=["month_id", "wrong_id"]
         )
-        data = {col: [0.0, 0.0] for col in FAO_PGMDataset._METADATA_COLS}
+        data = {col: [0.0, 0.0] for col in ForecastDataset._METADATA_COLS}
         data["pred_x"] = [rng.random(5), rng.random(5)]
         df = pd.DataFrame(data, index=idx)
         with pytest.raises(ValueError):
-            FAO_PGMDataset(df)
+            ForecastDataset(df)
 
     def test_properties_match_input(self):
         df = make_fao_df(n_cells=4, n_months=2)
-        ds = FAO_PGMDataset(df)
+        ds = ForecastDataset(df)
         assert ds.num_entities == 4
         assert ds.num_time_steps == 2

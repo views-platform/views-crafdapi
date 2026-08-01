@@ -5,9 +5,9 @@ import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
-from views_faoapi.forecast.serialize import schema
-from views_faoapi.forecast.serialize.bulk_parquet import build_bulk_table, write_bulk_parquet
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.forecast.serialize import schema
+from views_crafdapi.forecast.serialize.bulk_parquet import build_bulk_table, write_bulk_parquet
 
 pytestmark = pytest.mark.layer2_data
 
@@ -108,17 +108,17 @@ def test_bulk_endpoint_returns_the_parquet(tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from views_faoapi.data.handlers import FAO_PGMDataset
-    from views_faoapi.managers.api import FAOApiManager
+    from views_crafdapi.data.handlers import ForecastDataset
+    from views_crafdapi.managers.api import CrafdApiManager
 
-    mgr = FAOApiManager.from_config(
+    mgr = CrafdApiManager.from_config(
         {"deployment": {"host": "0.0.0.0", "port": 80}}, cache_dir=tmp_path / "cache"
     )
     mgr._prediction_bucket_id = "test-bucket"
     mgr.app = FastAPI()
     mgr._register_routes()
 
-    fds = FAO_PGMDataset(make_fao_df(n_samples=32, seed=1, targets=_FC))
+    fds = ForecastDataset(make_fao_df(n_samples=32, seed=1, targets=_FC))
     hds = ForecastDataset(make_fao_df(n_samples=1, seed=2, targets=_HT), targets=list(_HT))
     h = mgr._get_api_key_hash("test-api-key")
     def mk(d):

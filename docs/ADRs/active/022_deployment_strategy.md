@@ -16,7 +16,7 @@ In fact, the production deployment has never used Docker. The deployment path is
 
 1. The `views-models` repository contains the deployment entrypoint at `apis/un_fao/run.sh`.
 2. `run.sh` creates a conda environment, installs views-faoapi from GitHub via `pip install git+https://...@main`, and runs `apis/un_fao/main.py`.
-3. `main.py` instantiates `FAOApiManager` and calls `manager.run()`, which starts uvicorn internally.
+3. `main.py` instantiates `CrafdApiManager` and calls `manager.run()`, which starts uvicorn internally.
 
 This is consistent with how all other VIEWS platform services are deployed: conda/pip environment on the server, direct process execution, no containerization. Docker was an undocumented architectural commitment that contradicted the actual deployment mechanism.
 

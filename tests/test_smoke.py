@@ -1,4 +1,4 @@
-"""Offline unit tests for the post-deploy smoke test (views_faoapi.smoke, C-173).
+"""Offline unit tests for the post-deploy smoke test (views_crafdapi.smoke, C-173).
 
 No network: `requests.get` is monkeypatched for the unauth checks; a fake client stands in for the
 authed ones. Verifies version-tag match/mismatch, /health degraded→FAIL, coverage empty/regional→FAIL
@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import requests
 
-from views_faoapi import smoke
+from views_crafdapi import smoke
 
 pytestmark = pytest.mark.layer4_infra
 

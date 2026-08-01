@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from views_faoapi.forecast.serialize.json_contract import hdi_dataframe, map_dataframe
+from views_crafdapi.forecast.serialize.json_contract import hdi_dataframe, map_dataframe
 
 pytestmark = pytest.mark.layer2_data
 

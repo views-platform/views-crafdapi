@@ -3,7 +3,7 @@
 **Status:** Active
 **Owner:** Project maintainers
 **Last reviewed:** 2026-06-26
-**Scope:** `src/views_faoapi/forecast/` — the single-responsibility modules composed by `ForecastDataset` (see `ForecastDataset.md`). Each module has **one reason to change**; dependencies point one way, toward the frozen views-frames leaf (ADP/SDP). `summarize/` does not import `geography/` (CRP).
+**Scope:** `src/views_crafdapi/forecast/` — the single-responsibility modules composed by `ForecastDataset` (see `ForecastDataset.md`). Each module has **one reason to change**; dependencies point one way, toward the frozen views-frames leaf (ADP/SDP). `summarize/` does not import `geography/` (CRP).
 
 This is a consolidated, brief contract for the package; the facade contract is `ForecastDataset.md`.
 

@@ -13,9 +13,9 @@ from fastapi import HTTPException
 
 from tests.conftest import make_fao_df
 from tests.forecast._wire_fixtures import make_wire_run
-from views_faoapi.managers.dataset_service import DatasetService
-from views_faoapi.managers.disk_cache import FAODiskCacheManager
-from views_faoapi.managers.prediction import SHARD_ARTIFACT_TYPE, SIDECAR_ARTIFACT_TYPE
+from views_crafdapi.managers.dataset_service import DatasetService
+from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager
+from views_crafdapi.managers.prediction import SHARD_ARTIFACT_TYPE, SIDECAR_ARTIFACT_TYPE
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -25,7 +25,7 @@ HASH = "deadbeef00000000"
 def _service(cache_dir=None):
     # S6b-2 (#208): wire ingest streams to disk and reads it back, so it needs a REAL disk cache
     # (production always has one). A per-test temp dir stands in for the mock disk used pre-S6b-2.
-    disk = FAODiskCacheManager(Path(cache_dir) if cache_dir else Path(tempfile.mkdtemp()))
+    disk = CrafdDiskCacheManager(Path(cache_dir) if cache_dir else Path(tempfile.mkdtemp()))
     return DatasetService(
         dataframe_cache={},
         file_cache={},
@@ -460,7 +460,7 @@ def test_relaxed_capacity_guard_serves_run_the_whole_run_bound_would_refuse(monk
     assembled size would exceed the cap now serves (assembled per-month to disk), where pre-S6b-2
     the whole-run bound refused it → legacy."""
     from tests.forecast._wire_fixtures import make_multi_shard_run
-    from views_faoapi.forecast.ingestion import wire_reader
+    from views_crafdapi.forecast.ingestion import wire_reader
 
     mrun = make_multi_shard_run(run_id="run_a")
     n_targets, cells, s = len(mrun.targets), len(mrun.units), mrun.sample_count

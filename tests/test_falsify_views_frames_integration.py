@@ -12,11 +12,11 @@ import re
 import tomllib
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-SRC = REPO / "src" / "views_faoapi"
+SRC = REPO / "src" / "views_crafdapi"
 
 
 def test_views_frames_is_used_by_production_code():
-    """Some module under src/views_faoapi must import views_frames for it to be 'integrated'."""
+    """Some module under src/views_crafdapi must import views_frames for it to be 'integrated'."""
     imports = [
         p.relative_to(REPO).as_posix()
         for p in SRC.rglob("*.py")

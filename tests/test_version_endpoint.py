@@ -11,8 +11,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from views_faoapi import version as version_mod
-from views_faoapi.managers.api import FAOApiManager
+from views_crafdapi import version as version_mod
+from views_crafdapi.managers.api import CrafdApiManager
 
 pytestmark = pytest.mark.layer3_http
 
@@ -25,7 +25,7 @@ def _pyproject_version() -> str:
 
 @pytest.fixture
 def client(tmp_path):
-    mgr = FAOApiManager.from_config({}, cache_dir=tmp_path / "cache")
+    mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
     mgr.app = FastAPI()
     mgr._register_routes()
     return TestClient(mgr.app)
@@ -43,7 +43,7 @@ def test_installed_version_falls_back_to_metadata(monkeypatch):
     import importlib.metadata as md
 
     monkeypatch.setattr(version_mod, "_pyproject_version", lambda: None)
-    assert version_mod.installed_version() == md.version("views-faoapi")
+    assert version_mod.installed_version() == md.version("views-crafdapi")
 
 
 def test_deployed_tag_none_when_file_absent(tmp_path, monkeypatch):
@@ -76,7 +76,7 @@ def test_version_exposes_served_contract_capability(client, tmp_path, monkeypatc
     """S5 (#250, ADR-033 §7, C-171): /version exposes the wire-contract dialect this build renders,
     so deploy/serve capability skew (a producer delivering a dialect the deploy lags) is remotely
     diagnosable."""
-    from views_faoapi.forecast.contract import SERVED_CONTRACT_VERSION
+    from views_crafdapi.forecast.contract import SERVED_CONTRACT_VERSION
 
     monkeypatch.setenv("FAOAPI_DEPLOY_TAG_FILE", str(tmp_path / "no-pin"))
     body = client.get("/version").json()  # unauth

@@ -9,7 +9,7 @@ Run: PYTHONPATH=src pytest tests/test_falsify_understanding.py -v
 import pytest
 from pydantic import BaseModel, Field, PrivateAttr, ConfigDict
 from typing import Any, Dict, cast
-from views_faoapi.managers.appwrite import _as_dict
+from views_crafdapi.managers.appwrite import _as_dict
 
 pytestmark = pytest.mark.layer5_audit
 

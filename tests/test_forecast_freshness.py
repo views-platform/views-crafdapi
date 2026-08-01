@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from views_faoapi.managers.freshness import forecast_freshness, freshness_sla_days
+from views_crafdapi.managers.freshness import forecast_freshness, freshness_sla_days
 
 pytestmark = pytest.mark.layer4_infra
 

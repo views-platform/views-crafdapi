@@ -26,12 +26,12 @@ It does not redefine architectural principles.
 
 This standard applies to the views-faoapi project, a FastAPI service delivering
 VIEWS conflict forecast data to the UN FAO. The project uses Python's standard
-logging library configured via `src/views_faoapi/configs/logging.yaml`, which defines YAML-based
+logging library configured via `src/views_crafdapi/configs/logging.yaml`, which defines YAML-based
 logging configuration with 5 rotating file handlers covering different aspects
 of system operation.
 
 All logging in this project must conform to the configuration defined in
-`src/views_faoapi/configs/logging.yaml` and the standards described below.
+`src/views_crafdapi/configs/logging.yaml` and the standards described below.
 
 ---
 

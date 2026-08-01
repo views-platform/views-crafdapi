@@ -4,7 +4,7 @@
 **Owner:** Project maintainers
 **Last reviewed:** 2026-06-27
 **Related ADRs:** ADR-001 (Infrastructure category), ADR-008 (logging and observability), ADR-009 (boundary contracts and configuration validation)
-**Source:** epic #144 / C-36, S2 — extracted from `FAOApiManager._get_latest_dataframe`
+**Source:** epic #144 / C-36, S2 — extracted from `CrafdApiManager._get_latest_dataframe`
 
 ---
 
@@ -12,35 +12,35 @@
 
 > **What is this class for?**
 
-`DatasetService` owns the **data-fetch pipeline** for the views-faoapi service: given a `PredictionStoreManager`, an API key, and a category (`historical`/`forecast`), it returns the latest `ForecastDataset` / its DataFrame, served through a three-tier cache (in-memory → disk → remote Appwrite download), with format-cascade parsing, value/metadata plausibility validation (C-72), disk-cache persistence, and provenance/lineage recording (C-86). It was extracted from `FAOApiManager` so the fetch/cache strategy has one reason to change, separate from the HTTP surface and lifecycle.
+`DatasetService` owns the **data-fetch pipeline** for the views-faoapi service: given a `PredictionStoreManager`, an API key, and a category (`historical`/`forecast`), it returns the latest `ForecastDataset` / its DataFrame, served through a three-tier cache (in-memory → disk → remote Appwrite download), with format-cascade parsing, value/metadata plausibility validation (C-72), disk-cache persistence, and provenance/lineage recording (C-86). It was extracted from `CrafdApiManager` so the fetch/cache strategy has one reason to change, separate from the HTTP surface and lifecycle.
 
 ---
 
 ## 2. Non-Goals (Explicit Exclusions)
 
-- Does **not** own the caches it uses. `dataframe_cache`, `file_cache`, and `disk_cache` are owned by `FAOApiManager` and injected by reference, so routes, lifecycle clears, and cache-stats observe the same objects.
-- Does **not** do HTTP routing, authentication, or FastAPI dependency wiring. It receives an already-authenticated `PredictionStoreManager`; the `Depends`/`X-API-Key` seam stays in `FAOApiManager`.
+- Does **not** own the caches it uses. `dataframe_cache`, `file_cache`, and `disk_cache` are owned by `CrafdApiManager` and injected by reference, so routes, lifecycle clears, and cache-stats observe the same objects.
+- Does **not** do HTTP routing, authentication, or FastAPI dependency wiring. It receives an already-authenticated `PredictionStoreManager`; the `Depends`/`X-API-Key` seam stays in `CrafdApiManager`.
 - Does **not** compute statistics or own data semantics. It constructs a `ForecastDataset` and validates plausibility; MAP/HDI and column meaning live in the domain layer.
-- Does **not** manage the Appwrite SDK or perform uploads. It only *reads* (downloads) via the injected manager and *writes the disk cache* via `FAODiskCacheManager`.
+- Does **not** manage the Appwrite SDK or perform uploads. It only *reads* (downloads) via the injected manager and *writes the disk cache* via `CrafdDiskCacheManager`.
 
 ---
 
 ## 3. Responsibilities and Guarantees
 
-- **Three-tier fetch:** (1) in-memory `dataframe_cache[api_key_hash][category]` (TTL-bounded; advisory staleness warning on hit), (2) disk cache via `FAODiskCacheManager`, (3) remote Appwrite download. A hit at any tier populates the higher tiers. `force_refresh=True` bypasses tiers 1–2.
+- **Three-tier fetch:** (1) in-memory `dataframe_cache[api_key_hash][category]` (TTL-bounded; advisory staleness warning on hit), (2) disk cache via `CrafdDiskCacheManager`, (3) remote Appwrite download. A hit at any tier populates the higher tiers. `force_refresh=True` bypasses tiers 1–2.
 - **Provenance (C-86):** the latest artifact is resolved via `manager.get_latest_provenance(filters={"category": …})`; the lineage (file id, declared upstream `source`, `methodology_version`, hash, created-at, filename) is logged and stored on the cache entry. No forecast/historical artifact → `HTTPException(404)`.
 - **Format auto-detection:** parquet → CSV (utf-8 only) → JSON → feather. **Pickle is excluded** (C-59, RCE on untrusted bytes); a `PAR1` magic header that fails to parse short-circuits to 500 (C-52).
 - **Plausibility (C-72):** before caching/serving, `validate_value_plausibility()` + `validate_metadata_plausibility()` run; a violation surfaces as 500 — implausible data fails loud rather than reaching FAO.
-- **Cache key parity:** the API-key hash is computed by the injected `api_key_hash_fn` (the same function `FAOApiManager` uses for routes), so service-written and route-read cache entries always share a key.
+- **Cache key parity:** the API-key hash is computed by the injected `api_key_hash_fn` (the same function `CrafdApiManager` uses for routes), so service-written and route-read cache entries always share a key.
 - **Return contract:** `get_latest_dataframe` returns a **copy** of the cached DataFrame; `get_latest_dataset` returns a **copy** of the cached `ForecastDataset`.
 
 ---
 
 ## 4. Inputs and Assumptions
 
-- Constructor (keyword-only): `dataframe_cache`, `file_cache`, `disk_cache` (a `FAODiskCacheManager` with `ttl_seconds`/`read`/`write`), `prediction_bucket_id`, `configs_getter` (`() -> dict`, read lazily at request time for `historical_targets`), `api_key_hash_fn` (`str -> str`), `check_staleness_fn` (`float -> StalenessResult`-like).
+- Constructor (keyword-only): `dataframe_cache`, `file_cache`, `disk_cache` (a `CrafdDiskCacheManager` with `ttl_seconds`/`read`/`write`), `prediction_bucket_id`, `configs_getter` (`() -> dict`, read lazily at request time for `historical_targets`), `api_key_hash_fn` (`str -> str`), `check_staleness_fn` (`float -> StalenessResult`-like).
 - `manager` (per call) is an already-authenticated `PredictionStoreManager`.
-- Assumes the injected caches are the same objects `FAOApiManager` exposes elsewhere (shared by reference).
+- Assumes the injected caches are the same objects `CrafdApiManager` exposes elsewhere (shared by reference).
 
 ---
 
@@ -64,9 +64,9 @@
 
 ## 7. Boundaries and Interactions
 
-- **Composed by** `FAOApiManager` (constructed in `__init__` and `from_config`); route handlers call it via the thin `_get_latest_dataframe`/`_get_latest_dataset` delegators.
-- **Depends on** `PredictionStoreManager` (injected per call), `FAODiskCacheManager`, `ForecastDataset` (domain).
-- **Does not** depend on FastAPI routing or `FAOApiManager` internals beyond the injected collaborators (DIP).
+- **Composed by** `CrafdApiManager` (constructed in `__init__` and `from_config`); route handlers call it via the thin `_get_latest_dataframe`/`_get_latest_dataset` delegators.
+- **Depends on** `PredictionStoreManager` (injected per call), `CrafdDiskCacheManager`, `ForecastDataset` (domain).
+- **Does not** depend on FastAPI routing or `CrafdApiManager` internals beyond the injected collaborators (DIP).
 
 ---
 
@@ -89,7 +89,7 @@ df = service.get_latest_dataframe(prediction_manager, x_api_key, "forecast")
 
 ```python
 # WRONG: constructing private caches inside the service — they must be the
-# SAME objects FAOApiManager owns, or routes/lifecycle will see stale state.
+# SAME objects CrafdApiManager owns, or routes/lifecycle will see stale state.
 DatasetService(dataframe_cache={}, ...)  # only acceptable in isolated unit tests
 ```
 

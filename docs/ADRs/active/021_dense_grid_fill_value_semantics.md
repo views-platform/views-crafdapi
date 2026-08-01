@@ -26,7 +26,7 @@ A decision was needed because the API is expanding to global coverage and adding
 
 1. **Zero-fill is the correct default.** Missing grid cells are filled with `0` to produce a dense grid, matching the views-datafactory convention.
 
-2. **Fill value is configurable.** `_ViewsDataset` accepts a `fill_value` parameter (default `0`) that flows through to `_preprocess_dataframe()`. `FAO_PGMDataset` exposes the same parameter. `FAOApiManager` can pass it through at dataset construction time.
+2. **Fill value is configurable.** `_ViewsDataset` accepts a `fill_value` parameter (default `0`) that flows through to `_preprocess_dataframe()`. `ForecastDataset` exposes the same parameter. `CrafdApiManager` can pass it through at dataset construction time.
 
 3. **This decision mirrors views-datafactory.** If views-datafactory changes its fill convention (e.g., adopts NaN for a new data source or model), this repo should follow. The coupling is intentional: both repos serve the same pipeline and must agree on grid semantics.
 
@@ -63,7 +63,7 @@ A decision was needed because the API is expanding to global coverage and adding
 - Alignment with views-datafactory is explicit and traceable
 
 ### Negative
-- Adds a constructor parameter to `_ViewsDataset` and `FAO_PGMDataset` (minor API surface increase)
+- Adds a constructor parameter to `_ViewsDataset` and `ForecastDataset` (minor API surface increase)
 - If views-datafactory changes its convention, this repo must follow — the coupling is explicit but real
 
 ---
@@ -72,8 +72,8 @@ A decision was needed because the API is expanding to global coverage and adding
 
 - `_ViewsDataset.__init__()` gains `fill_value: float = 0` parameter, stored as `self._fill_value`
 - `_ViewsDataset._preprocess_dataframe()` uses `self._fill_value` instead of hardcoded `0`
-- `FAO_PGMDataset.__init__()` passes `fill_value` through to `super().__init__()`
-- `FAOApiManager._get_latest_dataframe()` can pass `fill_value` from config at dataset construction time (not wired yet — current default is sufficient)
+- `ForecastDataset.__init__()` passes `fill_value` through to `super().__init__()`
+- `CrafdApiManager._get_latest_dataframe()` can pass `fill_value` from config at dataset construction time (not wired yet — current default is sufficient)
 - No changes to aggregation, subsetting, or HDI-map code — they continue to receive a dense grid
 
 ---

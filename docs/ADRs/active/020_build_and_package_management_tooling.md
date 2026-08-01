@@ -63,7 +63,7 @@ The effort to "fix" the Poetry setup (generate `poetry.lock`, ensure `poetry ins
 
 ### Why hatchling specifically
 
-views-faoapi is a single-package project (`src/views_faoapi/`). It does not need hatchling's multi-package capabilities (which motivated the choice in views-bayesian). The choice is pragmatic: hatchling is the build backend used by the other uv-based VIEWS repositories, it handles the `src/` layout cleanly, and it includes non-Python files (shapefiles, logging.yaml) in the wheel by default — which this project requires (ADR-017).
+views-faoapi is a single-package project (`src/views_crafdapi/`). It does not need hatchling's multi-package capabilities (which motivated the choice in views-bayesian). The choice is pragmatic: hatchling is the build backend used by the other uv-based VIEWS repositories, it handles the `src/` layout cleanly, and it includes non-Python files (shapefiles, logging.yaml) in the wheel by default — which this project requires (ADR-017).
 
 ### What was removed
 

@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from views_faoapi.managers.prediction import LEGACY_ARTIFACT_TYPE, PredictionStoreManager
+from views_crafdapi.managers.prediction import LEGACY_ARTIFACT_TYPE, PredictionStoreManager
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -33,7 +33,7 @@ def _make_store(captured: dict):
         return result
 
     manager.metadata_manager.search_files_by_metadata.side_effect = _capture
-    with patch("views_faoapi.managers.prediction.manager.AppWriteFileManager", return_value=manager):
+    with patch("views_crafdapi.managers.prediction.manager.AppWriteFileManager", return_value=manager):
         return PredictionStoreManager(config)
 
 
@@ -105,7 +105,7 @@ def test_guard_excludes_contract_artifacts_from_newest_wins():
         return result
 
     manager.metadata_manager.search_files_by_metadata.side_effect = _search
-    with patch("views_faoapi.managers.prediction.manager.AppWriteFileManager", return_value=manager):
+    with patch("views_crafdapi.managers.prediction.manager.AppWriteFileManager", return_value=manager):
         store = PredictionStoreManager(config)
 
     assert store.get_latest_file_id(filters={"category": "forecast"}) == "legacy1"

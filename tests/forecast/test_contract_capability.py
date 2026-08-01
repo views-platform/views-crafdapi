@@ -3,7 +3,7 @@ this build will render, and which it refuses rather than serve degraded."""
 
 import pytest
 
-from views_faoapi.forecast import contract
+from views_crafdapi.forecast import contract
 
 pytestmark = pytest.mark.layer2_data
 

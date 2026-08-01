@@ -1,5 +1,5 @@
 [project]
-name = "views-faoapi"
+name = "views-crafdapi"
 version = "1.4.0"
 description = ""
 authors = [
@@ -46,7 +46,7 @@ build-backend = "hatchling.build"
 extend-exclude = ["notebooks"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/views_faoapi"]
+packages = ["src/views_crafdapi"]
 
 [tool.hatch.build.targets.sdist]
 include = ["/src"]
@@ -64,7 +64,7 @@ markers = [
 addopts = "-m 'not integration'"
 
 [tool.coverage.run]
-source = ["src/views_faoapi"]
+source = ["src/views_crafdapi"]
 branch = true
 omit = [
     "*/tests/*",

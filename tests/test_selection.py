@@ -15,14 +15,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from tests.forecast._wire_fixtures import make_wire_run
-from views_faoapi.managers import selection
-from views_faoapi.managers.dataset_service import (
+from views_crafdapi.managers import selection
+from views_crafdapi.managers.dataset_service import (
     _MANIFEST_UNFETCHED,
     DatasetService,
     _identifiable_gate,
 )
-from views_faoapi.managers.disk_cache import FAODiskCacheManager
-from views_faoapi.managers.prediction import SHARD_ARTIFACT_TYPE, SIDECAR_ARTIFACT_TYPE
+from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager
+from views_crafdapi.managers.prediction import SHARD_ARTIFACT_TYPE, SIDECAR_ARTIFACT_TYPE
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -84,7 +84,7 @@ def test_identifiable_gate_passes_a_named_source():
 
 # --- _load_wire_run typed branches -------------------------------------------------------
 def _service():
-    disk = FAODiskCacheManager(Path(tempfile.mkdtemp()))
+    disk = CrafdDiskCacheManager(Path(tempfile.mkdtemp()))
     return DatasetService(
         dataframe_cache={},
         file_cache={},

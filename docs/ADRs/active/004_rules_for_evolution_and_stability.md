@@ -48,16 +48,16 @@ Components in views-faoapi are classified into **stability tiers** that govern h
 | HTTP endpoint URL patterns (`/{level}/data/{type}/subset`, etc.) | S1 | FAO consumers depend on these URLs |
 | Response JSON schema (`success`, `data.dataframe`, `data.shape`) | S1 | FAO consumers parse these fields |
 | `X-API-Key` header authentication contract | S1 | FAO deployment uses this |
-| `FAO_PGMDataset` public API (CIC-governed) | S2 | Internal but CIC-bound |
+| `ForecastDataset` public API (CIC-governed) | S2 | Internal but CIC-bound |
 | `AppWriteFileManager` public API (CIC-governed) | S2 | CIC-bound |
 | `PosteriorDistributionAnalyzer` public API (CIC-governed) | S2 | CIC-bound |
 | `_ViewsDataset` public API (CIC-governed) | S2 | CIC-bound, parent of domain hierarchy |
-| Three-tier cache hierarchy (in-memory → disk → Appwrite) | S2 | Architectural commitment per FAOApiManager CIC |
+| Three-tier cache hierarchy (in-memory → disk → Appwrite) | S2 | Architectural commitment per CrafdApiManager CIC |
 | Per-API-key isolation model | S2 | Multi-tenant design commitment |
 | `_as_dict()` / `_get()` normalization boundary | S2 | ADR-018 governed |
 | Internal cache sizes, TTLs, eviction parameters | S3 | Tunable without contract revision |
 | Module-level helper functions (`parse_list_param`, etc.) | S3 | Internal utilities |
-| `FAODiskCacheManager` internals | S3 | Implementation detail of cache tier |
+| `CrafdDiskCacheManager` internals | S3 | Implementation detail of cache tier |
 | `client.py`, `plotting.py`, `time.py` (notebook utilities) | S4 | Recently extracted, API not yet committed |
 | `wandb/utils.py` | S4 | Observability, no external consumers |
 
@@ -81,7 +81,7 @@ A breaking change is any modification that would cause an existing, correctly-be
 As of 2026-06-02, the following trigger conditions from the original deferral are satisfied:
 
 - **External dependency exists:** The FAO API is deployed in shadow mode at `faoapi.viewsforecasting.org` (Hetzner CPX52), serving the United Nations Food and Agriculture Organization. Endpoint URLs and response schemas are committed external contracts.
-- **Breaking changes have cost:** The FAOApiManager CIC identifies endpoint URL patterns and per-API-key isolation as "core architectural commitments" (Section 11). Multiple CICs declare stable vs. candidate-for-change components.
+- **Breaking changes have cost:** The CrafdApiManager CIC identifies endpoint URL patterns and per-API-key isolation as "core architectural commitments" (Section 11). Multiple CICs declare stable vs. candidate-for-change components.
 - **Contributors need clarity:** 11 disagreements (D-01 through D-11) in the risk register reflect uncertainty about what is safe to change.
 
 ### Historical note (original deferral)

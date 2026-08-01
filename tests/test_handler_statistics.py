@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 import pytest
-from views_faoapi.data.handlers import _GridDataset, FAO_PGMDataset
+from views_crafdapi.data.handlers import _GridDataset, ForecastDataset
 
 pytestmark = pytest.mark.layer2_data
 
@@ -88,12 +88,12 @@ class TestElementwiseSum:
             np.array([1.0, 2.0, 3.0]),
             np.array([4.0, 5.0, 6.0]),
         ])
-        result = FAO_PGMDataset._elementwise_sum(None, arrays)
+        result = ForecastDataset._elementwise_sum(None, arrays)
         np.testing.assert_array_equal(result, np.array([5.0, 7.0, 9.0]))
 
     def test_single_array_returned_unchanged(self):
         arrays = pd.Series([np.array([10.0, 20.0, 30.0])])
-        result = FAO_PGMDataset._elementwise_sum(None, arrays)
+        result = ForecastDataset._elementwise_sum(None, arrays)
         np.testing.assert_array_equal(result, np.array([10.0, 20.0, 30.0]))
 
 
@@ -157,12 +157,12 @@ class TestFloat32PrecisionIntegration:
     """
 
     def _make_fao_dataset(self, rng, pred_data):
-        """Build a FAO_PGMDataset with given prediction data."""
+        """Build a ForecastDataset with given prediction data."""
         from tests.conftest import make_fao_df
         df = make_fao_df(n_cells=2, n_months=1, n_samples=len(pred_data[0]))
         df["pred_test"] = pred_data
         df = df.drop(columns=["pred_other"])
-        return FAO_PGMDataset(df)
+        return ForecastDataset(df)
 
     def test_float32_hdi_map_matches_float64_within_tolerance(self):
         """HDI-MAP results from float32 pipeline must be within 1e-3 of float64."""

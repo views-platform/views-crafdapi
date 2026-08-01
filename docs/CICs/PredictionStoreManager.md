@@ -13,13 +13,13 @@
 
 It acts as the prediction-domain facade over Appwrite's generic file storage, ensuring that every uploaded prediction carries validated metadata (via `PredictionMetadata`) and that queries are automatically scoped to the current model.
 
-**Location:** `src/views_faoapi/managers/prediction/manager.py`
+**Location:** `src/views_crafdapi/managers/prediction/manager.py`
 
 ---
 
 ## 2. Non-Goals (Explicit Exclusions)
 
-- This class does **not** compute statistics on predictions (HDI, MAP, or any distributional analysis -- that responsibility belongs to `PosteriorDistributionAnalyzer` and `FAO_PGMDataset`).
+- This class does **not** compute statistics on predictions (HDI, MAP, or any distributional analysis -- that responsibility belongs to `PosteriorDistributionAnalyzer` and `ForecastDataset`).
 - This class does **not** manage `DataFrame` or tensor representations of prediction data.
 - This class does **not** handle API routing, HTTP request/response lifecycle, or authentication.
 - This class does **not** interpret or transform prediction data contents; it treats prediction files as opaque binary blobs with structured metadata.
@@ -47,7 +47,7 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 ### Latest-file resolution
 - `get_latest_file_id` returns the `fileId` of the newest prediction matching the given filters (sorted by `$createdAt` descending).
 - `get_latest_file_metadata` returns `Optional[PredictionFileMetadata]` — the file ID plus `$createdAt`/`$updatedAt` timestamps for the newest matching prediction. Returns `None` when no predictions match.
-- `get_latest_provenance` returns `Optional[PredictionProvenance]` — the lineage of the newest matching artifact: its identity (file ID, hash, `$createdAt`, filename), the declared upstream `source`/`pipeline` (`"unknown"` if unstamped), and the faoapi `methodology_version` (from `views_faoapi.methodology.METHODOLOGY_VERSION`, ADR-023) that computes the published HDI/MAP. The serving layer logs this when an artifact enters service and exposes it at `GET /provenance/{category}`, so a silent viewser→datafactory source switch or methodology re-baseline is auditable (C-86).
+- `get_latest_provenance` returns `Optional[PredictionProvenance]` — the lineage of the newest matching artifact: its identity (file ID, hash, `$createdAt`, filename), the declared upstream `source`/`pipeline` (`"unknown"` if unstamped), and the faoapi `methodology_version` (from `views_crafdapi.methodology.METHODOLOGY_VERSION`, ADR-023) that computes the published HDI/MAP. The serving layer logs this when an artifact enters service and exposes it at `GET /provenance/{category}`, so a silent viewser→datafactory source switch or methodology re-baseline is auditable (C-86).
 - `download_latest_file` combines latest-file resolution with download in a single call.
 
 #### Quarantine / rollback override (C-71)
@@ -131,20 +131,20 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 ## 7. Boundaries and Interactions
 
 ### Layer
-Infrastructure layer (`src/views_faoapi/managers/`).
+Infrastructure layer (`src/views_crafdapi/managers/`).
 
 ### Depends on
-- `AppWriteFileManager` and `AppwriteConfig` (`src/views_faoapi/managers/appwrite/`) -- all Appwrite storage and metadata operations are delegated to this component. Treated as a trusted infrastructure wrapper.
-- `ModelPathManager` (`src/views_faoapi/managers/model.py`) -- provides `model_name` for automatic query scoping.
-- `OperationResult` (`src/views_faoapi/managers/appwrite/`) -- the standard result envelope.
+- `AppWriteFileManager` and `AppwriteConfig` (`src/views_crafdapi/managers/appwrite/`) -- all Appwrite storage and metadata operations are delegated to this component. Treated as a trusted infrastructure wrapper.
+- `ModelPathManager` (`src/views_crafdapi/managers/model.py`) -- provides `model_name` for automatic query scoping.
+- `OperationResult` (`src/views_crafdapi/managers/appwrite/`) -- the standard result envelope.
 - `PredictionMetadata` (defined in the same module) -- validates metadata before upload.
 - `PredictionFileMetadata` (defined in the same module) -- dataclass wrapping `file_id`, `created_at`, `updated_at` for latest-file resolution with timestamps.
 
 ### Called by
-- `FAOApiManager` (or equivalent orchestrator) for prediction upload, download, listing, and management operations.
+- `CrafdApiManager` (or equivalent orchestrator) for prediction upload, download, listing, and management operations.
 
 ### Must not depend on
-- Domain layer (`data/`) -- `PredictionStoreManager` must not import or reference `FAO_PGMDataset`, `_ViewsDataset`, `PosteriorDistributionAnalyzer`, or any statistical/analytical components.
+- Domain layer (`data/`) -- `PredictionStoreManager` must not import or reference `ForecastDataset`, `_ViewsDataset`, `PosteriorDistributionAnalyzer`, or any statistical/analytical components.
 - API/HTTP layer -- this class does not handle routing or request parsing.
 
 ---
@@ -153,8 +153,8 @@ Infrastructure layer (`src/views_faoapi/managers/`).
 
 ### Uploading a prediction file with validated metadata
 ```python
-from views_faoapi.managers.prediction import PredictionStoreManager
-from views_faoapi.managers.appwrite import AppwriteConfig
+from views_crafdapi.managers.prediction import PredictionStoreManager
+from views_crafdapi.managers.appwrite import AppwriteConfig
 
 config = AppwriteConfig(...)
 manager = PredictionStoreManager(appwrite_file_manager_config=config)

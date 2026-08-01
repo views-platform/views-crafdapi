@@ -9,15 +9,15 @@ import time
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
-from views_faoapi.managers import disk_cache as dc
-from views_faoapi.managers.disk_cache import CACHE_SCHEMA_VERSION, FAODiskCacheManager
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.managers import disk_cache as dc
+from views_crafdapi.managers.disk_cache import CACHE_SCHEMA_VERSION, CrafdDiskCacheManager
 
 pytestmark = pytest.mark.layer4_infra
 
 
 def test_read_returns_none_on_corrupt_value_dir(tmp_path):
-    mgr = FAODiskCacheManager(tmp_path)
+    mgr = CrafdDiskCacheManager(tmp_path)
     key, cat = "apikeyhash", "forecast"
 
     # Valid metadata (passes the schema-version + TTL gates) ...
@@ -31,7 +31,7 @@ def test_read_returns_none_on_corrupt_value_dir(tmp_path):
 
 
 def test_read_returns_none_on_schema_version_mismatch(tmp_path):
-    mgr = FAODiskCacheManager(tmp_path)
+    mgr = CrafdDiskCacheManager(tmp_path)
     key, cat = "apikeyhash", "forecast"
     mgr._meta_path(key, cat).write_text(
         json.dumps({"schema_version": CACHE_SCHEMA_VERSION + 999, "timestamp": time.time(), "file_id": "f"})
@@ -54,7 +54,7 @@ def test_read_never_calls_pickle_load(tmp_path, monkeypatch):
         raise AssertionError("pickle.load must never be called on the cache read path")
 
     monkeypatch.setattr(pickle, "load", _boom)
-    mgr = FAODiskCacheManager(tmp_path)
+    mgr = CrafdDiskCacheManager(tmp_path)
     ds = ForecastDataset(make_fao_df(seed=4))
     assert mgr.write("k", "forecast", ds, "fid")
     result = mgr.read("k", "forecast")  # would raise if pickle.load were called
@@ -69,7 +69,7 @@ def test_salt_lock_timeout_degrades_to_ephemeral_never_raises(tmp_path):
     import filelock
     from unittest.mock import patch
 
-    cache = FAODiskCacheManager(tmp_path)
+    cache = CrafdDiskCacheManager(tmp_path)
     cache._salt_cache = None  # force a fresh resolution under the fault
     with patch.object(filelock.FileLock, "acquire", side_effect=filelock.Timeout("salt")):
         salt = cache._salt()  # must not raise

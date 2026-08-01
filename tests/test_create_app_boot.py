@@ -5,7 +5,7 @@ uvicorn entrypoint — constructs `APIPathManager("un_fao")`, which with the def
 validate=True demands a `apis/un_fao/` model-training tree. That directory is gitignored
 (a runtime artifact), so a clean server clone does not have it, and boot crashed twice:
 first FileNotFoundError on the missing tree, then `TypeError: None / "datasets"` because
-`.cache` came back None. Every prior app test used the `FAOApiManager.from_config(...)`
+`.cache` came back None. Every prior app test used the `CrafdApiManager.from_config(...)`
 seam, which bypasses APIPathManager — so nothing exercised the production boot path.
 
 These tests boot the real factory from an empty working directory (the deploy state).
@@ -14,7 +14,7 @@ These tests boot the real factory from an empty working directory (the deploy st
 import pytest
 from fastapi import FastAPI
 
-import views_faoapi.managers.api as api_module
+import views_crafdapi.managers.api as api_module
 
 pytestmark = pytest.mark.layer4_infra
 

@@ -52,7 +52,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.layer3_http, skip_no_creds]
 
 @pytest.fixture(scope="module")
 def appwrite_config():
-    from views_faoapi.managers.appwrite import AppwriteConfig
+    from views_crafdapi.managers.appwrite import AppwriteConfig
 
     kwargs = dict(
         endpoint=os.getenv("APPWRITE_ENDPOINT"),
@@ -78,14 +78,14 @@ def appwrite_config():
 
 @pytest.fixture(scope="module")
 def file_manager(appwrite_config):
-    from views_faoapi.managers.appwrite import AppWriteFileManager
+    from views_crafdapi.managers.appwrite import AppWriteFileManager
 
     return AppWriteFileManager(appwrite_config)
 
 
 @pytest.fixture(scope="module")
 def prediction_manager(appwrite_config):
-    from views_faoapi.managers.prediction import PredictionStoreManager
+    from views_crafdapi.managers.prediction import PredictionStoreManager
 
     return PredictionStoreManager(appwrite_file_manager_config=appwrite_config)
 
@@ -100,12 +100,12 @@ def integration_client(tmp_path_factory):
     """TestClient backed by real Appwrite — full stack, no mocks."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
-    from views_faoapi.managers.api import FAOApiManager
+    from views_crafdapi.managers.api import CrafdApiManager
 
     api_key = os.environ["APPWRITE_DATASTORE_API_KEY"]
     cache_dir = tmp_path_factory.mktemp("http_integ_cache")
 
-    mgr = FAOApiManager.from_config(
+    mgr = CrafdApiManager.from_config(
         {"deployment": {"host": "0.0.0.0", "port": 80}},
         cache_dir=cache_dir,
     )
@@ -207,7 +207,7 @@ class TestDataSubsetLive:
 
     def test_forecast_subset_through_http(self, integration_client, test_forecast_file):
         """Full pipeline: HTTP → auth → _get_latest_dataset → download from
-        Appwrite → parquet parse → FAO_PGMDataset → get_subset_dataframe →
+        Appwrite → parquet parse → ForecastDataset → get_subset_dataframe →
         dataframe_to_dict → convert_numpy_types → JSON response."""
         client, api_key = integration_client
         resp = client.get(
@@ -227,7 +227,7 @@ class TestHdiMapLive:
 
     def test_forecast_hdi_map_through_http(self, integration_client, test_forecast_file):
         """Statistical pipeline through HTTP: auth → download → parse →
-        FAO_PGMDataset → PosteriorDistributionAnalyzer → HDI/MAP → serialize."""
+        ForecastDataset → PosteriorDistributionAnalyzer → HDI/MAP → serialize."""
         client, api_key = integration_client
         resp = client.get(
             "/pg/analysis/forecast/hdi-map",
@@ -246,7 +246,7 @@ class TestAggregationLive:
 
     def test_country_aggregation_through_http(self, integration_client, test_forecast_file):
         """Aggregation pipeline through HTTP: auth → download → parse →
-        FAO_PGMDataset → _aggregate_distributions → _elementwise_sum →
+        ForecastDataset → _aggregate_distributions → _elementwise_sum →
         serialize."""
         client, api_key = integration_client
         resp = client.get(

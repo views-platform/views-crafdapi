@@ -4,7 +4,7 @@ the offending variable. Transition-safe: no registry reachable ⇒ only the pres
 
 import pytest
 
-from views_faoapi.managers.api import (
+from views_crafdapi.managers.api import (
     _registry_coordinates,
     _validate_env_against_registry,
 )

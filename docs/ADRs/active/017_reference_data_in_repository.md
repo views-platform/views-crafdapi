@@ -24,14 +24,14 @@ The question is whether binary reference data belongs in the git repository or s
 
 ## Decision
 
-**Static reference data that is small (<10MB), required at runtime, and changes infrequently (annually or less) is committed directly to the repository** under `src/views_faoapi/shapefiles/`.
+**Static reference data that is small (<10MB), required at runtime, and changes infrequently (annually or less) is committed directly to the repository** under `src/views_crafdapi/shapefiles/`.
 
 Specifically:
 - `GAUL_2024_L1/` — Level 1 (first-order administrative divisions), 128KB
 - `GAUL_2024_L2/` — Level 2 (second-order administrative divisions), 540KB
 
 Reference data in the repository must:
-1. Be placed under `src/views_faoapi/shapefiles/` (or a similarly scoped directory under `src/`)
+1. Be placed under `src/views_crafdapi/shapefiles/` (or a similarly scoped directory under `src/`)
 2. Include provenance metadata (changelogs, metadata spreadsheets) alongside the data files
 3. Be versioned by year in the directory name (e.g., `GAUL_2024_L1`, not `GAUL_L1`)
 4. Not exceed 10MB per dataset without explicit re-evaluation of this ADR
@@ -88,7 +88,7 @@ Reference data in the repository must:
 
 ## Implementation Notes
 
-- The shapefiles are already committed under `src/views_faoapi/shapefiles/`
+- The shapefiles are already committed under `src/views_crafdapi/shapefiles/`
 - When spatial join code is implemented, it should reference these paths relative to the package root (e.g., via `importlib.resources` or `pathlib.Path(__file__).parent / "shapefiles"`)
 - When GAUL 2025 is published, create a new directory `GAUL_2025_L1/` etc. and update the consuming code. Keep the old version in a separate commit for clean git history.
 - If a third GAUL level or additional reference datasets are added, re-evaluate the 10MB threshold
@@ -99,7 +99,7 @@ Reference data in the repository must:
 
 - The 10MB threshold is the trigger for reconsidering this decision
 - If download-at-startup is ever adopted (counter to this ADR), it must be gated behind a feature flag and the committed files must remain as fallback
-- `du -sh src/views_faoapi/shapefiles/` should be checked when updating reference data
+- `du -sh src/views_crafdapi/shapefiles/` should be checked when updating reference data
 
 ---
 

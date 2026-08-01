@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-from views_faoapi.forecast.summarize.estimator import collapse, tower_collapse
-from views_faoapi.forecast.summarize.result import CollapseResult
-from views_faoapi.forecast.summarize.severe import expected_shortfall
+from views_crafdapi.forecast.summarize.estimator import collapse, tower_collapse
+from views_crafdapi.forecast.summarize.result import CollapseResult
+from views_crafdapi.forecast.summarize.severe import expected_shortfall
 
 pytestmark = pytest.mark.layer2_data
 

@@ -2544,7 +2544,7 @@ wheels = [
 ]
 
 [[package]]
-name = "views-faoapi"
+name = "views-crafdapi"
 version = "1.4.0"
 source = { editable = "." }
 dependencies = [

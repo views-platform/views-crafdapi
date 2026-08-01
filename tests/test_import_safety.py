@@ -18,7 +18,7 @@ class TestModuleImportSafety:
         """Importing api.py must not call create_app() at module level."""
         result = subprocess.run(
             [sys.executable, "-c",
-             "import views_faoapi.managers.api; print('OK')"],
+             "import views_crafdapi.managers.api; print('OK')"],
             capture_output=True, text=True, timeout=10,
             env={**__import__("os").environ, "PYTHONPATH": str(SRC)},
         )
@@ -29,10 +29,10 @@ class TestModuleImportSafety:
 
     def test_log_module_does_not_import_from_api(self):
         """log.py must not import from api.py — use model.py instead (ADR-002 topology)."""
-        log_path = SRC / "views_faoapi" / "managers" / "log.py"
+        log_path = SRC / "views_crafdapi" / "managers" / "log.py"
         tree = ast.parse(log_path.read_text())
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "views_faoapi.managers.api":
+            if isinstance(node, ast.ImportFrom) and node.module == "views_crafdapi.managers.api":
                 pytest.fail(
                     f"log.py line {node.lineno}: imports from api.py. "
                     "Must import from model.py instead (ADR-012)."
@@ -42,7 +42,7 @@ class TestModuleImportSafety:
         """No module in the prediction package may call dotenv.load_dotenv() at
         module level (ADR-012). The package was split from a single prediction.py
         (S10); every file is checked so the invariant can't slip into a submodule."""
-        pred_pkg = SRC / "views_faoapi" / "managers" / "prediction"
+        pred_pkg = SRC / "views_crafdapi" / "managers" / "prediction"
         for pred_path in sorted(pred_pkg.glob("*.py")):
             tree = ast.parse(pred_path.read_text())
             for node in ast.iter_child_nodes(tree):
@@ -56,7 +56,7 @@ class TestModuleImportSafety:
 
     def test_model_py_no_module_level_wandb(self):
         """model.py must not import wandb at module level (ADR-002)."""
-        model_path = SRC / "views_faoapi" / "managers" / "model.py"
+        model_path = SRC / "views_crafdapi" / "managers" / "model.py"
         tree = ast.parse(model_path.read_text())
         for node in ast.iter_child_nodes(tree):
             if isinstance(node, ast.Import):
