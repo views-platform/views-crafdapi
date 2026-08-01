@@ -1,0 +1,23 @@
+{
+  "contract_version": "1.5",
+  "run_id": "fixture_run_0",
+  "targets": [
+    "lr_ged_sb"
+  ],
+  "shards": [
+    {
+      "name": "fixture_run_0__lr_ged_sb__m000543.arrow.parquet",
+      "target": "lr_ged_sb",
+      "time_id": 543,
+      "sha256": "203650fd6933b2366ed373ad8669d1c8b4c97553e30db9d2f07985a201012c54"
+    }
+  ],
+  "expected_months": [
+    543
+  ],
+  "expected_cell_count": 6,
+  "sidecar": {
+    "name": "fixture_run_0__sidecar.parquet",
+    "sha256": "eb959b153a2eafcb5917ee80ed0ac40d88ca9c24243796fefd272afea5c71401"
+  }
+}

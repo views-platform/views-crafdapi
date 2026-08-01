@@ -1,0 +1,71 @@
+name: Run Pytest
+
+on:
+    push:
+      branches:
+        - main
+        - development
+    pull_request:
+      branches:
+        - main
+        - development
+    workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        enable-cache: true
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Run tests
+      # Non-integration suite. Integration tests need live Appwrite credentials
+      # (APPWRITE_*) that CI does not hold; they are deselected by
+      # `addopts = "-m 'not integration'"` in pyproject.toml, made explicit here.
+      # This checkout has no sibling repos, so cross-repo falsification probes
+      # auto-skip via the `requires_sibling_repos` marker (see TESTING.md).
+      # The suite is green-by-default: only a genuine failure should fail this
+      # job (xfail/skip are expected). `-ra` surfaces skip/xfail reasons in the log.
+      # Coverage is reported as a NON-BLOCKING signal — there is deliberately no
+      # --cov-fail-under (a gate would recreate the red-by-default trap C-74/C-76).
+      run: >-
+        uv run pytest tests/ -m "not integration" -ra
+        --cov=src/views_faoapi --cov-report=term-missing --cov-report=xml
+
+    - name: Coverage summary
+      if: always()
+      run: |
+        echo "### Coverage" >> "$GITHUB_STEP_SUMMARY"
+        uv run coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY" || true
+
+    - name: Upload coverage report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-xml
+        path: coverage.xml
+        if-no-files-found: warn
+
+    - name: Execute the offline example notebook (nbmake)
+      # Run-All the credential-free demo notebook so it can't silently rot on an API
+      # change (mirrors views-frames' nbmake guard). Scoped to 03_offline_demo only —
+      # 01/02 hit the live service and need APPWRITE_* credentials CI does not hold.
+      # Deterministic (synthetic data, fixed seed, no network); MPLBACKEND=Agg renders
+      # the map headless.
+      env:
+        MPLBACKEND: Agg
+      run: uv run pytest --nbmake notebooks/03_offline_demo.ipynb -ra
