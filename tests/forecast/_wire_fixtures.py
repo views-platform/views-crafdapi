@@ -124,11 +124,11 @@ def make_wire_run(
 
     # Store documents as get_predictions_by_metadata would return them (newest-first).
     manifest_doc = {"fileId": "mani_1", "filename": f"{run_id}__manifest.json",
-                    "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_fao"}
+                    "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_crafd"}
     shard_docs = [{"fileId": "shard_1", "filename": shard_name,
-                   "type": "sampled_forecast_shard", "category": "forecast", "name": "un_fao"}]
+                   "type": "sampled_forecast_shard", "category": "forecast", "name": "un_crafd"}]
     sidecar_docs = [{"fileId": "sidecar_1", "filename": sidecar_name,
-                     "type": "sampled_forecast_sidecar", "category": "forecast", "name": "un_fao"}]
+                     "type": "sampled_forecast_sidecar", "category": "forecast", "name": "un_crafd"}]
 
     return WireRun(
         run_id=run_id, target=target, time_id=time_id, sample_count=s, units=units, values=values,
@@ -225,7 +225,7 @@ def make_multi_shard_run(
             shard_bytes[name] = b
             shard_entries.append({"name": name, "target": target, "time_id": int(month), "sha256": _sha256(b)})
             shard_docs.append({"fileId": f"shard_{len(shard_docs)}", "filename": name,
-                               "type": "sampled_forecast_shard", "category": "forecast", "name": "un_fao"})
+                               "type": "sampled_forecast_shard", "category": "forecast", "name": "un_crafd"})
 
     sidecar_name, sidecar_bytes = _build_sidecar(units, run_id, with_nan_geo)
     manifest = {
@@ -234,9 +234,9 @@ def make_multi_shard_run(
         "sidecar": {"name": sidecar_name, "sha256": _sha256(sidecar_bytes)},
     }
     manifest_doc = {"fileId": "mani_1", "filename": f"{run_id}__manifest.json",
-                    "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_fao"}
+                    "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_crafd"}
     sidecar_docs = [{"fileId": "sidecar_1", "filename": sidecar_name,
-                     "type": "sampled_forecast_sidecar", "category": "forecast", "name": "un_fao"}]
+                     "type": "sampled_forecast_sidecar", "category": "forecast", "name": "un_crafd"}]
     return MultiShardRun(
         run_id=run_id, targets=targets, months=months, units=units, sample_count=s, values=values,
         shard_bytes=shard_bytes, sidecar_name=sidecar_name, sidecar_bytes=sidecar_bytes,

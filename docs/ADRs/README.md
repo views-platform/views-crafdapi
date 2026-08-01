@@ -112,7 +112,7 @@ These must comply with the constitutional ADRs above.
   Zero-fill for missing grid cells is the correct default (matching views-datafactory ADR-024). Fill value is configurable via constructor parameter. Resolves D-04, C-41.
 
 - **[ADR-022](active/022_deployment_strategy.md)** — Deployment Strategy  
-  Deployed as a pip-installable package via `views-models/apis/un_fao/run.sh`, not as a container. Docker artifacts removed. Documents the actual production deployment path.
+  Deployed as a pip-installable package via `views-models/apis/un_crafd/run.sh`, not as a container. Docker artifacts removed. Documents the actual production deployment path.
 
 - **[ADR-023](active/023_rebaselining_published_forecasts_governance.md)** — Governance Gate for Re-baselining Published Forecasts  
   Changes that move *published* forecast values (estimator, aggregation, fill, source switch) reach `main` only with sign-off, a before/after diff, a methodology version bump, and FAO-facing communication. Gate applies at `development`→`main` cutover. Resolves C-84; gates PR #93 (M1 cutover).

@@ -53,7 +53,7 @@ def _golden_manager(*, created_at, mutate=None, drop_shard=False):
 
     manifest_doc = {
         "fileId": "mani", "filename": "fixture_run_0__manifest.json",
-        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_fao",
+        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_crafd",
         "$createdAt": created_at,
     }
     mgr = MagicMock()

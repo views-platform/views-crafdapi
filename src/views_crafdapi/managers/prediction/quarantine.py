@@ -10,13 +10,13 @@ from typing import Set
 # no way back short of deleting it from Appwrite. This env var is a quarantine blocklist
 # (comma-separated bucket file IDs) excluded from selection: quarantine the bad file and
 # the previous known-good one is served automatically — reversible, no deletion.
-QUARANTINED_FILE_IDS_ENV = "APPWRITE_UNFAO_QUARANTINED_FILE_IDS"
+QUARANTINED_FILE_IDS_ENV = "APPWRITE_CRAFD_QUARANTINED_FILE_IDS"
 
 # C-71 (proactive gate): an optional allowlist. When set (non-empty), ONLY these bucket
 # file IDs are eligible for selection — a "promote to production" gate where a new upload
 # is not served until explicitly approved. When unset/empty, selection is unrestricted
 # (the default, behaviour-preserving). Complements the quarantine blocklist above.
-APPROVED_FILE_IDS_ENV = "APPWRITE_UNFAO_APPROVED_FILE_IDS"
+APPROVED_FILE_IDS_ENV = "APPWRITE_CRAFD_APPROVED_FILE_IDS"
 
 
 def _get_quarantined_file_ids() -> Set[str]:

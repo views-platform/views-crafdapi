@@ -38,7 +38,7 @@ def _good_then_bad_manager(run, *, created_at):
     """
     state = {"phase": "good"}
     base_doc = {"filename": f"{run.run_id}__manifest.json", "type": "sampled_forecast_manifest",
-                "category": "forecast", "name": "un_fao", "$createdAt": created_at}
+                "category": "forecast", "name": "un_crafd", "$createdAt": created_at}
     good_doc = dict(base_doc, fileId="mani_good")
     bad_doc = dict(base_doc, fileId="mani_bad")
 

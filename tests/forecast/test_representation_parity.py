@@ -7,7 +7,7 @@ is a behaviour-preserving refactor) — and it characterizes the *only* numeric
 change (the float32-native collapse, the gated #112), so the ADR-023 diff is
 recorded, not guessed.
 
-Synthetic data only (no real artifact is in the repo; see the un_fao postmortems).
+Synthetic data only (no real artifact is in the repo; see the un_crafd postmortems).
 The corpus deliberately includes even/odd sample counts (the median tie-break),
 varied sizes, and NaN, because those are the corners a representation flip hits.
 

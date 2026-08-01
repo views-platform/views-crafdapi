@@ -21,9 +21,9 @@ import pytest
 REQUIRED_ENV_VARS = [
     "APPWRITE_ENDPOINT",
     "APPWRITE_DATASTORE_PROJECT_ID",
-    "APPWRITE_UNFAO_BUCKET_ID",
+    "APPWRITE_CRAFD_BUCKET_ID",
     "APPWRITE_METADATA_DATABASE_ID",
-    "APPWRITE_UNFAO_COLLECTION_ID",
+    "APPWRITE_CRAFD_COLLECTION_ID",
     "APPWRITE_DATASTORE_API_KEY",
 ]
 
@@ -47,13 +47,13 @@ def appwrite_config():
         credentials=os.getenv("APPWRITE_DATASTORE_API_KEY"),
         auth_method="api_key",
         cache_ttl_hours=24,
-        bucket_id=os.getenv("APPWRITE_UNFAO_BUCKET_ID"),
-        collection_id=os.getenv("APPWRITE_UNFAO_COLLECTION_ID"),
+        bucket_id=os.getenv("APPWRITE_CRAFD_BUCKET_ID"),
+        collection_id=os.getenv("APPWRITE_CRAFD_COLLECTION_ID"),
         database_id=os.getenv("APPWRITE_METADATA_DATABASE_ID"),
     )
     for env_key, kwarg_key in [
-        ("APPWRITE_UNFAO_BUCKET_NAME", "bucket_name"),
-        ("APPWRITE_UNFAO_COLLECTION_NAME", "collection_name"),
+        ("APPWRITE_CRAFD_BUCKET_NAME", "bucket_name"),
+        ("APPWRITE_CRAFD_COLLECTION_NAME", "collection_name"),
         ("APPWRITE_METADATA_DATABASE_NAME", "database_name"),
     ]:
         val = os.getenv(env_key)

@@ -64,7 +64,7 @@ def app_client(tmp_path):
     # warm-cache identity check passes and the forecast serves without a wire re-ingest.
     mock_pm.get_latest_manifest.return_value = {
         "fileId": "file_002", "filename": "run__manifest.json",
-        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_fao",
+        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_crafd",
     }
     mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: mock_pm
     mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite

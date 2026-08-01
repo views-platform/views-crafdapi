@@ -71,7 +71,7 @@ def client(tmp_path):
     mgr._validate_api_key = MagicMock(return_value=MagicMock())
     pm = MagicMock()
     pm.get_latest_manifest.return_value = {"fileId": "f", "filename": "m.json",
-        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_fao"}
+        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_crafd"}
     mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: pm
     mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: MagicMock()
     return TestClient(mgr.app)

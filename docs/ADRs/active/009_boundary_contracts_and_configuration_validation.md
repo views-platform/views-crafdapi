@@ -23,7 +23,7 @@ all external and internal boundaries must be explicit and validated.
 
 In views-faoapi, the following boundaries are architecturally significant:
 
-- **Appwrite SDK boundary:** The application connects to Appwrite through 8 `APPWRITE_*` environment variables (`APPWRITE_ENDPOINT`, `APPWRITE_DATASTORE_PROJECT_ID`, `APPWRITE_UNFAO_BUCKET_ID`, `APPWRITE_UNFAO_BUCKET_NAME`, `APPWRITE_UNFAO_COLLECTION_ID`, `APPWRITE_UNFAO_COLLECTION_NAME`, `APPWRITE_METADATA_DATABASE_ID`, `APPWRITE_METADATA_DATABASE_NAME`). Missing or misconfigured variables produce runtime failures deep in the call stack rather than at startup.
+- **Appwrite SDK boundary:** The application connects to Appwrite through 8 `APPWRITE_*` environment variables (`APPWRITE_ENDPOINT`, `APPWRITE_DATASTORE_PROJECT_ID`, `APPWRITE_CRAFD_BUCKET_ID`, `APPWRITE_CRAFD_BUCKET_NAME`, `APPWRITE_CRAFD_COLLECTION_ID`, `APPWRITE_CRAFD_COLLECTION_NAME`, `APPWRITE_METADATA_DATABASE_ID`, `APPWRITE_METADATA_DATABASE_NAME`). Missing or misconfigured variables produce runtime failures deep in the call stack rather than at startup.
 
 - **API key authentication boundary:** Every API request passes an `X-API-Key` header that is validated against Appwrite. This boundary separates unauthenticated requests from authenticated state and controls access to all forecast data.
 

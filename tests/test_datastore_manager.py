@@ -791,7 +791,7 @@ class TestPredictionStoreManagerIntegration:
 
 class TestQuarantineRollback:
     """C-71: an operator can roll back a bad "latest" upload by quarantining its file
-    ID (via APPWRITE_UNFAO_QUARANTINED_FILE_IDS) — the previous known-good file is then
+    ID (via APPWRITE_CRAFD_QUARANTINED_FILE_IDS) — the previous known-good file is then
     selected automatically, with no Appwrite deletion."""
 
     def _seed(self, mock_appwrite_manager):
@@ -809,14 +809,14 @@ class TestQuarantineRollback:
         )
 
     def test_no_quarantine_selects_newest(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.delenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", raising=False)
+        monkeypatch.delenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", raising=False)
         self._seed(mock_appwrite_manager)
         result = prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"})
         assert [d["fileId"] for d in result] == ["file3", "file2", "file1"]
 
     def test_quarantine_rolls_back_to_previous_good(self, prediction_store, mock_appwrite_manager, monkeypatch):
         # Quarantine the bad newest file -> selection falls back to the prior good one.
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", "file3")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", "file3")
         self._seed(mock_appwrite_manager)
         result = prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"})
         ids = [d["fileId"] for d in result]
@@ -824,24 +824,24 @@ class TestQuarantineRollback:
         assert ids[0] == "file2"  # previous known-good is now "latest"
 
     def test_quarantine_latest_file_id(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", "file3")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", "file3")
         self._seed(mock_appwrite_manager)
         assert prediction_store.get_latest_file_id(filters={"type": "fatalities"}) == "file2"
 
     def test_quarantine_multiple_comma_separated(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", " file3 , file2 ")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", " file3 , file2 ")
         self._seed(mock_appwrite_manager)
         result = prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"})
         assert [d["fileId"] for d in result] == ["file1"]
 
     def test_quarantine_all_leaves_none(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", "file1,file2,file3")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", "file1,file2,file3")
         self._seed(mock_appwrite_manager)
         assert prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"}) == []
         assert prediction_store.get_latest_file_id(filters={"type": "fatalities"}) is None
 
     def test_empty_env_is_noop(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", "")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", "")
         self._seed(mock_appwrite_manager)
         result = prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"})
         assert [d["fileId"] for d in result] == ["file3", "file2", "file1"]
@@ -905,7 +905,7 @@ class TestLatestProvenance:
 
 
 class TestApprovalAllowlist:
-    """C-71 (proactive gate): when APPWRITE_UNFAO_APPROVED_FILE_IDS is set, only approved
+    """C-71 (proactive gate): when APPWRITE_CRAFD_APPROVED_FILE_IDS is set, only approved
     files are eligible for selection; unset leaves selection unrestricted."""
 
     def _seed(self, mock_appwrite_manager):
@@ -922,27 +922,27 @@ class TestApprovalAllowlist:
         )
 
     def test_unset_allowlist_is_unrestricted(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.delenv("APPWRITE_UNFAO_APPROVED_FILE_IDS", raising=False)
+        monkeypatch.delenv("APPWRITE_CRAFD_APPROVED_FILE_IDS", raising=False)
         self._seed(mock_appwrite_manager)
         result = prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"})
         assert [d["fileId"] for d in result] == ["file3", "file2", "file1"]
 
     def test_only_approved_are_eligible(self, prediction_store, mock_appwrite_manager, monkeypatch):
         # Approve an older file -> the newest (file3) is NOT served until approved.
-        monkeypatch.setenv("APPWRITE_UNFAO_APPROVED_FILE_IDS", "file2")
+        monkeypatch.setenv("APPWRITE_CRAFD_APPROVED_FILE_IDS", "file2")
         self._seed(mock_appwrite_manager)
         assert prediction_store.get_latest_file_id(filters={"type": "fatalities"}) == "file2"
 
     def test_unapproved_only_yields_none(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.setenv("APPWRITE_UNFAO_APPROVED_FILE_IDS", "nonexistent")
+        monkeypatch.setenv("APPWRITE_CRAFD_APPROVED_FILE_IDS", "nonexistent")
         self._seed(mock_appwrite_manager)
         assert prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"}) == []
         assert prediction_store.get_latest_file_id(filters={"type": "fatalities"}) is None
 
     def test_quarantine_and_allowlist_compose(self, prediction_store, mock_appwrite_manager, monkeypatch):
         # Approve file3 and file2, but quarantine file3 -> file2 wins.
-        monkeypatch.setenv("APPWRITE_UNFAO_APPROVED_FILE_IDS", "file3,file2")
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", "file3")
+        monkeypatch.setenv("APPWRITE_CRAFD_APPROVED_FILE_IDS", "file3,file2")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", "file3")
         self._seed(mock_appwrite_manager)
         assert prediction_store.get_latest_file_id(filters={"type": "fatalities"}) == "file2"
 

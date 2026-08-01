@@ -131,7 +131,7 @@ contract = "PLATFORM-001"
 class = "connection"
 value = "https://example.appwrite.io/v1"
 
-[target.APPWRITE_UNFAO_BUCKET_ID]
+[target.APPWRITE_CRAFD_BUCKET_ID]
 class = "target"
 value = "unfao_bucket"
 
@@ -140,7 +140,7 @@ class = "secret"
 issued_by = "operator"
 note = "no value — a slot"
 
-[excluded.APPWRITE_UNFAO_APPROVED_FILE_IDS]
+[excluded.APPWRITE_CRAFD_APPROVED_FILE_IDS]
 class = "policy"
 """
 
@@ -159,11 +159,11 @@ class = "policy"
     def test_emits_connection_and_target_coordinates(self, tmp_path):
         lines = self._coords(tmp_path)
         assert "APPWRITE_ENDPOINT=https://example.appwrite.io/v1" in lines
-        assert "APPWRITE_UNFAO_BUCKET_ID=unfao_bucket" in lines
+        assert "APPWRITE_CRAFD_BUCKET_ID=unfao_bucket" in lines
 
     def test_never_emits_a_secret_or_an_exclusion(self, tmp_path):
         blob = "\n".join(self._coords(tmp_path))
         # a secret slot has no value; it must never appear, by name or otherwise.
         assert "APPWRITE_DATASTORE_API_KEY" not in blob
         # eligibility exclusions are governed elsewhere and are not coordinates.
-        assert "APPWRITE_UNFAO_APPROVED_FILE_IDS" not in blob
+        assert "APPWRITE_CRAFD_APPROVED_FILE_IDS" not in blob

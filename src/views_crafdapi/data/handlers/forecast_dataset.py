@@ -69,7 +69,7 @@ class ForecastDataset(_GridDataset):
             raise ValueError("Source must be a pandas DataFrame")
         missing_cols = [col for col in self._METADATA_COLS if col not in source.columns]
         if missing_cols:
-            raise ValueError(f"Missing necessary metadata columns: {missing_cols}. Make sure you have run the un_fao postprocessor first. Found in views-models/postprocessors/un_fao")
+            raise ValueError(f"Missing necessary metadata columns: {missing_cols}. Make sure you have run the un_crafd postprocessor first. Found in views-models/postprocessors/un_crafd")
 
         if targets:
             missing_targets = [t for t in targets if t not in source.columns]

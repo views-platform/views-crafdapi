@@ -982,10 +982,10 @@ class TestAppwriteEnvVarValidation:
     _ALL_ENV = {
         "APPWRITE_ENDPOINT": "https://cloud.appwrite.io/v1",
         "APPWRITE_DATASTORE_PROJECT_ID": "proj_123",
-        "APPWRITE_UNFAO_BUCKET_ID": "bucket_123",
-        "APPWRITE_UNFAO_BUCKET_NAME": "my_bucket",
-        "APPWRITE_UNFAO_COLLECTION_ID": "coll_123",
-        "APPWRITE_UNFAO_COLLECTION_NAME": "my_coll",
+        "APPWRITE_CRAFD_BUCKET_ID": "bucket_123",
+        "APPWRITE_CRAFD_BUCKET_NAME": "my_bucket",
+        "APPWRITE_CRAFD_COLLECTION_ID": "coll_123",
+        "APPWRITE_CRAFD_COLLECTION_NAME": "my_coll",
         "APPWRITE_METADATA_DATABASE_ID": "db_123",
         "APPWRITE_METADATA_DATABASE_NAME": "my_db",
     }
@@ -1011,9 +1011,9 @@ class TestAppwriteEnvVarValidation:
 
     def test_missing_name_vars_raises(self):
         from views_crafdapi.managers.api import _validate_appwrite_env
-        env = {**self._ALL_ENV, "APPWRITE_UNFAO_BUCKET_NAME": ""}
+        env = {**self._ALL_ENV, "APPWRITE_CRAFD_BUCKET_NAME": ""}
         with patch("os.getenv", side_effect=lambda key, default=None: env.get(key, default)):
-            with pytest.raises(ValueError, match="APPWRITE_UNFAO_BUCKET_NAME"):
+            with pytest.raises(ValueError, match="APPWRITE_CRAFD_BUCKET_NAME"):
                 _validate_appwrite_env()
 
     def test_all_env_vars_present_returns_dict(self):

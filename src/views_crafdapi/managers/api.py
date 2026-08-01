@@ -41,10 +41,10 @@ class StalenessResult:
 _REQUIRED_APPWRITE_ENV_VARS = [
     "APPWRITE_ENDPOINT",
     "APPWRITE_DATASTORE_PROJECT_ID",
-    "APPWRITE_UNFAO_BUCKET_ID",
-    "APPWRITE_UNFAO_BUCKET_NAME",
-    "APPWRITE_UNFAO_COLLECTION_ID",
-    "APPWRITE_UNFAO_COLLECTION_NAME",
+    "APPWRITE_CRAFD_BUCKET_ID",
+    "APPWRITE_CRAFD_BUCKET_NAME",
+    "APPWRITE_CRAFD_COLLECTION_ID",
+    "APPWRITE_CRAFD_COLLECTION_NAME",
     "APPWRITE_METADATA_DATABASE_ID",
     "APPWRITE_METADATA_DATABASE_NAME",
 ]
@@ -145,7 +145,7 @@ class CrafdApiManager(APIManager):
 
         self._disk_cache = CrafdDiskCacheManager(self._model_path.cache / "datasets")
 
-        self._prediction_bucket_id = validated_env["APPWRITE_UNFAO_BUCKET_ID"]
+        self._prediction_bucket_id = validated_env["APPWRITE_CRAFD_BUCKET_ID"]
 
         # Compose the data-fetch pipeline (epic #144 / S2): caches stay owned here and
         # are injected by reference so routes/lifecycle/stats see the same objects.
@@ -275,10 +275,10 @@ class CrafdApiManager(APIManager):
             credentials=x_api_key,
             auth_method="api_key",
             cache_ttl_hours=24,
-            bucket_id=env["APPWRITE_UNFAO_BUCKET_ID"],
-            bucket_name=env["APPWRITE_UNFAO_BUCKET_NAME"],
-            collection_id=env["APPWRITE_UNFAO_COLLECTION_ID"],
-            collection_name=env["APPWRITE_UNFAO_COLLECTION_NAME"],
+            bucket_id=env["APPWRITE_CRAFD_BUCKET_ID"],
+            bucket_name=env["APPWRITE_CRAFD_BUCKET_NAME"],
+            collection_id=env["APPWRITE_CRAFD_COLLECTION_ID"],
+            collection_name=env["APPWRITE_CRAFD_COLLECTION_NAME"],
             database_id=env["APPWRITE_METADATA_DATABASE_ID"],
             database_name=env["APPWRITE_METADATA_DATABASE_NAME"],
         )
@@ -1263,14 +1263,14 @@ def create_app() -> FastAPI:
     global _fao_manager, app
     if app is None:
         # The API is a read-only CONSUMER, not a model trainer, so it must boot from a
-        # clean checkout that has no apis/un_fao/ model-training tree — that directory is
+        # clean checkout that has no apis/un_crafd/ model-training tree — that directory is
         # gitignored (a pure runtime artifact holding cache/ and logs/). With the default
         # validate=True, APIPathManager both (a) raises FileNotFoundError when the tree is
         # absent and (b) returns None for runtime dirs like .cache, which then crashes
         # CrafdDiskCacheManager (`None / "datasets"`). validate=False makes .cache a real
         # Path the disk-cache manager creates on demand. Regression-tested by
         # tests/test_create_app_boot.py (the from_config test seam did not cover this path).
-        model_path = APIPathManager("un_fao", validate=False)
+        model_path = APIPathManager("un_crafd", validate=False)
         _fao_manager = CrafdApiManager(model_path=model_path)
         app = _fao_manager.app
     return app
