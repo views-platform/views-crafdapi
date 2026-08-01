@@ -10,7 +10,7 @@
 
 ## Context
 
-The VIEWS FAO API aggregates PRIO-GRID cell-level conflict forecasts to administrative boundary levels (country, GAUL Level 1, GAUL Level 2). This requires authoritative geographic reference data — specifically, the FAO Global Administrative Unit Layers (GAUL) 2024 shapefiles — to map grid cells to administrative units.
+The VIEWS CRAF'd API aggregates PRIO-GRID cell-level conflict forecasts to administrative boundary levels (country, GAUL Level 1, GAUL Level 2). This requires authoritative geographic reference data — specifically, the FAO Global Administrative Unit Layers (GAUL) 2024 shapefiles — to map grid cells to administrative units.
 
 These shapefiles are:
 - Published annually by FAO and not available via a stable programmatic API

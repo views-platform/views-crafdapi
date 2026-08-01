@@ -224,6 +224,9 @@ CLAUDE.md
 # The W&B run-log ignore above must NOT swallow the source subpackage:
 !src/views_crafdapi/wandb/
 !src/views_crafdapi/wandb/**
+# ...but the un-ignore must NOT re-admit bytecode the global rules exclude:
+src/views_crafdapi/wandb/**/__pycache__/
+src/views_crafdapi/wandb/**/*.pyc
 
 # Golden test fixtures must be tracked even though *.parquet/*.zip are ignored:
 !tests/forecast/golden/

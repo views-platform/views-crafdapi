@@ -1,4 +1,4 @@
-"""Post-deploy smoke test + cache warmer for the LIVE FAO API (C-173).
+"""Post-deploy smoke test + cache warmer for the LIVE CRAF'd API (C-173).
 
 Our 899 unit tests are all mocked/in-process — none hit the deployed service, so a slow / broken /
 scope-regressed deploy reached the maintainer only in Jupyter. This is the live check that runs right
@@ -142,7 +142,7 @@ def run(base: str, key: str, *, expect_tag: Optional[str], forecast_month: int, 
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    p = argparse.ArgumentParser(description="Post-deploy smoke test + cache warmer for the live FAO API.")
+    p = argparse.ArgumentParser(description="Post-deploy smoke test + cache warmer for the live CRAF'd API.")
     p.add_argument("--url", default=os.environ.get("VIEWS_API_URL", _DEFAULT_URL))
     p.add_argument("--expect-tag", default=None,
                    help="assert GET /version deployed_tag == this (e.g. v1.3.9)")

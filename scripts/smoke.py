@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post-deploy smoke test + cache warmer for the live FAO API — thin CLI wrapper.
+"""Post-deploy smoke test + cache warmer for the live CRAF'd API — thin CLI wrapper.
 
 Logic lives in ``views_crafdapi.smoke`` (importable + unit-tested). Run right after a deploy, from the
 deploy shell, with a caller/read-scoped key exported:

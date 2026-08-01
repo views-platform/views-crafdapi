@@ -8,7 +8,7 @@
 
 ## Context
 
-This repository delivers conflict forecast data to the United Nations Food and Agriculture Organization. Its outputs inform humanitarian resource allocation and early warning systems. The integrity of statistical computations (HDI, MAP, posterior distributions), geographic aggregation logic, and data pipeline correctness are not merely engineering concerns -- they carry real-world consequences.
+This repository delivers conflict forecast data to the Complex Risk Analytics Fund (CRAF'd). Its outputs inform humanitarian resource allocation and early warning systems. The integrity of statistical computations (HDI, MAP, posterior distributions), geographic aggregation logic, and data pipeline correctness are not merely engineering concerns -- they carry real-world consequences.
 
 This repository may be modified with the assistance of **silicon-based agents**
 (e.g. large language models, coding assistants, refactoring tools).

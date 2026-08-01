@@ -1,4 +1,4 @@
-"""HTTP request/response (de)serialization helpers for the FAO API.
+"""HTTP request/response (de)serialization helpers for the CRAF'd API.
 
 Pure, stateless functions that translate between HTTP query parameters / pandas
 DataFrames and JSON-serializable Python. Extracted from `managers/api.py` so the

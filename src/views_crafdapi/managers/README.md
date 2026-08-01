@@ -1,13 +1,13 @@
 # Managers Module
 
-This module contains service managers for the FAO API including API lifecycle management, cloud storage integration, prediction handling, and logging configuration.
+This module contains service managers for the CRAF'd API including API lifecycle management, cloud storage integration, prediction handling, and logging configuration.
 
 ## Module Structure
 
 ```
 managers/
 ├── __init__.py
-├── api.py           # FAO API manager and route registration
+├── api.py           # CRAF'd API manager and route registration
 ├── appwrite.py      # Appwrite cloud storage client
 ├── model.py         # Path management base classes
 ├── prediction.py    # Prediction file storage manager
@@ -23,7 +23,7 @@ The main API manager implementing FastAPI routes and lifecycle management.
 
 ### `CrafdApiManager`
 
-Central manager for the FAO Forecast API. Handles authentication, caching, route registration, and request processing.
+Central manager for the CRAF'd Forecast API. Handles authentication, caching, route registration, and request processing.
 
 #### Class Hierarchy
 

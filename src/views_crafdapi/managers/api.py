@@ -115,7 +115,7 @@ from views_crafdapi.forecast.serialize.bulk_parquet import write_bulk_parquet  #
 
 class CrafdApiManager(APIManager):
     """
-    Manages the FAO API lifecycle including startup, shutdown, and maintenance.
+    Manages the CRAF'd API lifecycle including startup, shutdown, and maintenance.
     """
 
     def __init__(
@@ -163,13 +163,13 @@ class CrafdApiManager(APIManager):
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             # Startup logic
-            logger.info("FAO API is starting up...")
+            logger.info("CRAF'd API is starting up...")
             # Add any startup logic here (e.g., cache warming, DB connections)
             
             yield
             
             # Shutdown logic
-            logger.info("FAO API is shutting down...")
+            logger.info("CRAF'd API is shutting down...")
             # Clear manager cache
             self._manager_cache.clear()
             self._dataframe_cache.clear()
@@ -177,8 +177,8 @@ class CrafdApiManager(APIManager):
             logger.info("Cleared all caches")
         
         self.app = FastAPI(
-            title="VIEWS-FAO Conflict Forecast API",
-            description="VIEWS historical and forecasted fatalities data and statistical analysis for the United Nations Food and Agriculture Organization.",
+            title="VIEWS-CRAF'd Conflict Forecast API",
+            description="VIEWS historical and forecasted fatalities data and statistical analysis for the Complex Risk Analytics Fund (CRAF'd).",
             version="0.1.0",
             lifespan=lifespan
         )
@@ -380,7 +380,7 @@ class CrafdApiManager(APIManager):
         @self.app.get("/")
         async def root():
             return {
-            "message": "FAO Prediction API", 
+            "message": "CRAF'd Prediction API", 
             "note": "Include 'X-API-Key' header with your Appwrite API key in all requests",
             "endpoints": {
                 # Historical endpoints by level
@@ -1107,7 +1107,7 @@ class CrafdApiManager(APIManager):
 
     def _startup(self):
         """Initialize and start the API server."""
-        logger.info("Starting FAO API server...")
+        logger.info("Starting CRAF'd API server...")
         
         try:
             # Start the server
@@ -1150,7 +1150,7 @@ class CrafdApiManager(APIManager):
 
     def _shutdown(self):
         """Gracefully shutdown the API server."""
-        logger.info("Shutting down FAO API server...")
+        logger.info("Shutting down CRAF'd API server...")
         
         try:
             # Clear manager cache
@@ -1177,7 +1177,7 @@ class CrafdApiManager(APIManager):
             logger.info("Cleaning up resources...")
             
             self._is_running = False
-            logger.info("FAO API server shutdown complete")
+            logger.info("CRAF'd API server shutdown complete")
             
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
