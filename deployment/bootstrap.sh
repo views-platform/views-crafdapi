@@ -13,10 +13,10 @@
 #   bash bootstrap.sh part3     # install the systemd unit (does NOT switch traffic)
 set -euo pipefail
 
-SVC_USER="views-faoapi-deploy"
+SVC_USER="views-crafdapi-deploy"
 SVC_HOME="/home/${SVC_USER}"
-REPO_SSH="git@github.com:views-platform/views-faoapi.git"
-REPO_DIR="${SVC_HOME}/views-faoapi"
+REPO_SSH="git@github.com:views-platform/views-crafdapi.git"
+REPO_DIR="${SVC_HOME}/views-crafdapi"
 # þing-01 #275 / PLATFORM-001 D2: coordinates come from the OWNED, versioned registry
 # (read, never copied), the key from an operator-provided secret slot. The retired copy-chain
 # origin — a personal laptop dotenv grepped for credentials — is gone. Override the registry
@@ -36,14 +36,14 @@ part1() {
         set -euo pipefail
         mkdir -p ~/.ssh && chmod 700 ~/.ssh
         if [ ! -f ~/.ssh/id_ed25519 ]; then
-            ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -C "views-faoapi-deploy (read-only deploy key)"
+            ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -C "views-crafdapi-deploy (read-only deploy key)"
         fi
         ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
         sort -u ~/.ssh/known_hosts -o ~/.ssh/known_hosts
     '
     echo
     echo ">>> BROWSER STEP NOW <<<"
-    echo "Add this PUBLIC key as a READ-ONLY deploy key on github.com/views-platform/views-faoapi"
+    echo "Add this PUBLIC key as a READ-ONLY deploy key on github.com/views-platform/views-crafdapi"
     echo "(Settings -> Deploy keys -> Add deploy key; do NOT tick write access):"
     echo
     sudo -u "$SVC_USER" cat "${SVC_HOME}/.ssh/id_ed25519.pub"
@@ -65,7 +65,7 @@ part2() {
             curl -LsSf https://astral.sh/uv/install.sh | sh
         fi
         export PATH=\"\$HOME/.local/bin:\$HOME/.cargo/bin:\$PATH\"
-        echo '${RELEASE_TAG}' > \"\$HOME/.views-faoapi-deploy-tag\"
+        echo '${RELEASE_TAG}' > \"\$HOME/.views-crafdapi-deploy-tag\"
         bash scripts/checkout-deploy-tag.sh
     "
     # Credentials (þing-01 #275 / PLATFORM-001 D2): coordinates are READ from the owned registry
@@ -78,7 +78,7 @@ part2() {
         echo "  Set APPWRITE_REGISTRY to a pinned checkout of views-appwrite's coordinate_registry.toml."
         exit 1
     }
-    echo "building ${SVC_HOME}/.env.faoapi: coordinates from ${APPWRITE_REGISTRY}, secret from operator slot"
+    echo "building ${SVC_HOME}/.env.crafdapi: coordinates from ${APPWRITE_REGISTRY}, secret from operator slot"
     # Emit non-secret coordinates from the registry, then append the operator secret. The pipe to
     # `sudo tee >/dev/null` writes the file root-owned WITHOUT echoing the key value to the terminal.
     # Use the venv's pinned Python (3.13, has `tomllib`) — it exists after the gate's `uv sync`
@@ -86,10 +86,10 @@ part2() {
     {
         "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}"
         printf 'APPWRITE_DATASTORE_API_KEY=%s\n' "${APPWRITE_DATASTORE_API_KEY}"
-    } | sudo tee "${SVC_HOME}/.env.faoapi" >/dev/null
-    sudo chown "${SVC_USER}:${SVC_USER}" "${SVC_HOME}/.env.faoapi"
-    sudo chmod 600 "${SVC_HOME}/.env.faoapi"
-    N=$(sudo grep -c '^APPWRITE_' "${SVC_HOME}/.env.faoapi")
+    } | sudo tee "${SVC_HOME}/.env.crafdapi" >/dev/null
+    sudo chown "${SVC_USER}:${SVC_USER}" "${SVC_HOME}/.env.crafdapi"
+    sudo chmod 600 "${SVC_HOME}/.env.crafdapi"
+    N=$(sudo grep -c '^APPWRITE_' "${SVC_HOME}/.env.crafdapi")
     echo "credentials file written (${N} APPWRITE_ lines: registry coordinates + 1 operator secret; values not displayed; expected >= 9)"
     echo "Then run:  bash bootstrap.sh part3"
 }
@@ -97,16 +97,16 @@ part2() {
 part3() {
     echo "== Part 3: install the new systemd unit (no traffic switch yet) =="
     # Preserve the interim (June recovery) unit as the rollback path.
-    if [ -f /etc/systemd/system/views-faoapi.service ] && \
-       ! grep -q "views-faoapi-deploy" /etc/systemd/system/views-faoapi.service; then
-        sudo cp /etc/systemd/system/views-faoapi.service /etc/systemd/system/views-faoapi-legacy.service
-        echo "old unit preserved as views-faoapi-legacy.service (rollback path)"
+    if [ -f /etc/systemd/system/views-crafdapi.service ] && \
+       ! grep -q "views-crafdapi-deploy" /etc/systemd/system/views-crafdapi.service; then
+        sudo cp /etc/systemd/system/views-crafdapi.service /etc/systemd/system/views-crafdapi-legacy.service
+        echo "old unit preserved as views-crafdapi-legacy.service (rollback path)"
     fi
-    sudo cp "${REPO_DIR}/deployment/views-faoapi.service" /etc/systemd/system/views-faoapi.service
+    sudo cp "${REPO_DIR}/deployment/views-crafdapi.service" /etc/systemd/system/views-crafdapi.service
     sudo systemctl daemon-reload
     echo "unit installed. Traffic cutover is the NEXT runbook step (deliberate, reversible):"
-    echo "  sudo systemctl restart views-faoapi     # now runs the new model"
-    echo "  rollback: sudo cp views-faoapi-legacy -> views-faoapi, daemon-reload, restart"
+    echo "  sudo systemctl restart views-crafdapi     # now runs the new model"
+    echo "  rollback: sudo cp views-crafdapi-legacy -> views-crafdapi, daemon-reload, restart"
 }
 
 case "${1:-}" in

@@ -16,13 +16,13 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-_ENV = "FAOAPI_FORECAST_FRESHNESS_SLA_DAYS"
+_ENV = "CRAFDAPI_FORECAST_FRESHNESS_SLA_DAYS"
 _DEFAULT_SLA_DAYS = 45.0
 
 
 def freshness_sla_days() -> float:
     """The forecast freshness SLA in days. Default 45 (a monthly forecast is expected roughly
-    monthly, with slack); override with the ``FAOAPI_FORECAST_FRESHNESS_SLA_DAYS`` env var."""
+    monthly, with slack); override with the ``CRAFDAPI_FORECAST_FRESHNESS_SLA_DAYS`` env var."""
     raw = os.getenv(_ENV, "").strip()
     try:
         return float(raw) if raw else _DEFAULT_SLA_DAYS

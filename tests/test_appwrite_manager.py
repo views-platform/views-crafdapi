@@ -393,7 +393,7 @@ class TestMetadataManager:
         return MetadataManager(mock_databases, api_key_config)
 
     def test_create_database_if_not_exists_new(self, metadata_manager, mock_databases, monkeypatch):
-        monkeypatch.setenv("FAOAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
+        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
         mock_databases.list.return_value = _sdk_result(databases=[])
         mock_databases.create.return_value = _sdk_result(
             **{"$id": "file_metadata", "name": "File Metadata"}
@@ -639,7 +639,7 @@ class TestAppWriteFileManager:
         assert result.data["$id"] == "file123"
 
     def test_create_bucket(self, file_manager, monkeypatch):
-        monkeypatch.setenv("FAOAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
+        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
         file_manager.storage.create_bucket.return_value = _sdk_result(
             **{"$id": "new_bucket", "name": "New Bucket"}
         )
@@ -1142,22 +1142,22 @@ class TestProvisioningGate:
     so a missing/wrong coordinate on a serving path never silently creates phantom storage."""
 
     def test_require_provisioning_raises_by_default(self, monkeypatch):
-        monkeypatch.delenv("FAOAPI_ALLOW_PROVISIONING", raising=False)
+        monkeypatch.delenv("CRAFDAPI_ALLOW_PROVISIONING", raising=False)
         with pytest.raises(ProvisioningDisabledError, match=r"bucket 'x'"):
             _require_provisioning("bucket 'x'")
 
     def test_require_provisioning_passes_when_explicitly_enabled(self, monkeypatch):
-        monkeypatch.setenv("FAOAPI_ALLOW_PROVISIONING", "1")
+        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")
         assert _require_provisioning("bucket 'x'") is None  # no raise
 
     def test_create_bucket_refuses_provisioning_by_default(self, file_manager, monkeypatch):
-        monkeypatch.delenv("FAOAPI_ALLOW_PROVISIONING", raising=False)
+        monkeypatch.delenv("CRAFDAPI_ALLOW_PROVISIONING", raising=False)
         with pytest.raises(ProvisioningDisabledError, match="bucket"):
             file_manager.create_bucket("phantom_bucket", name="Phantom")
         file_manager.storage.create_bucket.assert_not_called()  # raised before touching the SDK
 
     def test_create_bucket_half_success_raises_all_or_raise(self, file_manager, monkeypatch):
-        monkeypatch.setenv("FAOAPI_ALLOW_PROVISIONING", "1")
+        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")
         file_manager.storage.create_bucket.return_value = _sdk_result(**{"$id": "b", "name": "B"})
         file_manager.metadata_manager.create_database_if_not_exists = Mock(
             return_value=OperationResult(success=False, error="db creation failed")

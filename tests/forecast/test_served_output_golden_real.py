@@ -26,7 +26,7 @@ pytestmark = pytest.mark.layer2_data
 
 _REAL_CACHE = Path(
     os.environ.get(
-        "FAOAPI_REAL_CACHE",
+        "CRAFDAPI_REAL_CACHE",
         "appwrite_cache/unfao_bucket/forecast_dataset_20260310_114703.parquet",
     )
 )

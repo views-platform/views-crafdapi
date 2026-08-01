@@ -3,12 +3,12 @@
 faoapi authored the create_* provisioning helpers the platform inherited. A missing or wrong
 coordinate on a serving/read path must RAISE naming the resource, never silently create phantom
 storage (the run-0-era failure class, S8). Provisioning runs only from a deliberate setup entrypoint
-that sets FAOAPI_ALLOW_PROVISIONING=1. Extracted from the appwrite god-module (epic #325 S9).
+that sets CRAFDAPI_ALLOW_PROVISIONING=1. Extracted from the appwrite god-module (epic #325 S9).
 """
 
 import os
 
-_ALLOW_PROVISIONING_ENV = "FAOAPI_ALLOW_PROVISIONING"
+_ALLOW_PROVISIONING_ENV = "CRAFDAPI_ALLOW_PROVISIONING"
 
 
 class ProvisioningError(RuntimeError):

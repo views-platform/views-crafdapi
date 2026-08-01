@@ -208,7 +208,7 @@ def test_multishard_run_serves():
 # (the legacy selector) is never touched.
 def test_over_capacity_run_fails_visible_not_legacy(monkeypatch):
     """§4.6: a run over the capacity bound is Refused → 503, not a silent legacy serve."""
-    monkeypatch.setenv("FAOAPI_MAX_ASSEMBLED_BYTES", "1")  # 1 byte — any real run exceeds it
+    monkeypatch.setenv("CRAFDAPI_MAX_ASSEMBLED_BYTES", "1")  # 1 byte — any real run exceeds it
     run = make_wire_run()
     mgr, _ = _legacy_manager_with_manifest(run)
     with pytest.raises(HTTPException) as e:
@@ -470,7 +470,7 @@ def test_relaxed_capacity_guard_serves_run_the_whole_run_bound_would_refuse(monk
     est_whole = wire_reader.estimate_assembled_bytes(n_targets, n_months, cells, s)
     cap = int(est_pm * 3 * 1.5)  # between the per-month peak (×3) and the whole-run peak (×3)
     assert est_pm * 3 <= cap < est_whole * 3  # serves now; the old whole-run bound would refuse
-    monkeypatch.setenv("FAOAPI_MAX_ASSEMBLED_BYTES", str(cap))
+    monkeypatch.setenv("CRAFDAPI_MAX_ASSEMBLED_BYTES", str(cap))
 
     svc = _service()
     mgr = _multi_wire_manager(mrun)
@@ -514,7 +514,7 @@ def test_unservable_run_fails_visible_and_reevaluates_each_request(monkeypatch):
     bound) FAILS VISIBLE (503) and is RE-EVALUATED on each request — the prior legacy-fallback
     caching is dropped, so it is never served from legacy. (The file-byte cache avoids re-download;
     refusal-caching to skip the re-evaluation is deferred to S4.)"""
-    monkeypatch.setenv("FAOAPI_MAX_ASSEMBLED_BYTES", "1")  # any real run trips the bound
+    monkeypatch.setenv("CRAFDAPI_MAX_ASSEMBLED_BYTES", "1")  # any real run trips the bound
     from tests.forecast._wire_fixtures import make_multi_shard_run
 
     run_a = make_multi_shard_run(run_id="run_a")
@@ -696,7 +696,7 @@ def test_cold_worker_manifest_blip_serves_persisted_wire_from_disk(tmp_path):
 def test_force_refresh_unservable_run_fails_visible(monkeypatch):
     """ADR-033 §2: a force_refresh of an unservable run (manifest present, over the bound) FAILS
     VISIBLE (503) — never a silent legacy fallback (S2)."""
-    monkeypatch.setenv("FAOAPI_MAX_ASSEMBLED_BYTES", "1")  # manifest present but unservable
+    monkeypatch.setenv("CRAFDAPI_MAX_ASSEMBLED_BYTES", "1")  # manifest present but unservable
     from tests.forecast._wire_fixtures import make_multi_shard_run
 
     run_a = make_multi_shard_run(run_id="run_a")
