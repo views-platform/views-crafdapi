@@ -15,7 +15,7 @@
 
 Three interrelated import discipline violations create fragility in the `managers/` layer:
 
-**Module-level app creation (C-02).** `managers/api.py` formerly executed `app = create_app()` at module level (originally at line 1472-1473). This line was reached whenever any symbol was imported from `api.py` for any purpose --- tests, type checking, IDE tooling, or other modules importing shared classes. The `create_app()` function (now at `api.py:1303`) triggered a cascade: `APIPathManager("un_fao")` instantiation, `pyprojroot` root discovery, `.env` loading via `load_dotenv()`, `CrafdApiManager` construction (which reads all `APPWRITE_*` env vars), FastAPI app instantiation with all route registrations, and `SIGINT`/`SIGTERM` signal handler installation via the lifespan context manager. The module was untestable in isolation because importing it required the full project directory structure and a valid `.env` file.
+**Module-level app creation (C-02).** `managers/api.py` formerly executed `app = create_app()` at module level (originally at line 1472-1473). This line was reached whenever any symbol was imported from `api.py` for any purpose --- tests, type checking, IDE tooling, or other modules importing shared classes. The `create_app()` function (now at `api.py:1303`) triggered a cascade: `APIPathManager("un_crafd")` instantiation, `pyprojroot` root discovery, `.env` loading via `load_dotenv()`, `CrafdApiManager` construction (which reads all `APPWRITE_*` env vars), FastAPI app instantiation with all route registrations, and `SIGINT`/`SIGTERM` signal handler installation via the lifespan context manager. The module was untestable in isolation because importing it required the full project directory structure and a valid `.env` file.
 
 **Circular import chain (C-04).** `managers/log.py` formerly imported `APIPathManager` from `api.py` (at line 7). `api.py` imports from `model.py`. `model.py` lazily imported `LoggingModule` from `log.py` inside `ModelManager.__init__`. The cycle was: `log.py` -> `api.py` -> `model.py` -> `log.py`. The cycle was broken only by the deferred import, which was fragile --- moving that import to module level would have triggered an `ImportError`. `log.py`'s import of `APIPathManager` from `api.py` was unnecessary: `LoggingModule.__init__` accepts a `ModelPathManager` (the parent class, defined in `model.py`), not specifically an `APIPathManager`. Now resolved: `log.py` no longer imports from `api.py`; `model.py:13` imports `LoggingModule` at module level without cycle.
 
@@ -78,7 +78,7 @@ Three interrelated import discipline violations create fragility in the `manager
 
 ### Negative
 
-- The uvicorn invocation must change from `uvicorn views_crafdapi.managers.api:app` to `uvicorn views_crafdapi.managers.api:create_app --factory`. This affects the deployment entrypoint (`views-models/apis/un_fao/main.py`) and CI configurations that start the server.
+- The uvicorn invocation must change from `uvicorn views_crafdapi.managers.api:app` to `uvicorn views_crafdapi.managers.api:create_app --factory`. This affects the deployment entrypoint (`views-models/apis/un_crafd/main.py`) and CI configurations that start the server.
 - Lazy wandb imports add a small overhead on first call to `APIManager.run()`. This is negligible since `run()` is called once at server startup, not per-request.
 - Any code that currently relies on `from views_crafdapi.managers.api import app` to get a pre-initialized app instance will break. Such code must call `create_app()` explicitly.
 

@@ -53,8 +53,8 @@
 - **Environment variables** (loaded from `.env` at construction time):
   - `APPWRITE_ENDPOINT` -- Appwrite server URL.
   - `APPWRITE_DATASTORE_PROJECT_ID` -- Appwrite project ID.
-  - `APPWRITE_UNFAO_BUCKET_ID` -- Storage bucket for prediction files.
-  - `APPWRITE_UNFAO_BUCKET_NAME`, `APPWRITE_UNFAO_COLLECTION_ID`, `APPWRITE_UNFAO_COLLECTION_NAME`, `APPWRITE_METADATA_DATABASE_ID`, `APPWRITE_METADATA_DATABASE_NAME` -- Additional Appwrite configuration.
+  - `APPWRITE_CRAFD_BUCKET_ID` -- Storage bucket for prediction files.
+  - `APPWRITE_CRAFD_BUCKET_NAME`, `APPWRITE_CRAFD_COLLECTION_ID`, `APPWRITE_CRAFD_COLLECTION_NAME`, `APPWRITE_METADATA_DATABASE_ID`, `APPWRITE_METADATA_DATABASE_NAME` -- Additional Appwrite configuration.
   - All 8 environment variables are validated at startup by `_validate_appwrite_env()` (module-level function at `api.py:37-55` -- `_REQUIRED_APPWRITE_ENV_VARS` at lines 37-46, `_validate_appwrite_env()` at lines 49-55). Missing variables cause an immediate `ValueError` listing all missing names. Called in `__init__()` after `load_dotenv()`.
 - **API key per request:** Every endpoint requires an `X-API-Key` header containing a valid Appwrite API key. The key is validated on each request by attempting an Appwrite SDK operation.
 - **Appwrite reachability:** The Appwrite server must be reachable at runtime. There is no offline fallback beyond cached data.
@@ -125,7 +125,7 @@
 from views_crafdapi.managers.model import APIPathManager
 from views_crafdapi.managers.api import CrafdApiManager
 
-model_path = APIPathManager("un_fao")
+model_path = APIPathManager("un_crafd")
 manager = CrafdApiManager(model_path=model_path)
 manager._startup()
 ```

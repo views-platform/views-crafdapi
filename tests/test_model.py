@@ -74,8 +74,8 @@ class TestGetModelNameFromPath:
 
     def test_apis_path(self):
         assert ModelPathManager.get_model_name_from_path(
-            Path("project/apis/un_fao/config.py")
-        ) == "un_fao"
+            Path("project/apis/un_crafd/config.py")
+        ) == "un_crafd"
 
     def test_ensembles_path(self):
         assert ModelPathManager.get_model_name_from_path(

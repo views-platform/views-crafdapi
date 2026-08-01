@@ -53,10 +53,10 @@ The API reads environment variables via `.env` at runtime (loaded in `CrafdApiMa
 # .env
 APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1
 APPWRITE_DATASTORE_PROJECT_ID=your-project-id
-APPWRITE_UNFAO_BUCKET_ID=predictions-bucket-id
-APPWRITE_UNFAO_BUCKET_NAME=predictions-bucket-name
-APPWRITE_UNFAO_COLLECTION_ID=file-metadata-collection-id
-APPWRITE_UNFAO_COLLECTION_NAME=file-metadata-collection-name
+APPWRITE_CRAFD_BUCKET_ID=predictions-bucket-id
+APPWRITE_CRAFD_BUCKET_NAME=predictions-bucket-name
+APPWRITE_CRAFD_COLLECTION_ID=file-metadata-collection-id
+APPWRITE_CRAFD_COLLECTION_NAME=file-metadata-collection-name
 APPWRITE_METADATA_DATABASE_ID=metadata-db-id
 APPWRITE_METADATA_DATABASE_NAME=metadata-db-name
 ```
@@ -208,10 +208,10 @@ curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/pg/data/forecast/s
 curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/country/analysis/forecast/hdi-map?alpha=0.9&entity_ids=USA,FRA&aggregate=true"
 
 # List files in a bucket
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_UNFAO_BUCKET_ID?limit=50&search=forecast"
+curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_CRAFD_BUCKET_ID?limit=50&search=forecast"
 
 # Download a file inline
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_UNFAO_BUCKET_ID/<file_id>/download?download=false"
+curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_CRAFD_BUCKET_ID/<file_id>/download?download=false"
 ```
 
 Python (requests)
@@ -263,7 +263,7 @@ Logging config in `configs/logging.yaml`.
 
 ## Deployment Notes
 
-**Branch mismatch in views-models (C-17):** The `views-models/apis/un_fao/run.sh` script (line 27) installs views-faoapi from `@main`, but `requirements.txt` in the same directory pins `@development`. This means `run.sh` and `pip install -r requirements.txt` install different versions. The fix lives in the views-models repo — align both to the same branch (recommended: `@main` for production, `@development` for staging).
+**Branch mismatch in views-models (C-17):** The `views-models/apis/un_crafd/run.sh` script (line 27) installs views-faoapi from `@main`, but `requirements.txt` in the same directory pins `@development`. This means `run.sh` and `pip install -r requirements.txt` install different versions. The fix lives in the views-models repo — align both to the same branch (recommended: `@main` for production, `@development` for staging).
 
 ## Testing
 

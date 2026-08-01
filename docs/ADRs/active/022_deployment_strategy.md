@@ -14,8 +14,8 @@ During a sprint in May 2026, a risk register entry (C-16: "No deployment automat
 
 In fact, the production deployment has never used Docker. The deployment path is:
 
-1. The `views-models` repository contains the deployment entrypoint at `apis/un_fao/run.sh`.
-2. `run.sh` creates a conda environment, installs views-faoapi from GitHub via `pip install git+https://...@main`, and runs `apis/un_fao/main.py`.
+1. The `views-models` repository contains the deployment entrypoint at `apis/un_crafd/run.sh`.
+2. `run.sh` creates a conda environment, installs views-faoapi from GitHub via `pip install git+https://...@main`, and runs `apis/un_crafd/main.py`.
 3. `main.py` instantiates `CrafdApiManager` and calls `manager.run()`, which starts uvicorn internally.
 
 This is consistent with how all other VIEWS platform services are deployed: conda/pip environment on the server, direct process execution, no containerization. Docker was an undocumented architectural commitment that contradicted the actual deployment mechanism.
@@ -24,7 +24,7 @@ This is consistent with how all other VIEWS platform services are deployed: cond
 
 ## Decision
 
-1. **views-faoapi is deployed as a pip-installable Python package, not a container image.** The deployment entrypoint is `views-models/apis/un_fao/run.sh`, which installs the package from GitHub and starts it via `main.py`.
+1. **views-faoapi is deployed as a pip-installable Python package, not a container image.** The deployment entrypoint is `views-models/apis/un_crafd/run.sh`, which installs the package from GitHub and starts it via `main.py`.
 
 2. **Docker artifacts are removed from this repository.** Dockerfile, docker-compose.yml, .dockerignore, Makefile, and `tests/test_deployment.py` are deleted. They were never used in production and represented an undocumented deployment decision.
 
@@ -137,7 +137,7 @@ The original concern was valid: "No deployment automation or infrastructure-as-c
 
 - pip-install-from-GitHub as the deployment mechanism
 - `main` branch as the deployment target
-- `views-models/apis/un_fao/` as the deployment entrypoint owner
+- `views-models/apis/un_crafd/` as the deployment entrypoint owner
 
 ### Changes requiring contract revision
 
@@ -161,6 +161,6 @@ The original concern was valid: "No deployment automation or infrastructure-as-c
 - ADR-020: Build and Package Management Tooling (hatchling + uv)
 - ADR-017: Reference Data in Repository (shapefiles in wheel)
 - C-16 (resolved): No deployment automation — original risk register entry
-- `views-models/apis/un_fao/run.sh`: Production deployment entrypoint
-- `views-models/apis/un_fao/main.py`: Application startup script
+- `views-models/apis/un_crafd/run.sh`: Production deployment entrypoint
+- `views-models/apis/un_crafd/main.py`: Application startup script
 - Hetzner deployment: `faoapi.viewsforecasting.org` (CPX52; server IP omitted from the public repo)

@@ -16,7 +16,7 @@ Consolidated reference for the `views-faoapi` HTTP service: data scopes, authent
 
 ## 1. Overview
 
-faoapi serves VIEWS conflict data to UN FAO over HTTP. It is the **terminal consumer** of the VIEWS pipeline (ADR-028): it reads the latest artifacts produced upstream by the `un_fao` post-processor from an Appwrite bucket, computes summaries, and serves them as JSON. It runs no models and applies no transforms — all values are **raw fatality counts** (ADR-024).
+faoapi serves VIEWS conflict data to UN FAO over HTTP. It is the **terminal consumer** of the VIEWS pipeline (ADR-028): it reads the latest artifacts produced upstream by the `un_crafd` post-processor from an Appwrite bucket, computes summaries, and serves them as JSON. It runs no models and applies no transforms — all values are **raw fatality counts** (ADR-024).
 
 **Two data scopes (`category`):**
 

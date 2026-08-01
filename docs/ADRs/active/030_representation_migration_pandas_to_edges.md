@@ -99,7 +99,7 @@ Governs the **forecast/sample internal representation**. Out of scope: the float
 ## Open Questions
 
 - The exact `data/handlers.py` pandas-footprint target for the ratchet (zero vs the serialize edge) — fixed in S2.
-- Whether a real production artifact can be captured as a golden once the un_fao producer delivers one (would strengthen C-146 beyond synthetic).
+- Whether a real production artifact can be captured as a golden once the un_crafd producer delivers one (would strengthen C-146 beyond synthetic).
 
 ---
 
