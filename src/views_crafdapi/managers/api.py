@@ -527,13 +527,13 @@ class CrafdApiManager(APIManager):
                     historical_ds = None
                     logger.warning("bulk parquet: no historical artifact — s_actual served as NaN")
                 tmpdir = tempfile.mkdtemp()
-                out = Path(tmpdir) / "unfao_forecast_bulk.parquet"
+                out = Path(tmpdir) / "crafd_forecast_bulk.parquet"
                 write_bulk_parquet(out, forecast_ds, historical_ds)
                 # Clean the per-request temp dir once the file has been streamed (no disk leak).
                 return FileResponse(
                     out,
                     media_type="application/octet-stream",
-                    filename="unfao_forecast_bulk.parquet",
+                    filename="crafd_forecast_bulk.parquet",
                     background=BackgroundTask(shutil.rmtree, tmpdir, ignore_errors=True),
                 )
             except HTTPException:

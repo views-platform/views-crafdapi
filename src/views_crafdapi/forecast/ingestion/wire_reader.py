@@ -1,6 +1,6 @@
 """Read a manifested Sampled-Forecast Wire Contract run and build a servable dataset.
 
-S2 (#204) — the skeleton ingest. The forecast pipeline delivers a run to ``unfao_bucket``
+S2 (#204) — the skeleton ingest. The forecast pipeline delivers a run to ``crafd_bucket``
 as flat-columnar ``views_frames.io.arrow`` shards (one per ``(target, month)``) + one
 gid-keyed GAUL **sidecar** + one **run manifest** uploaded last (the commit marker), per
 ADR-013 §4. This module resolves that wire form into a ``ForecastDataset`` the existing
