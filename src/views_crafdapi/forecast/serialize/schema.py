@@ -31,6 +31,18 @@ def mass_pct(mass: float) -> int:
         raise ValueError(f"unknown credible mass {mass!r}; served masses are {MASSES}") from None
 
 
+# --- Exceedance thresholds (ADR-034): CRAF'd's new summary statistic. -------------------------
+# ``P(Y > c)`` = the posterior probability that a series exceeds ``c`` fatalities, one per
+# threshold. Like ``MASSES``, this is THE single definition the reduction (`estimator.collapse`)
+# and the ``{series}_p_gt{c}`` column names share, so the CollapseResult exceedance keys and the
+# served column names can never drift. A DECLARED constant, not a runtime override: a change is
+# one reviewed, git-historied line that auto-propagates to every column name + golden (easy) and
+# is a deliberate served-contract amendment (safe) — a served set that varied with the
+# environment is the silent-contract-drift hazard ADR-025 exists to prevent. Placeholders per
+# ADR-034 §3 (operator, 2026-08-02) pending CRAF'd's real numbers.
+EXCEEDANCE_THRESHOLDS: tuple[int, ...] = (25, 100, 1000)
+
+
 # --- Consumer series stems (ADR-025 §3): the bare sb/ns/os, no internal prefix. ---
 SERIES: tuple[str, ...] = ("sb", "ns", "os")
 
@@ -83,6 +95,20 @@ def hdi_col(series: str, mass: float, bound: str) -> str:
     if bound not in ("lower", "upper"):
         raise ValueError(f"bound must be 'lower' or 'upper', got {bound!r}")
     return f"{series}_hdi{mass_pct(mass)}_{bound}"
+
+
+def exceed_col(series: str, threshold: int) -> str:
+    """``{series}_p_gt{c}`` — the served ``P(series > c)`` exceedance column (ADR-034 §3).
+
+    ``c`` must be one of :data:`EXCEEDANCE_THRESHOLDS`; a stray threshold is a contract event
+    (fail-loud, ADR-003/008), never a silently-named column.
+    """
+    if threshold not in EXCEEDANCE_THRESHOLDS:
+        raise ValueError(
+            f"unknown exceedance threshold {threshold!r}; served thresholds are "
+            f"{EXCEEDANCE_THRESHOLDS}"
+        )
+    return f"{series}_p_gt{threshold}"
 
 
 def severe_col(series: str) -> str:
