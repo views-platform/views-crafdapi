@@ -576,7 +576,10 @@ class ForecastDataset(_GridDataset):
                 result_row = {time_col: time_id, target_level_col: geo_unit}
                 if isinstance(samples, np.ndarray) and len(samples) > 0:
                     cr = collapse(
-                        samples, masses=schema.MASSES, enforce_non_negative=enforce_non_negative
+                        samples,
+                        masses=schema.MASSES,
+                        enforce_non_negative=enforce_non_negative,
+                        thresholds=schema.EXCEEDANCE_THRESHOLDS,
                     )
                     data = series_value_data(
                         var_name,
@@ -584,6 +587,7 @@ class ForecastDataset(_GridDataset):
                         cr.severe,
                         cr.bimodality,
                         {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
+                        exceedance=cr.exceedance,
                     )
                     result_row.update({name: float(col[0]) for name, col in data.items()})
                 else:

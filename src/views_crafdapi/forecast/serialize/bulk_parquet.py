@@ -2,10 +2,11 @@
 
 FAO loads this in one step instead of paging the JSON API. It is the **same** served numbers
 as the API, packaged wide at admin-1 (GAUL level-1) grain: one row per `(month_id, admin1_code)`,
-6 identity columns + per series `s ∈ {sb, ns, os}` the 10 ADR-025 columns — 33 base + the
-per-series `bimodality_flag` = **36 total** (ADR-025 §4 / §A.3).
+6 identity columns + per series `s ∈ {sb, ns, os}` the 13 value columns — the ADR-025 base
++ per-series `bimodality_flag` + the three ADR-034 `p_gt{c}` exceedance columns = **45 total**.
 
-- Forecast columns (`s_map`, `s_hdi{50,90,95}_{lower,upper}`, `s_severe_scenario`) come from the
+- Forecast columns (`s_map`, `s_hdi{50,90,95}_{lower,upper}`, `s_severe_scenario`,
+  `s_p_gt{25,100,1000}`) come from the
   forecast dataset's admin-1 aggregate reduction (the same `calculate_hdi_map` the API uses).
 - `s_actual` is the **historical observed** count, summed to admin-1 and joined on
   `(month_id, admin1_code)`; `NaN` where there is no observed value (the forecast horizon).
@@ -72,7 +73,8 @@ def _actual_by_admin1(historical_ds) -> pd.DataFrame:
 
 
 def build_bulk_table(forecast_ds, historical_ds=None) -> pd.DataFrame:
-    """Assemble the ADR-025 36-column admin-1 bulk table (33 base + per-series bimodality_flag).
+    """Assemble the 45-column admin-1 bulk table (ADR-025 base + per-series bimodality_flag
+    + the three ADR-034 `p_gt{c}` exceedance columns per series).
 
     ``forecast_ds`` / ``historical_ds`` are `ForecastDataset`s (forecast samples / observed
     counts). Returns a DataFrame with `schema.bulk_columns()` in order; `s_actual` is `NaN`
