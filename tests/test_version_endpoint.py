@@ -47,19 +47,19 @@ def test_installed_version_falls_back_to_metadata(monkeypatch):
 
 
 def test_deployed_tag_none_when_file_absent(tmp_path, monkeypatch):
-    monkeypatch.setenv("FAOAPI_DEPLOY_TAG_FILE", str(tmp_path / "does-not-exist"))
+    monkeypatch.setenv("CRAFDAPI_DEPLOY_TAG_FILE", str(tmp_path / "does-not-exist"))
     assert version_mod.deployed_tag() is None
 
 
 def test_deployed_tag_reads_the_pin_file(tmp_path, monkeypatch):
     pin = tmp_path / "tag"
     pin.write_text("v1.2.3\n")
-    monkeypatch.setenv("FAOAPI_DEPLOY_TAG_FILE", str(pin))
+    monkeypatch.setenv("CRAFDAPI_DEPLOY_TAG_FILE", str(pin))
     assert version_mod.deployed_tag() == "v1.2.3"
 
 
 def test_version_endpoint_unauth(client, tmp_path, monkeypatch):
-    monkeypatch.setenv("FAOAPI_DEPLOY_TAG_FILE", str(tmp_path / "no-pin"))  # deterministic
+    monkeypatch.setenv("CRAFDAPI_DEPLOY_TAG_FILE", str(tmp_path / "no-pin"))  # deterministic
     resp = client.get("/version")  # deliberately no X-API-Key
     assert resp.status_code == 200
     body = resp.json()
@@ -78,6 +78,6 @@ def test_version_exposes_served_contract_capability(client, tmp_path, monkeypatc
     diagnosable."""
     from views_crafdapi.forecast.contract import SERVED_CONTRACT_VERSION
 
-    monkeypatch.setenv("FAOAPI_DEPLOY_TAG_FILE", str(tmp_path / "no-pin"))
+    monkeypatch.setenv("CRAFDAPI_DEPLOY_TAG_FILE", str(tmp_path / "no-pin"))
     body = client.get("/version").json()  # unauth
     assert body["served_contract_version"] == SERVED_CONTRACT_VERSION

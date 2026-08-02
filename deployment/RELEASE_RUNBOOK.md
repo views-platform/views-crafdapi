@@ -1,3 +1,10 @@
+> **⚠ INHERITED FROM views-faoapi — NOT YET RETARGETED. DO NOT RUN AGAINST CRAF'd.**
+> Every command below (`cd ~/…/views-faoapi`, `systemctl restart views-faoapi`,
+> `~/.views-faoapi-deploy-tag`, `curl faoapi.viewsforecasting.org`) targets the **live
+> production FAO API** — running it from this repo would disrupt a different, UN-facing
+> service. A crafd-specific release runbook is written in **S11** (needs the real crafd
+> host/DNS/service, which do not exist yet). Until then this file is reference only.
+
 # Release runbook — bringing production up to date, properly
 
 *Written to be read by a human. One session, about an hour. Every step says what

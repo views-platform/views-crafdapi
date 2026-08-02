@@ -2,7 +2,7 @@
 
 A tiny, dependency-light surface so a deploy can be verified *remotely*: the installed
 package version (`importlib.metadata`) and the git tag this deploy was pinned to by the
-S4 deploy gate (`~/.views-faoapi-deploy-tag`), if present. No auth, no side effects.
+S4 deploy gate (`~/.views-crafdapi-deploy-tag`), if present. No auth, no side effects.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from typing import Optional
 from views_crafdapi.forecast.contract import SERVED_CONTRACT_VERSION
 
 _PACKAGE = "views-crafdapi"
-_DEFAULT_DEPLOY_TAG_FILE = "~/.views-faoapi-deploy-tag"
+_DEFAULT_DEPLOY_TAG_FILE = "~/.views-crafdapi-deploy-tag"
 
 
 def _pyproject_version() -> Optional[str]:
@@ -53,12 +53,12 @@ def installed_version() -> str:
 def deployed_tag() -> Optional[str]:
     """The git tag this deploy was pinned to (S4 deploy gate), or ``None`` if unpinned.
 
-    Reads the deploy-tag file (path overridable via ``FAOAPI_DEPLOY_TAG_FILE``); an
+    Reads the deploy-tag file (path overridable via ``CRAFDAPI_DEPLOY_TAG_FILE``); an
     absent or empty file yields ``None`` — e.g. before the S4 gate lands, or for a
     branch-tracking (``@main``) deploy.
     """
     path = Path(
-        os.path.expanduser(os.environ.get("FAOAPI_DEPLOY_TAG_FILE", _DEFAULT_DEPLOY_TAG_FILE))
+        os.path.expanduser(os.environ.get("CRAFDAPI_DEPLOY_TAG_FILE", _DEFAULT_DEPLOY_TAG_FILE))
     )
     try:
         tag = path.read_text(encoding="utf-8").strip()

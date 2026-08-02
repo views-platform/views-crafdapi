@@ -69,7 +69,7 @@ class PredictionStoreManager:
         if upload_result.get("code") == "storage_bucket_not_found":
             # þing-01 #276 / PLATFORM-001 D5: a missing bucket is a misconfiguration, not a signal
             # to auto-create a phantom. create_bucket now RAISES unless provisioning is explicitly
-            # enabled (FAOAPI_ALLOW_PROVISIONING=1) on a deliberate setup entrypoint — so by default
+            # enabled (CRAFDAPI_ALLOW_PROVISIONING=1) on a deliberate setup entrypoint — so by default
             # this fails visible naming the coordinate rather than uploading into a phantom bucket.
             logger.warning(
                 f"Bucket '{self.__appwrite_file_manager_config.bucket_id}' not found — "

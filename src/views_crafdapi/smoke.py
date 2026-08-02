@@ -29,7 +29,7 @@ import requests
 from views_crafdapi.client import FaoApiClient
 from views_crafdapi.time import date_to_month_id
 
-_DEFAULT_URL = "https://faoapi.viewsforecasting.org"
+_DEFAULT_URL = "https://crafdapi.viewsforecasting.org"
 _KEY_ENV = "APPWRITE_DATASTORE_API_KEY"
 
 

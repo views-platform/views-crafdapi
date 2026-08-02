@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # exceed this is refused (→ fail-safe legacy) rather than materialized. Default 4 GiB: safe
 # on the 16–24 GB host alongside the ~4 GB historical dataset. Production-scale serving of a
 # full-S run (≈28.6 GB) is delivered by lazy per-month loading in S6 (#208), not here.
-_MAX_ASSEMBLED_BYTES_ENV = "FAOAPI_MAX_ASSEMBLED_BYTES"
+_MAX_ASSEMBLED_BYTES_ENV = "CRAFDAPI_MAX_ASSEMBLED_BYTES"
 _DEFAULT_MAX_ASSEMBLED_BYTES = 4 * 1024**3
 # ADR-013 §4.6 "assembled-run size × safety factor ≤ RAM": the estimate below is the FINAL
 # per-target store, but assembly transiently holds the shard arrays + the per-cell object
