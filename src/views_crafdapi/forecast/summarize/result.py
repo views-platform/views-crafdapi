@@ -10,7 +10,7 @@ aligned to the collapse input rows; ``hdi[mass]`` is ``(N, 2)`` as ``[lower, upp
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict
 
 import numpy as np
@@ -27,12 +27,17 @@ class CollapseResult:
     - ``bimodality``: ``(N,)`` conservative 0/1 flag — 1 where the sample distribution has a
       clearly separated, materially populated secondary mode (so a single MAP/HDI is read with
       care). ADR-025 §A.3.
+    - ``exceedance``: ``{threshold: (N,)}`` — the posterior exceedance probability ``P(Y > c)``
+      per threshold (ADR-034 §3). Empty when the collapse was called with no thresholds (the
+      default), so existing callers are unaffected — this is the OCP add a new statistic is
+      meant to be. All-NaN input rows are ``NaN`` here too, exactly like ``map``.
     """
 
     map: np.ndarray
     hdi: Dict[float, np.ndarray]
     severe: np.ndarray
     bimodality: np.ndarray
+    exceedance: Dict[float, np.ndarray] = field(default_factory=dict)
 
     def lower(self, mass: float) -> np.ndarray:
         """HDI lower bound ``(N,)`` at ``mass``."""

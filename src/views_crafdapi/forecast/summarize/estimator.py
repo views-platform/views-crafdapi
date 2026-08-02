@@ -67,6 +67,7 @@ def collapse(
     masses=(0.5, 0.9, 0.95),
     tail=0.05,
     enforce_non_negative=False,
+    thresholds=(),
 ) -> CollapseResult:
     """Full posterior collapse → ``CollapseResult`` (MAP + nested HDIs at ``masses`` + severe).
 
@@ -80,10 +81,18 @@ def collapse(
     `CollapseResult` whose arrays are ``(N,)`` (``hdi[mass]`` is ``(N, 2)``); all-NaN rows are
     ``NaN`` throughout. ``enforce_non_negative`` clips the MAP only (HDI/severe untouched,
     matching `tower_collapse`).
+
+    ``thresholds`` (ADR-034 §3): credible exceedance cutpoints, in the same raw-count units as
+    ``values``. When given, the result carries ``exceedance = {c: (N,)}`` where each entry is the
+    posterior probability ``P(Y > c)`` (strict ``>``, empirical survival fraction over the sample
+    axis, via ``views_frames_summarize.exceedance``). Empty by default → no exceedance computed,
+    so existing HDI/MAP callers are unchanged. All-NaN rows are ``NaN`` in every exceedance array
+    (not a spurious ``0``), matching ``map``.
     """
     masses = tuple(masses)
     if not masses:
         raise ValueError("collapse requires at least one credible mass")
+    thresholds = tuple(thresholds)
     flat = np.asarray(values, dtype=np.float32)
     if flat.ndim == 1:
         flat = flat.reshape(1, -1)
@@ -93,6 +102,7 @@ def collapse(
     hdi = {m: np.full((n, 2), np.nan, dtype=np.float64) for m in masses}
     severe = np.full(n, np.nan, dtype=np.float64)
     bimodality = np.full(n, np.nan, dtype=np.float64)
+    exceedance = {c: np.full(n, np.nan, dtype=np.float64) for c in thresholds}
 
     valid = ~np.isnan(flat).all(axis=1)
     if valid.any():
@@ -113,4 +123,12 @@ def collapse(
         severe[valid] = expected_shortfall(v, tail=tail)
         bimodality[valid] = np.asarray(vfs.bimodality(frame)).reshape(-1)  # 0/1 per row (ADR-025 A.3)
 
-    return CollapseResult(map=map_vals, hdi=hdi, severe=severe, bimodality=bimodality)
+        if thresholds:
+            # `(n_valid, K)` survival fractions P(Y > c); NaN-filled rows stay NaN (untouched).
+            ex = np.asarray(vfs.exceedance(frame, thresholds)).reshape(v.shape[0], len(thresholds))
+            for k, c in enumerate(thresholds):
+                exceedance[c][valid] = ex[:, k]
+
+    return CollapseResult(
+        map=map_vals, hdi=hdi, severe=severe, bimodality=bimodality, exceedance=exceedance
+    )
