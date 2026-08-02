@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 class ForecastDataset(_GridDataset):
-    """The faoapi forecast dataset facade (Phase 4a of #87 / #112).
+    """The crafdapi forecast dataset facade (Phase 4a of #87 / #112).
 
     Composes the extracted `forecast/` modules (ingestion, frames, summarize, geography,
     aggregate, serialize) over a PRIO-GRID-month grid carrying per-cell posterior samples and

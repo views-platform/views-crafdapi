@@ -263,7 +263,7 @@ Logging config in `configs/logging.yaml`.
 
 ## Deployment Notes
 
-**Branch mismatch in views-models (C-17):** The `views-models/apis/un_crafd/run.sh` script (line 27) installs views-faoapi from `@main`, but `requirements.txt` in the same directory pins `@development`. This means `run.sh` and `pip install -r requirements.txt` install different versions. The fix lives in the views-models repo — align both to the same branch (recommended: `@main` for production, `@development` for staging).
+**Branch mismatch in views-models (C-17):** The `views-models/apis/un_crafd/run.sh` script (line 27) installs views-crafdapi from `@main`, but `requirements.txt` in the same directory pins `@development`. This means `run.sh` and `pip install -r requirements.txt` install different versions. The fix lives in the views-models repo — align both to the same branch (recommended: `@main` for production, `@development` for staging).
 
 ## Testing
 

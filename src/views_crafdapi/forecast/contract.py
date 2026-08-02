@@ -17,7 +17,7 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-# The wire-contract dialect (vpp ADR-013) this build can render. Bump this when faoapi implements
+# The wire-contract dialect (vpp ADR-013) this build can render. Bump this when crafdapi implements
 # support for a new dialect (and only then) — it is the served-schema *capability*, asserted at
 # `/version` and enforced at ingest. Deployed builds and `main` may differ; that skew is exactly
 # what C-171 governs, and `/version` makes it remotely visible.

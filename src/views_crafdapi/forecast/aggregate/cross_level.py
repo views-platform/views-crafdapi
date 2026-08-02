@@ -1,7 +1,7 @@
 """Cross-level, joint-sampling aggregation of posterior distributions.
 
-`elementwise_sum` is faoapi's joint-sum primitive (currently wired into the serving path).
-`aggregate_via_leaf` is the views-frames-native path: it injects faoapi's geography mapping
+`elementwise_sum` is crafdapi's joint-sum primitive (currently wired into the serving path).
+`aggregate_via_leaf` is the views-frames-native path: it injects crafdapi's geography mapping
 into `views_frames_summarize.aggregate_distributions_arrays`, which performs the same
 conservation-correct joint-sum (register C-70: sum the aligned draws across cells *before*
 collapsing). The two are proven equivalent in `tests/forecast/test_cross_level_aggregate.py`;

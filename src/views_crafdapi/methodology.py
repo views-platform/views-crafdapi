@@ -1,7 +1,7 @@
-"""Methodology version for faoapi's published-forecast computation.
+"""Methodology version for crafdapi's published-forecast computation.
 
 ADR-023 (governance gate for re-baselining published forecasts) requires a methodology
-version that is bumped whenever a change to how faoapi computes the *published* numbers
+version that is bumped whenever a change to how crafdapi computes the *published* numbers
 (estimator, aggregation, fill semantics) ships to production. It is surfaced alongside the
 served-artifact provenance (C-86) so "which method produced these numbers" is auditable
 from served output and logs.

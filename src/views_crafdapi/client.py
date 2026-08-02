@@ -9,7 +9,7 @@ import pandas as pd
 import requests
 
 
-class FaoApiClient:
+class CrafdApiClient:
     """Stateless client for the VIEWS CRAF'd Prediction API."""
 
     def __init__(self, base_url: str, api_key: str, *, timeout: float = 30.0):

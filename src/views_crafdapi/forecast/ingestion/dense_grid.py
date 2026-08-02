@@ -1,6 +1,6 @@
 """Dense-grid fill for the forecast grid.
 
-RETAINED in faoapi (views-frames has no fill primitive — sparse-index by design). Extracted
+RETAINED in crafdapi (views-frames has no fill primitive — sparse-index by design). Extracted
 from `_ViewsDataset._preprocess_dataframe` (Phase 1 of #87). The dense grid is defined by the
 entities present in the last time step; recreated cells are filled with `fill_value`
 (default 0, ADR-021), and array (sample) columns get a sample-length array, not a scalar

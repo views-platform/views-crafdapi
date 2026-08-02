@@ -1,4 +1,4 @@
-"""The forecast data domain for views-faoapi.
+"""The forecast data domain for views-crafdapi.
 
 Decomposition of the former `data/handlers.py` god-class into single-responsibility
 modules (epic #87), each depending toward the frozen views-frames leaf:

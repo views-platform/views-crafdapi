@@ -30,7 +30,7 @@ class PredictionProvenance:
     targets: Optional[List[str]] = None
     description: Optional[str] = None
     file_hash: Optional[str] = None
-    # ADR-023 / C-86: the faoapi methodology that computes the published HDI/MAP from this
+    # ADR-023 / C-86: the crafdapi methodology that computes the published HDI/MAP from this
     # artifact. Bumped when a re-baselining change ships to production.
     methodology_version: str = METHODOLOGY_VERSION
 
