@@ -3,8 +3,10 @@
 tests/test_metadata_contract.py."""
 
 # ADR-013 §11.4 (Hop-B transition guard): the `type` stamped on every legacy
-# (pre-wire-contract) unfao_bucket document — ground-truthed against live Appwrite
-# (2026-07-15: all typed docs carry type="model"). Category selections that name no
+# (pre-wire-contract) document — an FAO-era convention ground-truthed 2026-07-15 against live
+# Appwrite (all typed docs carried type="model"). Inherited verbatim by crafd, which is
+# greenfield on the wire contract (crafd_bucket has no pre-wire-contract docs), so the guard is
+# inert here. Category selections that name no
 # type of their own are pinned to it, so contract artifacts
 # (type="sampled_forecast_shard|manifest|sidecar", uploaded under this consumer's
 # own `name` and therefore visible to the name filter) can never be grabbed as
