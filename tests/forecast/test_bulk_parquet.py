@@ -24,10 +24,10 @@ def _historical(seed=2, **kw):
     return ForecastDataset(df, targets=list(_HT))
 
 
-def test_table_is_exactly_the_33_column_adr025_schema():
+def test_table_is_exactly_the_45_column_schema():
     table = build_bulk_table(_forecast(), _historical())
     assert list(table.columns) == schema.bulk_columns()
-    assert len(table.columns) == 36
+    assert len(table.columns) == 45
 
 
 def test_one_row_per_month_and_admin1_with_consumer_identity():

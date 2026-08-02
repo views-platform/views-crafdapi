@@ -60,6 +60,30 @@ class TestExceedanceDefaultIsZeroCost:
             np.testing.assert_allclose(withx.hdi[m], base.hdi[m], equal_nan=True)
 
 
+class TestExceedanceReachesServedColumns:
+    """End-to-end (1a-ii): the served grid path emits `{var}_p_gt{c}` with correct values."""
+
+    def test_served_pg_frame_carries_correct_exceedance(self):
+        import pandas as pd
+        from views_crafdapi.data.handlers import _GridDataset
+
+        # cell A draws {10,20,30,40}: P(>25)=.5, P(>100)=0; cell B all 200: P(>25)=P(>100)=1, P(>1000)=0.
+        index = pd.MultiIndex.from_tuples([(500, 1), (500, 2)], names=["month_id", "priogrid_id"])
+        data = {"pred_fatalities": [
+            np.array([10.0, 20.0, 30.0, 40.0]),
+            np.array([200.0, 200.0, 200.0, 200.0]),
+        ]}
+        served = _GridDataset(pd.DataFrame(data, index=index)).calculate_hdi_map(alpha=0.9)
+        for c in schema.EXCEEDANCE_THRESHOLDS:
+            assert schema.exceed_col("pred_fatalities", c) in served.columns
+        col = lambda c: f"pred_fatalities_p_gt{c}"  # noqa: E731
+        assert served.loc[(500, 1), col(25)] == pytest.approx(0.5)
+        assert served.loc[(500, 1), col(100)] == pytest.approx(0.0)
+        assert served.loc[(500, 2), col(25)] == pytest.approx(1.0)
+        assert served.loc[(500, 2), col(100)] == pytest.approx(1.0)
+        assert served.loc[(500, 2), col(1000)] == pytest.approx(0.0)
+
+
 class TestExceedColNameContract:
     def test_name_scheme(self):
         assert schema.exceed_col("sb", 25) == "sb_p_gt25"

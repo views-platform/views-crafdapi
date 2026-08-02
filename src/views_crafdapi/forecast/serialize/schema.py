@@ -125,20 +125,25 @@ def actual_col(series: str) -> str:
 
 
 def series_value_columns(series: str) -> list[str]:
-    """The 10 ADR-025 value columns for one series, in canonical order:
+    """The 13 value columns for one series, in canonical order (ADR-025 §4 + ADR-034 §3):
     ``map · hdi50_lower · hdi50_upper · hdi90_lower · hdi90_upper · hdi95_lower · hdi95_upper
-    · severe_scenario · bimodality_flag · actual``.
+    · severe_scenario · bimodality_flag · p_gt25 · p_gt100 · p_gt1000 · actual``.
+
+    The three ``p_gt{c}`` exceedance columns (CRAF'd, ADR-034) sit after the ADR-025 stats and
+    before the historical ``actual``; they derive from :data:`EXCEEDANCE_THRESHOLDS`.
     """
     cols = [map_col(series)]
     for mass in MASSES:
         cols += [hdi_col(series, mass, "lower"), hdi_col(series, mass, "upper")]
-    cols += [severe_col(series), bimodality_col(series), actual_col(series)]
+    cols += [severe_col(series), bimodality_col(series)]
+    cols += [exceed_col(series, c) for c in EXCEEDANCE_THRESHOLDS]
+    cols.append(actual_col(series))
     return cols
 
 
 def bulk_columns() -> list[str]:
-    """The full ADR-025 admin-1 bulk layout: 6 identity + 3 series × 10 = **36 columns**
-    (the 33-column base + the per-series `bimodality_flag`, ADR-025 §A.3 / C.1)."""
+    """The full admin-1 bulk layout: 6 identity + 3 series × 13 = **45 columns** (the ADR-025
+    base + the per-series `bimodality_flag` + the three ADR-034 `p_gt{c}` exceedance columns)."""
     cols = list(IDENTITY_COLUMNS)
     for series in SERIES:
         cols += series_value_columns(series)
@@ -159,6 +164,9 @@ def _served_quantities() -> list[str]:
     q = ["severe_scenario", "bimodality_flag"]
     for mass in MASSES:
         q += [f"hdi{mass_pct(mass)}_lower", f"hdi{mass_pct(mass)}_upper"]
+    # Exceedance suffixes (ADR-034). Longest-first so `p_gt1000` is matched before `p_gt100`
+    # can be tried against it (both distinguishable, but order keeps suffix matching unambiguous).
+    q += [f"p_gt{c}" for c in sorted(EXCEEDANCE_THRESHOLDS, reverse=True)]
     q.append("map")
     return q
 

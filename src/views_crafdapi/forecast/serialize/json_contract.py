@@ -88,11 +88,12 @@ def hdi_dataframe(
 
 
 def series_value_column_names(series: str) -> List[str]:
-    """The value columns the JSON serializer emits for one series, in ADR-025 order."""
+    """The value columns the JSON serializer emits for one series (ADR-025 + ADR-034 exceedance)."""
     names = [schema.map_col(series)]
     for mass in schema.MASSES:
         names += [schema.hdi_col(series, mass, "lower"), schema.hdi_col(series, mass, "upper")]
     names += [schema.severe_col(series), schema.bimodality_col(series)]
+    names += [schema.exceed_col(series, c) for c in schema.EXCEEDANCE_THRESHOLDS]
     return names
 
 
@@ -102,11 +103,15 @@ def series_value_data(
     severe: np.ndarray,
     bimodality: np.ndarray,
     hdi: Dict[float, Tuple[np.ndarray, np.ndarray]],
+    exceedance: Optional[Dict[int, np.ndarray]] = None,
 ) -> Dict[str, np.ndarray]:
     """Ordered ``{column_name: array}`` for one series from its reduced stats.
 
     ``map_``/``severe``/``bimodality`` are per-row arrays; ``hdi`` maps each mass →
-    ``(lower, upper)``. Column names come from `schema`. Order matches `series_value_column_names`.
+    ``(lower, upper)``; ``exceedance`` maps each threshold → ``P(Y>c)`` per row (ADR-034).
+    Column names come from `schema`. Order matches `series_value_column_names`. When
+    ``exceedance`` is ``None`` (or missing a threshold), that column is emitted as NaN so the
+    served column set is always complete — the serving paths pass real values.
     """
     data: Dict[str, np.ndarray] = {schema.map_col(series): np.asarray(map_)}
     for mass in schema.MASSES:
@@ -115,6 +120,11 @@ def series_value_data(
         data[schema.hdi_col(series, mass, "upper")] = np.asarray(upper)
     data[schema.severe_col(series)] = np.asarray(severe)
     data[schema.bimodality_col(series)] = np.asarray(bimodality)
+    exceedance = exceedance or {}
+    nan_like = np.full(np.asarray(map_).shape, np.nan, dtype=np.float64)
+    for c in schema.EXCEEDANCE_THRESHOLDS:
+        col = exceedance[c] if c in exceedance else nan_like
+        data[schema.exceed_col(series, c)] = np.asarray(col)
     return data
 
 
@@ -130,17 +140,21 @@ def series_value_dataframe(
     default_entity: pd.Index,
     time_ids: Optional[Union[int, List[int]]] = None,
     entity_ids: Optional[Union[int, List[int]]] = None,
+    exceedance: Optional[Dict[int, np.ndarray]] = None,
 ) -> pd.DataFrame:
     """Lay per-series value stats (each a ``(time, entity)`` matrix) onto a flat MultiIndex.
 
     Mirrors `hdi_dataframe`'s axis handling: matrices are C-order flattened against
     ``from_product([time, entity])`` (time-major), so the flatten aligns with the index.
+    ``exceedance`` maps each threshold → a ``(time, entity)`` ``P(Y>c)`` matrix (ADR-034).
     """
     time_steps, entities = _resolve_axes(time_ids, entity_ids, default_time, default_entity)
     index = pd.MultiIndex.from_product([time_steps, entities], names=[time_id, entity_id])
     data = {
         name: np.asarray(col).flatten()
-        for name, col in series_value_data(series, map_, severe, bimodality, hdi).items()
+        for name, col in series_value_data(
+            series, map_, severe, bimodality, hdi, exceedance
+        ).items()
     }
     return pd.DataFrame(data, index=index)
 

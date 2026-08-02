@@ -1166,13 +1166,15 @@ class _GridDataset:
         )
 
     def _create_series_value_dataframe(
-        self, prefix, map_, severe, bimodality, hdi, time_ids=None, entity_ids=None
+        self, prefix, map_, severe, bimodality, hdi, time_ids=None, entity_ids=None,
+        exceedance=None,
     ) -> pd.DataFrame:
-        """Format one variable's reduced stats into the ADR-025 quantity columns (#222/S4).
+        """Format one variable's reduced stats into the quantity columns (#222/S4 + ADR-034).
 
         ``prefix`` is the internal var name (`{var}_map`, `{var}_hdi90_lower`, …); the consumer
         `sb/ns/os` rename is a separate boundary transform (`json_contract.to_consumer_columns`),
         NOT applied here — the reduction runs on arbitrary vars (incl. synthetic fixtures).
+        ``exceedance`` maps each threshold → a ``(time, entity)`` ``P(Y>c)`` matrix (ADR-034).
         Delegates to `json_contract.series_value_dataframe` with this dataset's `(time, entity)`
         axes.
         """
@@ -1188,6 +1190,7 @@ class _GridDataset:
             self.dataframe.index.get_level_values(self._entity_id).unique(),
             time_ids,
             entity_ids,
+            exceedance=exceedance,
         )
 
     def calculate_hdi_map(
@@ -1287,9 +1290,11 @@ class _GridDataset:
         # (`{var}_map`, …); the consumer sb/ns/os rename is a boundary transform applied on the
         # served response, not in the reduction (it runs on arbitrary vars, incl. fixtures).
         masses = schema.MASSES
+        thresholds = schema.EXCEEDANCE_THRESHOLDS
         acc = {
             v: {"map": [], "severe": [], "bimodality": [],
-                "lower": {m: [] for m in masses}, "upper": {m: [] for m in masses}}
+                "lower": {m: [] for m in masses}, "upper": {m: [] for m in masses},
+                "exceedance": {c: [] for c in thresholds}}
             for v in selected_vars
         }
         for month_id in ordered_months:
@@ -1297,7 +1302,10 @@ class _GridDataset:
                 block = self._prediction_month_block(
                     month_id, var_name, entity_indices, sample_indices
                 )  # (n_entity, n_samples) float64
-                cr = collapse(block, masses=masses, enforce_non_negative=enforce_non_negative)
+                cr = collapse(
+                    block, masses=masses, enforce_non_negative=enforce_non_negative,
+                    thresholds=thresholds,
+                )
                 # collapse already NaN-fills all-NaN rows — no explicit mask needed.
                 acc[var_name]["map"].append(cr.map)
                 acc[var_name]["severe"].append(cr.severe)
@@ -1305,6 +1313,8 @@ class _GridDataset:
                 for m in masses:
                     acc[var_name]["lower"][m].append(cr.lower(m))
                     acc[var_name]["upper"][m].append(cr.upper(m))
+                for c in thresholds:
+                    acc[var_name]["exceedance"][c].append(cr.exceedance[c])
 
         # An empty month selection (e.g. `time_ids=[]`) yields empty `(0, n_entity)` stats — the
         # old whole-grid path returned an empty DataFrame here, not a 500; `np.stack([])` would
@@ -1321,6 +1331,7 @@ class _GridDataset:
                 m: (_stack(acc[var_name]["lower"][m]), _stack(acc[var_name]["upper"][m]))
                 for m in masses
             }
+            exceedance = {c: _stack(acc[var_name]["exceedance"][c]) for c in thresholds}
             results.append(
                 self._create_series_value_dataframe(
                     var_name,
@@ -1330,6 +1341,7 @@ class _GridDataset:
                     hdi,
                     time_ids,
                     entity_ids,
+                    exceedance=exceedance,
                 )
             )
 
