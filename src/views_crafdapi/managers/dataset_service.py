@@ -785,7 +785,7 @@ class DatasetService:
             # S5/S6a) and read it back MMAP'd (S6b-1) — serving then pages per month.
             # S2 (#247, ADR-033 §2/§8): surface the run's declared identity/status. `status` is
             # producer-declared maturity (vpp ADR-013 / views-postprocessing#133); `None` until the
-            # producer stamps it. faoapi *surfaces* it (informational) — it is never a serving gate.
+            # producer stamps it. crafdapi *surfaces* it (informational) — it is never a serving gate.
             wire_prov = (first_state.get("metadata") or {}).get("provenance") or {}
             provenance = {
                 "file_id": manifest_file_id,

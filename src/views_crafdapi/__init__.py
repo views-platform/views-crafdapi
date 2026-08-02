@@ -1,9 +1,9 @@
 """VIEWS CRAF'd Prediction API — Python client and utilities.
 
-``FaoApiClient`` is the supported entry point for consumers (notebooks, scripts, external
-users): ``from views_crafdapi import FaoApiClient``.
+``CrafdApiClient`` is the supported entry point for consumers (notebooks, scripts, external
+users): ``from views_crafdapi import CrafdApiClient``.
 """
 
-from views_crafdapi.client import FaoApiClient
+from views_crafdapi.client import CrafdApiClient
 
-__all__ = ["FaoApiClient"]
+__all__ = ["CrafdApiClient"]

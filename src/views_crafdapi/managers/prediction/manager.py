@@ -2,7 +2,7 @@
 
 Fuses the read (serving) surface with the producer write/delete surface. The
 producer methods (upload_predictions / update_prediction_metadata /
-delete_prediction) are dead on the faoapi serving path (locked by
+delete_prediction) are dead on the crafdapi serving path (locked by
 tests/test_serving_isolation.py) and activate only in a write clone. The
 reader/writer *class* severance is deferred to the writer extraction (S12)."""
 import logging

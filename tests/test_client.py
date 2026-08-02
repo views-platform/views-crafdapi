@@ -3,12 +3,12 @@ from unittest.mock import patch, MagicMock
 import pandas as pd
 import pytest
 
-from views_crafdapi.client import FaoApiClient
+from views_crafdapi.client import CrafdApiClient
 
 
 @pytest.fixture
 def client():
-    return FaoApiClient("http://localhost:8080", "test-api-key")
+    return CrafdApiClient("http://localhost:8080", "test-api-key")
 
 
 def _mock_response(status_code: int = 200, json_data=None, text: str = ""):
@@ -22,23 +22,23 @@ def _mock_response(status_code: int = 200, json_data=None, text: str = ""):
 class TestExtractDetail:
     def test_json_detail(self):
         resp = _mock_response(json_data={"detail": "Not found"})
-        assert FaoApiClient._extract_detail(resp) == "Not found"
+        assert CrafdApiClient._extract_detail(resp) == "Not found"
 
     def test_json_no_detail(self):
         resp = _mock_response(json_data={"error": "oops"}, text="raw body")
-        assert FaoApiClient._extract_detail(resp) == "raw body"
+        assert CrafdApiClient._extract_detail(resp) == "raw body"
 
     def test_malformed_json(self):
         resp = MagicMock()
         resp.json.side_effect = ValueError("bad json")
         resp.text = "not json at all"
-        assert FaoApiClient._extract_detail(resp) == "not json at all"
+        assert CrafdApiClient._extract_detail(resp) == "not json at all"
 
     def test_truncates_long_text(self):
         resp = MagicMock()
         resp.json.side_effect = ValueError()
         resp.text = "x" * 500
-        result = FaoApiClient._extract_detail(resp)
+        result = CrafdApiClient._extract_detail(resp)
         assert len(result) == 300
 
 
@@ -213,22 +213,22 @@ class TestProvenance:
 class TestPackageExport:
     def test_faoapiclient_is_top_level_export(self):
         import views_crafdapi
-        from views_crafdapi import FaoApiClient as Exported
-        assert Exported is FaoApiClient
-        assert "FaoApiClient" in views_crafdapi.__all__
+        from views_crafdapi import CrafdApiClient as Exported
+        assert Exported is CrafdApiClient
+        assert "CrafdApiClient" in views_crafdapi.__all__
 
 
 class TestInit:
     def test_trailing_slash_stripped(self):
-        c = FaoApiClient("http://example.com/api/", "key")
+        c = CrafdApiClient("http://example.com/api/", "key")
         assert c._base_url == "http://example.com/api"
 
     def test_default_timeout(self):
-        c = FaoApiClient("http://example.com", "key")
+        c = CrafdApiClient("http://example.com", "key")
         assert c._timeout == 30.0
 
     def test_custom_timeout(self):
-        c = FaoApiClient("http://example.com", "key", timeout=60.0)
+        c = CrafdApiClient("http://example.com", "key", timeout=60.0)
         assert c._timeout == 60.0
 
 
@@ -236,7 +236,7 @@ class TestTimeout:
     @patch("views_crafdapi.client.requests.get")
     def test_health_passes_timeout(self, mock_get):
         mock_get.return_value = _mock_response(json_data={"status": "ok"})
-        c = FaoApiClient("http://localhost", "key", timeout=10.0)
+        c = CrafdApiClient("http://localhost", "key", timeout=10.0)
         c.health()
         assert mock_get.call_args[1]["timeout"] == 10.0
 
@@ -245,6 +245,6 @@ class TestTimeout:
         mock_get.return_value = _mock_response(
             json_data={"data": {"dataframe": {"a": [1]}}}
         )
-        c = FaoApiClient("http://localhost", "key", timeout=15.0)
+        c = CrafdApiClient("http://localhost", "key", timeout=15.0)
         c.fetch_subset("country", [540], "NGA")
         assert mock_get.call_args[1]["timeout"] == 15.0

@@ -95,7 +95,7 @@ class _GridDataset:
             raise ValueError("Dataframe is empty or not a valid DataFrame")
         # Permanent input-normalization shim (register C-61): upstream still carries a mixed
         # `priogrid_gid` / `priogrid_id` vocabulary — 774 platform parquet files bake `priogrid_gid`
-        # into their Arrow schema (C-62/C-63) — so faoapi normalizes to `priogrid_id` at the boundary.
+        # into their Arrow schema (C-62/C-63) — so crafdapi normalizes to `priogrid_id` at the boundary.
         # This is a stable input contract, NOT a temporary hack to be removed.
         if dataframe.index.names[1] == "priogrid_gid":
             logger.warning(
@@ -777,7 +777,7 @@ class _GridDataset:
         Prediction mode -> ``{var: PredictionFrame (N, S)}``; feature/historical mode ->
         ``{var: TargetFrame (N, 1)}``, both at ``SpatialLevel.PGM``. Rows follow the sorted
         ``(time, entity)`` index. Geography is **not** embedded (views-frames ADR-013/014) —
-        it lives in faoapi's separate geo-metadata table and is injected at aggregation.
+        it lives in crafdapi's separate geo-metadata table and is injected at aggregation.
         """
         time = self.dataframe.index.get_level_values(self._time_id).to_numpy()
         unit = self.dataframe.index.get_level_values(self._entity_id).to_numpy()

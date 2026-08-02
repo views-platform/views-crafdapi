@@ -45,7 +45,7 @@ _GridDataset  (generic (time, entity)-grid sample dataset; the frame-native comp
 
 ### `_GridDataset` (generic base)
 
-Base class for all faoapi datasets providing common functionality (no FAO geography).
+Base class for all crafdapi datasets providing common functionality (no FAO geography).
 
 #### Properties
 

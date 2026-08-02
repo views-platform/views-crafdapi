@@ -1,7 +1,7 @@
 """Build the injected `(time, priogrid) -> target_unit` mapping for cross-level aggregation.
 
 views-frames does the conservation-correct joint-sum but never owns geography — the consumer
-injects the mapping (ADR-014). This module derives that mapping from faoapi's geo-metadata
+injects the mapping (ADR-014). This module derives that mapping from crafdapi's geo-metadata
 table. Target unit ids must be integers (the leaf's `SpatioTemporalIndex.unit` is an integer
 array); string level codes (e.g. `country_iso_a3`) are factorized to a stable integer space,
 and the original codes are returned so the caller can re-attach human-readable labels.

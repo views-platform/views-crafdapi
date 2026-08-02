@@ -4,7 +4,7 @@ Split from a single ``handlers.py`` (epic #325, story S11), one main class per
 module, mirroring the ``appwrite/`` (S9) and ``prediction/`` (S10) packages:
 
 * :mod:`.grid_dataset`     — ``_GridDataset``, the geo-less ``(N, S)`` compute-core base
-* :mod:`.forecast_dataset` — ``ForecastDataset``, the faoapi forecast facade
+* :mod:`.forecast_dataset` — ``ForecastDataset``, the crafdapi forecast facade
 
 The persisted VALUE-format constants moved out to :mod:`views_crafdapi.data.value_format`
 (a stable leaf) so ``managers/disk_cache`` and the wire reader no longer import a

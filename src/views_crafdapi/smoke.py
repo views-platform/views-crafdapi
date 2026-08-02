@@ -26,7 +26,7 @@ from typing import Callable, List, Optional
 
 import requests
 
-from views_crafdapi.client import FaoApiClient
+from views_crafdapi.client import CrafdApiClient
 from views_crafdapi.time import date_to_month_id
 
 _DEFAULT_URL = "https://crafdapi.viewsforecasting.org"
@@ -77,7 +77,7 @@ def check_version(base: str, expect_tag: Optional[str] = None, timeout: float = 
     return Result("version", True, detail)
 
 
-def check_health(client: FaoApiClient) -> Result:
+def check_health(client: CrafdApiClient) -> Result:
     try:
         h = client.health()
     except Exception as e:  # RuntimeError (non-200) or a connection error
@@ -99,7 +99,7 @@ def fetch_retry_once(fetch: Callable, on_retry: Callable[[], None] = lambda: Non
         return fetch()
 
 
-def check_coverage(client: FaoApiClient, level: str, month: int, country: str,
+def check_coverage(client: CrafdApiClient, level: str, month: int, country: str,
                    data_type: str, features: Optional[List[str]] = None) -> Result:
     name = f"{data_type} coverage[{country}]"
     try:
@@ -114,7 +114,7 @@ def check_coverage(client: FaoApiClient, level: str, month: int, country: str,
     return Result(name, n > 0 and present, f"{n:,} cells, {country} present={present}")
 
 
-def check_warm(client: FaoApiClient, level: str, month: int, country: str,
+def check_warm(client: CrafdApiClient, level: str, month: int, country: str,
                data_type: str, features: Optional[List[str]] = None, threshold_s: float = 15.0) -> Result:
     """A second call should be fast (warm) — proves the warm-up actually took."""
     t0 = time.monotonic()
@@ -132,7 +132,7 @@ def run(base: str, key: str, *, expect_tag: Optional[str], forecast_month: int, 
     if not key:
         results.append(Result("auth", False, f"{_KEY_ENV} not set — cannot run authed checks"))
         return results
-    client = FaoApiClient(base, key, timeout=timeout)
+    client = CrafdApiClient(base, key, timeout=timeout)
     results.append(check_health(client))
     # The two coverage calls are also the cold-load warm-up (forecast, then historical).
     results.append(check_coverage(client, "country", forecast_month, country, "forecast", ["pred_lr_ged_sb"]))

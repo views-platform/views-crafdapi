@@ -1,4 +1,4 @@
-"""The admin-level vocabulary and cell→level resolution for faoapi's geo-metadata table.
+"""The admin-level vocabulary and cell→level resolution for crafdapi's geo-metadata table.
 
 Single source of truth for which metadata column identifies each served level and which
 extra columns each level carries into output. Extracted from `ForecastDataset` (Phase 3 of

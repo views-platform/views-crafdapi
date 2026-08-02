@@ -1,10 +1,10 @@
-"""Construct views-frames value objects from faoapi's in-memory sample arrays (#88).
+"""Construct views-frames value objects from crafdapi's in-memory sample arrays (#88).
 
 A `PredictionFrame` carries one variable's `(N, S)` posterior samples; a `TargetFrame` one
 variable's `(N, 1)` observed values. Geography is deliberately NOT embedded (views-frames
-ADR-013 scalar-only metadata / ADR-014 geography injected) — it rides in faoapi's separate
+ADR-013 scalar-only metadata / ADR-014 geography injected) — it rides in crafdapi's separate
 geo-metadata table and is injected at aggregation time. This module is the single place
-faoapi turns its sample arrays into the frozen leaf's frame types.
+crafdapi turns its sample arrays into the frozen leaf's frame types.
 """
 
 import numpy as np
