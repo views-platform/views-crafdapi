@@ -33,7 +33,7 @@ dependencies = [
     "cachetools==6.2.1",
     "filelock>=3.20.3",
     # Runtime: the validated MAP/HDI estimator (tower_point/hdi_tower) + frame transport.
-    "views-frames>=1.9.0,<2",
+    "views-frames>=1.10.2,<2",
 ]
 
 [build-system]
