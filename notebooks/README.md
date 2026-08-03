@@ -1,6 +1,6 @@
-# `views-faoapi` notebooks
+# `views-crafdapi` notebooks
 
-Worked examples for the FAO Forecast API — how to **call the service**, **visualize** what it
+Worked examples for the CRAF'd Forecast API — how to **call the service**, **visualize** what it
 returns, and **reproduce its analytics offline** on synthetic data.
 
 The API serves a **global** forecast (every land PRIO-GRID cell worldwide) and global
@@ -59,7 +59,7 @@ cp .env.example .env        # then set APPWRITE_DATASTORE_API_KEY (request one f
 
 - **Getting a key:** request an `APPWRITE_DATASTORE_API_KEY` from the VIEWS team
   (<https://viewsforecasting.org> / your FAO–VIEWS point of contact). Base URL:
-  `https://faoapi.viewsforecasting.org`.
+  `https://crafdapi.viewsforecasting.org`.
 - **Which run am I looking at?** Call `GET /provenance/{forecast|historical}` (or, in a notebook,
   `client.provenance("forecast")`) — it returns the run id, creation time, and methodology version.
   A new forecast run is published periodically and supersedes the previous one, so **record the run

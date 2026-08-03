@@ -5,8 +5,8 @@
 # branch tip. Rollback is one line: write the previous tag, restart the service.
 # systemd runs this as ExecStartPre, so every service (re)start passes the gate.
 #
-#   deploy:   echo v1.0.1 > ~/.views-crafdapi-deploy-tag && sudo systemctl restart views-crafdapi
-#   rollback: echo v1.0.0 > ~/.views-crafdapi-deploy-tag && sudo systemctl restart views-crafdapi
+#   deploy:   echo v0.1.1 > ~/.views-crafdapi-deploy-tag && sudo systemctl restart views-crafdapi
+#   rollback: echo v0.1.0 > ~/.views-crafdapi-deploy-tag && sudo systemctl restart views-crafdapi
 #
 # Fail-loud: a missing/empty tag file or an unknown tag stops the start entirely
 # (systemd shows the failure) rather than silently serving whatever is checked out.
@@ -18,7 +18,7 @@ TAG_FILE="${CRAFDAPI_DEPLOY_TAG_FILE:-$HOME/.views-crafdapi-deploy-tag}"
 
 if [ ! -s "$TAG_FILE" ]; then
     echo "FATAL deploy-gate: tag file missing or empty: $TAG_FILE" >&2
-    echo "  Write the release tag to it, e.g.:  echo v1.0.0 > $TAG_FILE" >&2
+    echo "  Write the release tag to it, e.g.:  echo v0.1.0 > $TAG_FILE" >&2
     exit 1
 fi
 

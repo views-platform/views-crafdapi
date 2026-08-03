@@ -25,11 +25,13 @@ class TestSystemdUnit:
     def test_start_passes_the_deploy_gate(self):
         assert "ExecStartPre=" in _UNIT and "checkout-deploy-tag.sh" in _UNIT
 
-    def test_serves_the_factory_app_on_localhost_8000(self):
+    def test_serves_the_factory_app_on_localhost_8001(self):
         assert "views_crafdapi.managers.api:create_app" in _UNIT
         assert "--factory" in _UNIT
         assert "--host 127.0.0.1" in _UNIT  # nginx upstream contract — never 0.0.0.0
-        assert "--port 8000" in _UNIT
+        # Port 8001, NOT 8000: crafdapi co-hosts with faoapi (:8000) on the same box;
+        # a shared port would make the two services' units collide (address in use).
+        assert "--port 8001" in _UNIT
 
     def test_self_heals_and_survives_reboot(self):
         assert "Restart=always" in _UNIT

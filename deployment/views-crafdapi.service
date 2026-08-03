@@ -24,7 +24,7 @@ EnvironmentFile=/home/views-crafdapi-deploy/.env.crafdapi
 ExecStartPre=/usr/bin/env bash /home/views-crafdapi-deploy/views-crafdapi/scripts/checkout-deploy-tag.sh
 ExecStart=/home/views-crafdapi-deploy/views-crafdapi/.venv/bin/uvicorn \
     views_crafdapi.managers.api:create_app \
-    --factory --host 127.0.0.1 --port 8000
+    --factory --host 127.0.0.1 --port 8001
 Restart=always
 RestartSec=5
 StandardOutput=journal
