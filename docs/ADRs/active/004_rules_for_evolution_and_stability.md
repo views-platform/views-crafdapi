@@ -80,7 +80,7 @@ A breaking change is any modification that would cause an existing, correctly-be
 
 As of 2026-06-02, the following trigger conditions from the original deferral are satisfied:
 
-- **External dependency exists:** The CRAF'd API is deployed in shadow mode at `faoapi.viewsforecasting.org` (Hetzner CPX52), serving the Complex Risk Analytics Fund (CRAF'd). Endpoint URLs and response schemas are committed external contracts.
+- **External dependency exists:** The CRAF'd API is deployed in shadow mode at `crafdapi.viewsforecasting.org` (Hetzner CPX52), serving the Complex Risk Analytics Fund (CRAF'd). Endpoint URLs and response schemas are committed external contracts.
 - **Breaking changes have cost:** The CrafdApiManager CIC identifies endpoint URL patterns and per-API-key isolation as "core architectural commitments" (Section 11). Multiple CICs declare stable vs. candidate-for-change components.
 - **Contributors need clarity:** 11 disagreements (D-01 through D-11) in the risk register reflect uncertainty about what is safe to change.
 

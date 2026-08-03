@@ -22,7 +22,7 @@ REPO_DIR="${SVC_HOME}/views-crafdapi"
 # origin — a personal laptop dotenv grepped for credentials — is gone. Override the registry
 # path with APPWRITE_REGISTRY if the pinned checkout lives elsewhere on the box.
 APPWRITE_REGISTRY="${APPWRITE_REGISTRY:-${SVC_HOME}/views-appwrite/docs/ADRs/platform/coordinate_registry.toml}"
-RELEASE_TAG="${RELEASE_TAG:-v1.0.0}"
+RELEASE_TAG="${RELEASE_TAG:-v0.1.0}"
 
 part1() {
     echo "== Part 1: service account + deploy key =="

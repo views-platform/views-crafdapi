@@ -1,163 +1,203 @@
-> **⚠ INHERITED FROM views-faoapi — NOT YET RETARGETED. DO NOT RUN AGAINST CRAF'd.**
-> Every command below (`cd ~/…/views-faoapi`, `systemctl restart views-faoapi`,
-> `~/.views-faoapi-deploy-tag`, `curl faoapi.viewsforecasting.org`) targets the **live
-> production FAO API** — running it from this repo would disrupt a different, UN-facing
-> service. A crafd-specific release runbook is written in **S11** (needs the real crafd
-> host/DNS/service, which do not exist yet). Until then this file is reference only.
-
-# Release runbook — bringing production up to date, properly
+# Release runbook — deploying views-crafdapi (co-hosted with faoapi)
 
 *Written to be read by a human. One session, about an hour. Every step says what
-you type, what you should see, and how to undo it. If anything looks different
-from what's written here: stop, don't improvise — the old setup stays intact
-until the very last step, so stopping is always safe.*
+you type, what you should see, and how to undo it. crafdapi is deployed as a
+**second, independent service on the same box that already runs faoapi** — it
+never touches the faoapi service, so if anything looks wrong you can stop at any
+point and faoapi keeps serving untouched.*
 
 ---
 
 ## What this session does, in one paragraph
 
-The server currently runs old code from a personal account, updated by hand.
-After this session it runs the current release (`v1.0.0`) from its **own service
-account**, and every future update becomes two lines: write the new version
-number into a file, restart the service. Rolling back is the same two lines with
-the old version number. This is the same setup views-datafactory has used
-smoothly for months.
+The box (Hetzner CPX52) already runs the **FAO** API as the `views-faoapi` service
+on port **8000**, behind the reverse proxy at `faoapi.viewsforecasting.org`. This
+session stands up the **CRAF'd** API alongside it as a *separate* `views-crafdapi`
+service on port **8001**, under its **own service account** (`views-crafdapi-deploy`),
+its **own credentials file** (`.env.crafdapi`, CRAF'd coordinates + CRAF'd key —
+never faoapi's), reached at `crafdapi.viewsforecasting.org`. Every future update is
+two lines: write the new version into a file, restart the service. Rollback is the
+same two lines with the old version.
 
-## Before the session (all prepared already — just confirm)
+**Expect honest 503s at the end of this session — that is success, not failure.**
+The CRAF'd Appwrite bucket is still **empty** (the CRAF'd producer has not run its
+first delivery yet). So `/ping` and `/version` will pass, but the forecast and
+historical endpoints will **fail-visible with 503** until the first delivery lands.
+That is the designed behaviour (ADR-033): the API refuses to serve rather than
+serve nothing silently. Re-run the smoke test after the producer's first delivery
+to see it flip to serving real data.
 
-- [ ] The release request (`development` → `main`) is approved and merged, and
-      the tag `v1.0.0` exists. *(Prepared by the agent; you click approve.)*
-- [ ] You can SSH into the server and use `sudo`.
+## Before the session (confirm these first)
 
-*(FAO communication: sent the same evening, **after** verification succeeds — it is
-part of the maintainer's larger documentation package; FAO receives it the next
-working morning. The maintainer owns its content and timing.)*
+- [ ] The release (`development` → `main`) is merged and the tag **`v0.1.0`** exists
+      on `github.com/views-platform/views-crafdapi`. *(Prepared by the agent; you
+      click approve.)*
+- [ ] **DNS:** an `A` record for `crafdapi.viewsforecasting.org` points at the
+      **same box IP** as `faoapi.viewsforecasting.org`. *(Registrar action — do this
+      first; DNS can take time to propagate. `dig +short crafdapi.viewsforecasting.org`
+      should return the box IP before you start Step 5.)*
+- [ ] You can SSH into the box and use `sudo`.
+- [ ] You have the **CRAF'd** read-scoped serve key in your password manager
+      (`CRAFD_CALLER_API_KEY` / the crafd datastore-serve key — issued in S9). It is
+      **not** faoapi's key.
 
 ## The session
 
 ### Step 1 — copy the setup script over, create the account and key  *(~5 min)*
 
-First, from your **laptop** (your server address where `<server>` is — the same one
-you SSH to; it is deliberately not written in this file):
+From your **laptop** (`<box>` = the same address you SSH to; deliberately not written here):
 
 ```bash
-cd ~/Documents/scripts/views_platform/views-faoapi
-scp deployment/bootstrap.sh simon@<server>:/tmp/
+cd ~/Documents/scripts/views_platform/views-crafdapi
+scp deployment/bootstrap.sh simon@<box>:/tmp/crafd-bootstrap.sh
 ```
-
-*(Why scp: your account on the server has no GitHub access — only the new service
-account will get its own read-only key, in the next step. Your laptop's SSH access
-is all that's needed to deliver the one setup file.)*
 
 Then SSH in and run:
 
 ```bash
-bash /tmp/bootstrap.sh part1
+bash /tmp/crafd-bootstrap.sh part1
 ```
 
-You should see: `created user views-faoapi-deploy` and then a **public key**
-printed, with instructions.
+You should see `created user views-crafdapi-deploy` and a **public key** printed.
+*(This is a brand-new account, separate from `views-faoapi-deploy`. Nothing about
+faoapi changes.)*
 
 ### Step 2 — the one browser step  *(~3 min)*
 
-Open `github.com/views-platform/views-faoapi` → Settings → Deploy keys → *Add
+Open `github.com/views-platform/views-crafdapi` → Settings → Deploy keys → *Add
 deploy key*. Paste the printed key. **Do not** tick "write access". Save.
 
-*(This is what lets the server fetch code without anyone's personal GitHub
-credentials — the bus-factor fix.)*
+*(This lets the box fetch crafd code with its own read-only key — no personal
+GitHub credentials, and no sharing of faoapi's deploy key.)*
 
-### Step 3 — build the new deployment  *(terminal, ~10 min)*
+### Step 3 — build the deployment  *(terminal, ~10 min)*
 
-**Credentials now follow PLATFORM-001 (þing-01 #275), not a personal `.env`:** coordinates are
-**read** from the owned registry (`views-appwrite/docs/ADRs/platform/coordinate_registry.toml` —
-have a pinned checkout on the box, or set `APPWRITE_REGISTRY` to its path), and the **one secret**
-is supplied by **you, the operator**, in the environment — never sourced from anyone's `.env`:
+Coordinates are **read** from the owned registry
+(`views-appwrite/docs/ADRs/platform/coordinate_registry.toml` — have a pinned
+checkout on the box, or set `APPWRITE_REGISTRY` to its path); the registry supplies
+the **CRAF'd** coordinates (`APPWRITE_CRAFD_*`). The **one secret** is supplied by
+**you**, in the environment — never from anyone's `.env`:
 
 ```bash
-export APPWRITE_DATASTORE_API_KEY='<the key, from the password manager>'   # operator secret slot
-bash bootstrap.sh part2
+export APPWRITE_DATASTORE_API_KEY='<the CRAF'd serve key, from the password manager>'
+bash /tmp/crafd-bootstrap.sh part2
 ```
 
-You should see it clone the repo, install the toolchain, end with
-`deploy-gate: serving tag vX.Y.Z (…)` and
-`credentials file written (N APPWRITE_ lines: registry coordinates + 1 operator secret … expected >= 9)`.
-It **fails loud** if `APPWRITE_DATASTORE_API_KEY` is unset or the registry file is missing (that is
-the point — no silent copy-chain). If N is less than 9, or it aborts: **stop** — tell the agent;
-nothing has been switched.
+You should see it clone the repo at `v0.1.0`, install the toolchain, and end with
+`deploy-gate: serving tag v0.1.0 (…)` and a line confirming the credentials file
+was written (registry CRAF'd coordinates + 1 operator secret). It **fails loud** if
+`APPWRITE_DATASTORE_API_KEY` is unset or the registry file is missing. If it aborts:
+**stop** — tell the agent; nothing has been switched, and faoapi is untouched.
 
-### Step 4 — install the new service definition  *(terminal, ~2 min)*
+### Step 4 — install the service definition  *(terminal, ~2 min)*
 
 ```bash
-bash bootstrap.sh part3
+bash /tmp/crafd-bootstrap.sh part3
 ```
 
-You should see: `old unit preserved as views-faoapi-legacy.service` and
-`unit installed`. **Traffic has still not moved.**
+You should see `unit installed` for `views-crafdapi` (on port **8001**). There is no
+legacy unit to preserve — this is a new service. **No traffic reaches it yet** (the
+reverse proxy has no route to it until Step 5).
 
-### Step 5 — the switch  *(terminal, ~2 min)*
+### Step 5 — add the reverse-proxy route  *(terminal, ~5 min)*
+
+The box already terminates TLS and proxies `faoapi.viewsforecasting.org` → `127.0.0.1:8000`.
+Add a sibling vhost for crafd → `127.0.0.1:8001`. Use whichever proxy the box runs:
+
+**If nginx** — create `/etc/nginx/sites-available/crafdapi` (mirror the faoapi vhost,
+changing the server_name and port), enable it, and reload:
+
+```nginx
+server {
+    server_name crafdapi.viewsforecasting.org;
+    location / {
+        proxy_pass http://127.0.0.1:8001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    # TLS: reuse certbot for this server_name, e.g.
+    #   sudo certbot --nginx -d crafdapi.viewsforecasting.org
+}
+```
 
 ```bash
-sudo systemctl restart views-faoapi
+sudo ln -s /etc/nginx/sites-available/crafdapi /etc/nginx/sites-enabled/crafdapi
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d crafdapi.viewsforecasting.org   # if TLS not already covered
+```
+
+**If Caddy** — add a block to the `Caddyfile` and reload:
+
+```
+crafdapi.viewsforecasting.org {
+    reverse_proxy 127.0.0.1:8001
+}
+```
+```bash
+sudo systemctl reload caddy
+```
+
+*(Caddy provisions TLS automatically; nginx needs the certbot line. Confirm with the
+agent which proxy is on the box if unsure — `systemctl status nginx caddy`.)*
+
+### Step 6 — the switch  *(terminal, ~2 min)*
+
+```bash
+sudo systemctl enable --now views-crafdapi
 sleep 5
-sudo systemctl status views-faoapi --no-pager | head -12
+sudo systemctl status views-crafdapi --no-pager | head -12
 ```
 
-You should see `active (running)` and, in the log lines,
-`deploy-gate: serving tag v1.0.0`.
+You should see `active (running)` and, in the log lines, `deploy-gate: serving tag v0.1.0`.
 
-### Step 6 — verify together  *(terminal + browser, ~10 min)*
+### Step 7 — verify together  *(terminal, ~10 min)*
 
 ```bash
-curl -s https://faoapi.viewsforecasting.org/ping        # -> {"status":"ok"}
-curl -s https://faoapi.viewsforecasting.org/version     # -> "1.0.0" + the tag
-sudo systemctl kill views-faoapi && sleep 8
-curl -s -o /dev/null -w '%{http_code}\n' https://faoapi.viewsforecasting.org/ping   # -> 200 (it healed itself)
+curl -s https://crafdapi.viewsforecasting.org/ping        # -> {"status":"ok"}
+curl -s https://crafdapi.viewsforecasting.org/version     # -> "0.1.0" + the tag
 ```
 
-Then run the **post-deploy smoke test** — it verifies the live service (build,
-Appwrite, and that historical **and** forecast serve with global coverage) *and*
-warms the caches, so the first real consumer call is fast instead of timing out:
+Then the smoke test. **Read this before you run it:** because the CRAF'd bucket is
+empty, the forecast/historical coverage checks will report **503 (fail-visible)** —
+that is **expected and correct** until the producer's first delivery, *not* a broken
+deploy. What must pass now is `ping` and `version = 0.1.0`.
 
 ```bash
-# from the deploy checkout, with a caller/read-scoped key exported
-APPWRITE_DATASTORE_API_KEY=<caller key> .venv/bin/python scripts/smoke.py --expect-tag v1.0.0
+# from the deploy checkout, with the CRAF'd caller/read-scoped key exported
+APPWRITE_DATASTORE_API_KEY=<CRAF'd caller key> .venv/bin/python scripts/smoke.py --expect-tag v0.1.0
 ```
 
-Expect `ALL PASS`. The two coverage calls do the one-time cache rebuild (~2-3 min
-on a cold server); the `warm check` line confirms the second call is fast. A `FAIL`
-on `historical`/`forecast coverage` means a scope regression (e.g. a regional
-historical); a `version` FAIL means the build didn't switch. (It warms only the
-key it runs with — per-key cache; pass the caller key you want warmed.)
+Expect: `ping` PASS, `version` PASS; `historical`/`forecast coverage` reporting the
+honest 503. If instead `/ping` fails, `/version` is wrong, or the service crash-loops
+(`journalctl -u views-crafdapi -f`), **stop** and tell the agent. **After the
+producer's first delivery, re-run this line — it should then read `ALL PASS`** and
+the caches warm.
 
-### Step 7 — the alarm  *(browser, ~10 min)*
+### Step 8 — the alarm  *(browser, ~10 min)*
 
-Register `https://faoapi.viewsforecasting.org/ping` on the uptime monitor
-(same account datafactory uses), alert to your email, and fire its test alert.
-From today, if the API ever goes down, **you get told** — nobody discovers it
-from a broken notebook again.
+Register `https://crafdapi.viewsforecasting.org/ping` on the uptime monitor (the same
+account faoapi/datafactory use), alert to your email, fire its test alert. `/ping`
+stays green even while forecasts 503 — it tracks liveness, not data-readiness.
 
 ## If anything went wrong — the undo
 
+crafdapi is a wholly separate service; undo cannot affect faoapi:
+
 ```bash
-sudo cp /etc/systemd/system/views-faoapi-legacy.service /etc/systemd/system/views-faoapi.service
-sudo systemctl daemon-reload && sudo systemctl restart views-faoapi
+sudo systemctl disable --now views-crafdapi
+sudo rm -f /etc/nginx/sites-enabled/crafdapi   # nginx; or remove the Caddy block
+sudo systemctl reload nginx                     # or: reload caddy
 ```
 
-That is the exact pre-session setup, byte for byte. Then tell the agent what
-you saw.
-
-## After the session (agent, solo — nothing from you)
-
-Close out the deployment epic paperwork, tell the other repos the guard is live
-(which un-freezes the forecast-delivery work everywhere), and retire the old
-personal-account deployment leftovers at the next opportunity.
+faoapi (`views-faoapi` on :8000) is untouched throughout. Then tell the agent what you saw.
 
 ## Every future release, forever after
 
 ```bash
-echo v1.0.1 | sudo -u views-faoapi-deploy tee /home/views-faoapi-deploy/.views-faoapi-deploy-tag
-sudo systemctl restart views-faoapi
-APPWRITE_DATASTORE_API_KEY=<caller key> .venv/bin/python scripts/smoke.py --expect-tag v1.0.1  # verify + warm
+echo v0.1.1 | sudo -u views-crafdapi-deploy tee /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
+sudo systemctl restart views-crafdapi
+APPWRITE_DATASTORE_API_KEY=<CRAF'd caller key> .venv/bin/python scripts/smoke.py --expect-tag v0.1.1  # verify + warm
 ```
 
 Rollback: same three lines, previous number.
