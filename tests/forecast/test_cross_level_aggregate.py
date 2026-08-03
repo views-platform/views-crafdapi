@@ -6,10 +6,10 @@ import pandas as pd
 import pytest
 from views_frames import SpatialLevel
 
-from views_faoapi.data.handlers import FAO_PGMDataset
-from views_faoapi.forecast.aggregate.cross_level import aggregate_via_leaf, elementwise_sum
-from views_faoapi.forecast.geography.level_mapping import build_cell_to_unit_mapping
-from views_faoapi.forecast.geography.metadata_table import (
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.forecast.aggregate.cross_level import aggregate_via_leaf, elementwise_sum
+from views_crafdapi.forecast.geography.level_mapping import build_cell_to_unit_mapping
+from views_crafdapi.forecast.geography.metadata_table import (
     LEVELS,
     resolve_level_cells,
 )
@@ -25,7 +25,7 @@ def test_levels_vocabulary():
 
 
 def test_build_mapping_integer_level_passes_codes_through():
-    ds = FAO_PGMDataset(make_fao_df(seed=2))
+    ds = ForecastDataset(make_fao_df(seed=2))
     keys, vals, lookup = build_cell_to_unit_mapping(ds.geo_metadata, "admin1_gaul0_code")
     assert keys.shape[1] == 2 and keys.shape[0] == len(ds.geo_metadata)
     assert lookup is None  # integer codes are the unit ids directly
@@ -33,7 +33,7 @@ def test_build_mapping_integer_level_passes_codes_through():
 
 
 def test_build_mapping_string_level_factorizes():
-    ds = FAO_PGMDataset(make_fao_df(seed=2))
+    ds = ForecastDataset(make_fao_df(seed=2))
     keys, vals, lookup = build_cell_to_unit_mapping(ds.geo_metadata, "country_iso_a3")
     assert lookup is not None  # ISO3 strings -> integer unit space
     assert set(lookup.values()) == {"AAA", "BBB"}
@@ -41,7 +41,7 @@ def test_build_mapping_string_level_factorizes():
 
 
 def test_resolve_level_cells():
-    ds = FAO_PGMDataset(make_fao_df(seed=2))
+    ds = ForecastDataset(make_fao_df(seed=2))
     cells = resolve_level_cells(ds.geo_metadata, "admin1_gaul0_code", 10, "priogrid_id")
     assert set(cells) == {100, 101}  # fixture: cells 100,101 -> gaul0 code 10
 

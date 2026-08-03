@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from views_faoapi.forecast.ingestion.dense_grid import fill_dense_grid
-from views_faoapi.forecast.ingestion.parquet_reader import to_array_columns
-from views_faoapi.forecast.ingestion.plausibility import (
+from views_crafdapi.forecast.ingestion.dense_grid import fill_dense_grid
+from views_crafdapi.forecast.ingestion.parquet_reader import to_array_columns
+from views_crafdapi.forecast.ingestion.plausibility import (
     assert_geo_metadata_plausible,
     assert_prediction_samples_plausible,
 )

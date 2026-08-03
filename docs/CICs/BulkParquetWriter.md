@@ -61,7 +61,7 @@ ADR-025 columns; 33 base + per-series bimodality_flag = **36**). `build_bulk_tab
 
 ## 7. Boundaries and Interactions
 
-- **Composed by** `FAOApiManager` (`GET /data/forecast/bulk`).
+- **Composed by** `CrafdApiManager` (`GET /data/forecast/bulk`).
 - **Depends on** `ForecastDataset.calculate_hdi_map`, `serialize.schema`, `serialize.json_contract`.
 
 ## 8. Test Alignment

@@ -59,11 +59,11 @@ def test_nonfinite_prediction_is_rejected(tmp_path):
 
 
 # ── C-72 metadata facet: geographic-metadata plausibility ───────────────────────
-from views_faoapi.data.handlers import FAO_PGMDataset  # noqa: E402
+from views_crafdapi.data.handlers import ForecastDataset  # noqa: E402
 
 
 def _ds(seed=3):
-    return FAO_PGMDataset(make_fao_df(n_cells=4, n_months=2, n_samples=5, seed=seed))
+    return ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=5, seed=seed))
 
 
 def _ds_iso3(iso3_by_pos, seed=3):
@@ -75,7 +75,7 @@ def _ds_iso3(iso3_by_pos, seed=3):
     loc = df.columns.get_loc("country_iso_a3")
     for pos, val in iso3_by_pos.items():
         df.iloc[pos, loc] = val
-    return FAO_PGMDataset(df)
+    return ForecastDataset(df)
 
 
 def test_metadata_plausibility_passes_on_good_fixture():

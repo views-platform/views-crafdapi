@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 from appwrite.exception import AppwriteException
 
-from views_faoapi.managers.appwrite import (
+from views_crafdapi.managers.appwrite import (
     ApiKeyAuth,
     AppwriteConfig,
     AppWriteFileManager,
@@ -79,7 +79,7 @@ def api_key_config(mock_path_manager):
 @pytest.fixture
 def mock_client():
     """Mock Appwrite Client"""
-    with patch("views_faoapi.managers.appwrite.manager.Client") as mock:
+    with patch("views_crafdapi.managers.appwrite.manager.Client") as mock:
         client = mock.return_value
         client.set_endpoint.return_value = client
         client.set_project.return_value = client
@@ -93,14 +93,14 @@ def mock_client():
 @pytest.fixture
 def mock_storage():
     """Mock Storage service"""
-    with patch("views_faoapi.managers.appwrite.manager.Storage") as mock:
+    with patch("views_crafdapi.managers.appwrite.manager.Storage") as mock:
         yield mock.return_value
 
 
 @pytest.fixture
 def mock_databases():
     """Mock Databases service"""
-    with patch("views_faoapi.managers.appwrite.manager.Databases") as mock:
+    with patch("views_crafdapi.managers.appwrite.manager.Databases") as mock:
         yield mock.return_value
 
 
@@ -115,10 +115,10 @@ def temp_cache_dir(tmp_path):
 @pytest.fixture
 def file_manager(api_key_config):
     """AppWriteFileManager with API key auth and all SDK services mocked."""
-    with patch("views_faoapi.managers.appwrite.manager.Client"), \
-         patch("views_faoapi.managers.appwrite.manager.Storage"), \
-         patch("views_faoapi.managers.appwrite.manager.Databases"), \
-         patch("views_faoapi.managers.appwrite.manager.Users"):
+    with patch("views_crafdapi.managers.appwrite.manager.Client"), \
+         patch("views_crafdapi.managers.appwrite.manager.Storage"), \
+         patch("views_crafdapi.managers.appwrite.manager.Databases"), \
+         patch("views_crafdapi.managers.appwrite.manager.Users"):
         yield AppWriteFileManager(api_key_config)
 
 
@@ -196,10 +196,10 @@ class TestTimeoutInjection:
     @pytest.fixture
     def timeout_manager(self, api_key_config):
         """AppWriteFileManager with real Client (for timeout tests) but mocked auth/services."""
-        with patch("views_faoapi.managers.appwrite.manager.Storage"), \
-             patch("views_faoapi.managers.appwrite.manager.Databases"), \
-             patch("views_faoapi.managers.appwrite.manager.Users"), \
-             patch("views_faoapi.managers.appwrite.manager.AuthFactory") as MockAuthFactory:
+        with patch("views_crafdapi.managers.appwrite.manager.Storage"), \
+             patch("views_crafdapi.managers.appwrite.manager.Databases"), \
+             patch("views_crafdapi.managers.appwrite.manager.Users"), \
+             patch("views_crafdapi.managers.appwrite.manager.AuthFactory") as MockAuthFactory:
             MockAuthFactory.create_auth.return_value.setup.return_value = OperationResult(
                 success=True, data={}, code="OK"
             )
@@ -393,7 +393,7 @@ class TestMetadataManager:
         return MetadataManager(mock_databases, api_key_config)
 
     def test_create_database_if_not_exists_new(self, metadata_manager, mock_databases, monkeypatch):
-        monkeypatch.setenv("FAOAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
+        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
         mock_databases.list.return_value = _sdk_result(databases=[])
         mock_databases.create.return_value = _sdk_result(
             **{"$id": "file_metadata", "name": "File Metadata"}
@@ -493,7 +493,7 @@ class TestAppWriteFileManager:
             **{"$id": "file123", "name": "test.txt", "sizeOriginal": 12}
         )
 
-        with patch("views_faoapi.managers.appwrite.manager.InputFile"):
+        with patch("views_crafdapi.managers.appwrite.manager.InputFile"):
             result = file_manager.upload_file(
                 "bucket1",
                 str(test_file),
@@ -533,7 +533,7 @@ class TestAppWriteFileManager:
             **{"$id": "file123", "name": "test.txt", "sizeOriginal": len(test_content)}
         )
         
-        with patch("views_faoapi.managers.appwrite.manager.InputFile"):
+        with patch("views_crafdapi.managers.appwrite.manager.InputFile"):
             result = file_manager.upload_file_from_bytes(
                 "bucket1",
                 test_content,
@@ -639,7 +639,7 @@ class TestAppWriteFileManager:
         assert result.data["$id"] == "file123"
 
     def test_create_bucket(self, file_manager, monkeypatch):
-        monkeypatch.setenv("FAOAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
+        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
         file_manager.storage.create_bucket.return_value = _sdk_result(
             **{"$id": "new_bucket", "name": "New Bucket"}
         )
@@ -826,10 +826,10 @@ class TestAppWriteFileManager:
 # Test Error Handling
 class TestErrorHandling:
     def test_appwrite_exception_handling(self, api_key_config):
-        with patch("views_faoapi.managers.appwrite.manager.Client"), \
-             patch("views_faoapi.managers.appwrite.manager.Storage") as mock_storage, \
-             patch("views_faoapi.managers.appwrite.manager.Databases"), \
-             patch("views_faoapi.managers.appwrite.manager.Users"):
+        with patch("views_crafdapi.managers.appwrite.manager.Client"), \
+             patch("views_crafdapi.managers.appwrite.manager.Storage") as mock_storage, \
+             patch("views_crafdapi.managers.appwrite.manager.Databases"), \
+             patch("views_crafdapi.managers.appwrite.manager.Users"):
             
             manager = AppWriteFileManager(api_key_config)
             mock_storage.return_value.get_file.side_effect = AppwriteException(
@@ -900,7 +900,7 @@ class TestErrorHandling:
         test_file = tmp_path / "test.txt"
         test_file.write_text("test content")
 
-        with patch("views_faoapi.managers.appwrite.manager.InputFile"):
+        with patch("views_crafdapi.managers.appwrite.manager.InputFile"):
             result = file_manager.upload_file(
                 "bucket1", str(test_file), check_duplicates=False
             )
@@ -913,7 +913,7 @@ class TestErrorHandling:
             "Internal error", 500, "storage_internal"
         )
 
-        with patch("views_faoapi.managers.appwrite.manager.InputFile"):
+        with patch("views_crafdapi.managers.appwrite.manager.InputFile"):
             result = file_manager.upload_file_from_bytes(
                 "bucket1", b"test content", "test.txt", check_duplicates=False
             )
@@ -982,10 +982,10 @@ class TestAppwriteEnvVarValidation:
     _ALL_ENV = {
         "APPWRITE_ENDPOINT": "https://cloud.appwrite.io/v1",
         "APPWRITE_DATASTORE_PROJECT_ID": "proj_123",
-        "APPWRITE_UNFAO_BUCKET_ID": "bucket_123",
-        "APPWRITE_UNFAO_BUCKET_NAME": "my_bucket",
-        "APPWRITE_UNFAO_COLLECTION_ID": "coll_123",
-        "APPWRITE_UNFAO_COLLECTION_NAME": "my_coll",
+        "APPWRITE_CRAFD_BUCKET_ID": "bucket_123",
+        "APPWRITE_CRAFD_BUCKET_NAME": "my_bucket",
+        "APPWRITE_CRAFD_COLLECTION_ID": "coll_123",
+        "APPWRITE_CRAFD_COLLECTION_NAME": "my_coll",
         "APPWRITE_METADATA_DATABASE_ID": "db_123",
         "APPWRITE_METADATA_DATABASE_NAME": "my_db",
     }
@@ -995,14 +995,14 @@ class TestAppwriteEnvVarValidation:
         return lambda key, default=None: merged.get(key, default)
 
     def test_missing_env_var_raises_valueerror(self):
-        from views_faoapi.managers.api import _validate_appwrite_env
+        from views_crafdapi.managers.api import _validate_appwrite_env
         env = {**self._ALL_ENV, "APPWRITE_ENDPOINT": ""}
         with patch("os.getenv", side_effect=lambda key, default=None: env.get(key, default)):
             with pytest.raises(ValueError, match="APPWRITE_ENDPOINT"):
                 _validate_appwrite_env()
 
     def test_missing_multiple_env_vars_lists_all(self):
-        from views_faoapi.managers.api import _validate_appwrite_env
+        from views_crafdapi.managers.api import _validate_appwrite_env
         env = {**self._ALL_ENV, "APPWRITE_ENDPOINT": "", "APPWRITE_METADATA_DATABASE_ID": ""}
         with patch("os.getenv", side_effect=lambda key, default=None: env.get(key, default)):
             with pytest.raises(ValueError, match="APPWRITE_ENDPOINT") as exc_info:
@@ -1010,24 +1010,24 @@ class TestAppwriteEnvVarValidation:
             assert "APPWRITE_METADATA_DATABASE_ID" in str(exc_info.value)
 
     def test_missing_name_vars_raises(self):
-        from views_faoapi.managers.api import _validate_appwrite_env
-        env = {**self._ALL_ENV, "APPWRITE_UNFAO_BUCKET_NAME": ""}
+        from views_crafdapi.managers.api import _validate_appwrite_env
+        env = {**self._ALL_ENV, "APPWRITE_CRAFD_BUCKET_NAME": ""}
         with patch("os.getenv", side_effect=lambda key, default=None: env.get(key, default)):
-            with pytest.raises(ValueError, match="APPWRITE_UNFAO_BUCKET_NAME"):
+            with pytest.raises(ValueError, match="APPWRITE_CRAFD_BUCKET_NAME"):
                 _validate_appwrite_env()
 
     def test_all_env_vars_present_returns_dict(self):
-        from views_faoapi.managers.api import _validate_appwrite_env
+        from views_crafdapi.managers.api import _validate_appwrite_env
         with patch("os.getenv", side_effect=self._getenv()):
             env = _validate_appwrite_env()
         assert env["APPWRITE_ENDPOINT"] == "https://cloud.appwrite.io/v1"
         assert len(env) == 8
 
-    @patch("views_faoapi.managers.api.AppWriteFileManager")
+    @patch("views_crafdapi.managers.api.AppWriteFileManager")
     def test_create_appwrite_config_uses_all_eight_vars(self, mock_manager_cls):
-        from views_faoapi.managers.api import FAOApiManager
-        with patch.object(FAOApiManager, "__init__", lambda self: None):
-            mgr = FAOApiManager()
+        from views_crafdapi.managers.api import CrafdApiManager
+        with patch.object(CrafdApiManager, "__init__", lambda self: None):
+            mgr = CrafdApiManager()
         with patch("os.getenv", side_effect=self._getenv()):
             config = mgr._create_appwrite_config("test_key")
         assert config.endpoint == "https://cloud.appwrite.io/v1"
@@ -1038,13 +1038,13 @@ class TestAppwriteEnvVarValidation:
         assert config.database_name == "my_db"
 
     def test_init_validates_env_at_startup(self):
-        """FAOApiManager.__init__ calls _validate_appwrite_env after load_dotenv (ADR-013 Decision 3)."""
+        """CrafdApiManager.__init__ calls _validate_appwrite_env after load_dotenv (ADR-013 Decision 3)."""
         import ast
         import inspect
         import textwrap
-        from views_faoapi.managers.api import FAOApiManager
+        from views_crafdapi.managers.api import CrafdApiManager
 
-        init_source = textwrap.dedent(inspect.getsource(FAOApiManager.__init__))
+        init_source = textwrap.dedent(inspect.getsource(CrafdApiManager.__init__))
         tree = ast.parse(init_source)
         call_names = []
         for node in ast.walk(tree):
@@ -1052,7 +1052,7 @@ class TestAppwriteEnvVarValidation:
                 if isinstance(node.func, ast.Name):
                     call_names.append(node.func.id)
         assert "_validate_appwrite_env" in call_names, (
-            "FAOApiManager.__init__ does not call _validate_appwrite_env(). "
+            "CrafdApiManager.__init__ does not call _validate_appwrite_env(). "
             "Env var validation is deferred to first request, violating ADR-013 Decision 3."
         )
 
@@ -1102,7 +1102,7 @@ class TestNormalizationContract:
         file_manager.storage.create_file.return_value = _sdk_result(
             **{"$id": "file123", "name": "test.txt", "sizeOriginal": 12}
         )
-        with patch("views_faoapi.managers.appwrite.manager.InputFile"):
+        with patch("views_crafdapi.managers.appwrite.manager.InputFile"):
             result = file_manager.upload_file(
                 "bucket1", str(test_file), check_duplicates=False
             )
@@ -1142,22 +1142,22 @@ class TestProvisioningGate:
     so a missing/wrong coordinate on a serving path never silently creates phantom storage."""
 
     def test_require_provisioning_raises_by_default(self, monkeypatch):
-        monkeypatch.delenv("FAOAPI_ALLOW_PROVISIONING", raising=False)
+        monkeypatch.delenv("CRAFDAPI_ALLOW_PROVISIONING", raising=False)
         with pytest.raises(ProvisioningDisabledError, match=r"bucket 'x'"):
             _require_provisioning("bucket 'x'")
 
     def test_require_provisioning_passes_when_explicitly_enabled(self, monkeypatch):
-        monkeypatch.setenv("FAOAPI_ALLOW_PROVISIONING", "1")
+        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")
         assert _require_provisioning("bucket 'x'") is None  # no raise
 
     def test_create_bucket_refuses_provisioning_by_default(self, file_manager, monkeypatch):
-        monkeypatch.delenv("FAOAPI_ALLOW_PROVISIONING", raising=False)
+        monkeypatch.delenv("CRAFDAPI_ALLOW_PROVISIONING", raising=False)
         with pytest.raises(ProvisioningDisabledError, match="bucket"):
             file_manager.create_bucket("phantom_bucket", name="Phantom")
         file_manager.storage.create_bucket.assert_not_called()  # raised before touching the SDK
 
     def test_create_bucket_half_success_raises_all_or_raise(self, file_manager, monkeypatch):
-        monkeypatch.setenv("FAOAPI_ALLOW_PROVISIONING", "1")
+        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")
         file_manager.storage.create_bucket.return_value = _sdk_result(**{"$id": "b", "name": "B"})
         file_manager.metadata_manager.create_database_if_not_exists = Mock(
             return_value=OperationResult(success=False, error="db creation failed")
@@ -1169,7 +1169,7 @@ class TestProvisioningGate:
         # Characterisation guard (#276 step 1): serving/read modules must never call a create_*
         # helper — so the gate can never fire on a serving path, and gating cannot break serving.
         import pathlib
-        managers = pathlib.Path(__file__).parent.parent / "src" / "views_faoapi" / "managers"
+        managers = pathlib.Path(__file__).parent.parent / "src" / "views_crafdapi" / "managers"
         for mod in ("dataset_service.py", "api.py"):
             text = (managers / mod).read_text()
             for helper in ("create_bucket(", "create_database_if_not_exists(", "_create_attribute_by_type("):

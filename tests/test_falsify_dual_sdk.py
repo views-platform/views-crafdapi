@@ -10,7 +10,7 @@ import pytest
 from pydantic import BaseModel, Field
 from types import SimpleNamespace
 
-from views_faoapi.managers.appwrite import _get, _as_dict
+from views_crafdapi.managers.appwrite import _get, _as_dict
 
 pytestmark = pytest.mark.layer5_audit
 

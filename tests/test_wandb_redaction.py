@@ -1,4 +1,4 @@
-"""Characterization tests for ``views_faoapi.wandb.utils.wandb_alert`` (register C-60).
+"""Characterization tests for ``views_crafdapi.wandb.utils.wandb_alert`` (register C-60).
 
 Primary focus is the **security-relevant** behaviour: a server filesystem path
 (`models_path`) embedded in the alert text is redacted before the alert leaves
@@ -13,7 +13,7 @@ from unittest import mock
 import pytest
 import wandb
 
-from views_faoapi.wandb import utils as wandb_utils
+from views_crafdapi.wandb import utils as wandb_utils
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -88,7 +88,7 @@ class TestErrorsAreSwallowed:
         with mock.patch.object(wandb_utils.wandb, "run", mock.Mock()), mock.patch.object(
             wandb_utils.wandb, "alert", side_effect=wandb.errors.CommError("down")
         ):
-            with caplog.at_level(logging.ERROR, logger="views_faoapi.wandb.utils"):
+            with caplog.at_level(logging.ERROR, logger="views_crafdapi.wandb.utils"):
                 wandb_utils.wandb_alert(title="t", text="x", models_path="/p")  # no raise
         assert any("Communication error" in r.message for r in caplog.records)
 
@@ -96,7 +96,7 @@ class TestErrorsAreSwallowed:
         with mock.patch.object(wandb_utils.wandb, "run", mock.Mock()), mock.patch.object(
             wandb_utils.wandb, "alert", side_effect=wandb.errors.UsageError("bad")
         ):
-            with caplog.at_level(logging.ERROR, logger="views_faoapi.wandb.utils"):
+            with caplog.at_level(logging.ERROR, logger="views_crafdapi.wandb.utils"):
                 wandb_utils.wandb_alert(title="t", text="x", models_path="/p")
         assert any("Usage error" in r.message for r in caplog.records)
 

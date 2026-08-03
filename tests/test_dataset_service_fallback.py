@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from tests.conftest import make_fao_df
 from tests.forecast._wire_fixtures import make_wire_run
 from tests.test_dataset_service_wire import _service
-from views_faoapi.managers.prediction import SHARD_ARTIFACT_TYPE, SIDECAR_ARTIFACT_TYPE
+from views_crafdapi.managers.prediction import SHARD_ARTIFACT_TYPE, SIDECAR_ARTIFACT_TYPE
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -38,7 +38,7 @@ def _good_then_bad_manager(run, *, created_at):
     """
     state = {"phase": "good"}
     base_doc = {"filename": f"{run.run_id}__manifest.json", "type": "sampled_forecast_manifest",
-                "category": "forecast", "name": "un_fao", "$createdAt": created_at}
+                "category": "forecast", "name": "un_crafd", "$createdAt": created_at}
     good_doc = dict(base_doc, fileId="mani_good")
     bad_doc = dict(base_doc, fileId="mani_bad")
 

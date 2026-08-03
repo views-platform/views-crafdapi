@@ -5,20 +5,20 @@
 # branch tip. Rollback is one line: write the previous tag, restart the service.
 # systemd runs this as ExecStartPre, so every service (re)start passes the gate.
 #
-#   deploy:   echo v1.0.1 > ~/.views-faoapi-deploy-tag && sudo systemctl restart views-faoapi
-#   rollback: echo v1.0.0 > ~/.views-faoapi-deploy-tag && sudo systemctl restart views-faoapi
+#   deploy:   echo v0.1.1 > ~/.views-crafdapi-deploy-tag && sudo systemctl restart views-crafdapi
+#   rollback: echo v0.1.0 > ~/.views-crafdapi-deploy-tag && sudo systemctl restart views-crafdapi
 #
 # Fail-loud: a missing/empty tag file or an unknown tag stops the start entirely
 # (systemd shows the failure) rather than silently serving whatever is checked out.
-# The tag-file path matches src/views_faoapi/version.py (FAOAPI_DEPLOY_TAG_FILE),
+# The tag-file path matches src/views_crafdapi/version.py (CRAFDAPI_DEPLOY_TAG_FILE),
 # so GET /version reports the same tag this gate deployed.
 set -euo pipefail
 
-TAG_FILE="${FAOAPI_DEPLOY_TAG_FILE:-$HOME/.views-faoapi-deploy-tag}"
+TAG_FILE="${CRAFDAPI_DEPLOY_TAG_FILE:-$HOME/.views-crafdapi-deploy-tag}"
 
 if [ ! -s "$TAG_FILE" ]; then
     echo "FATAL deploy-gate: tag file missing or empty: $TAG_FILE" >&2
-    echo "  Write the release tag to it, e.g.:  echo v1.0.0 > $TAG_FILE" >&2
+    echo "  Write the release tag to it, e.g.:  echo v0.1.0 > $TAG_FILE" >&2
     exit 1
 fi
 
@@ -49,7 +49,7 @@ uv sync --frozen --no-dev --quiet
 # without bumping pyproject (or vice-versa) serves silently under the wrong label
 # (epic #100 postmortem). Convention: tag "vX.Y.Z" == package version "X.Y.Z".
 INSTALLED="$(uv run --frozen --no-dev --quiet python -c \
-    'from importlib.metadata import version; print(version("views-faoapi"))')"
+    'from importlib.metadata import version; print(version("views-crafdapi"))')"
 if [ "v$INSTALLED" != "$TAG" ]; then
     echo "FATAL deploy-gate: tag $TAG does not match package version v$INSTALLED" >&2
     echo "  Release tag and pyproject version have drifted — refusing to serve." >&2

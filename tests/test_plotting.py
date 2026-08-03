@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 from matplotlib import colors
 
-from views_faoapi.plotting import (
+from views_crafdapi.plotting import (
     reduce_list_values,
     prepare_values,
     shared_norm_from_dfs,
@@ -243,12 +243,12 @@ class TestBorderResolution:
     views-postprocessing/.../unfao/gaul_schema.py: xcoord = -180 + col*0.5 + 0.25)."""
 
     def test_default_resolution_is_detailed_not_coarse(self):
-        from views_faoapi import plotting
+        from views_crafdapi import plotting
         # guard against regressing the default back to the coarse 110m outline
         assert plotting._DEFAULT_BORDER_RESOLUTION == "10m"
 
     def test_borders_url_builds_and_validates(self):
-        from views_faoapi import plotting
+        from views_crafdapi import plotting
         assert plotting._borders_url("10m").endswith("10m_cultural/ne_10m_admin_0_countries.zip")
         assert "50m" in plotting._borders_url("50m")
         with pytest.raises(ValueError):
@@ -259,7 +259,7 @@ class TestBorderResolution:
         import geopandas as gpd
         import matplotlib.pyplot as plt
         from shapely.geometry import box
-        from views_faoapi import plotting
+        from views_crafdapi import plotting
 
         seen = {}
 
@@ -277,7 +277,7 @@ class TestBorderResolution:
     def test_borders_none_still_skips(self, monkeypatch):
         """`borders=None` must keep meaning SKIP (unchanged contract) — never hit the loader."""
         import matplotlib.pyplot as plt
-        from views_faoapi import plotting
+        from views_crafdapi import plotting
 
         called = {"n": 0}
         monkeypatch.setattr(plotting, "_load_borders",
@@ -291,7 +291,7 @@ class TestBorderResolution:
         """A repeated plot must not re-download the (up to ~24 MB) border file."""
         import geopandas as gpd
         from shapely.geometry import box
-        from views_faoapi import plotting
+        from views_crafdapi import plotting
 
         plotting._BORDERS_CACHE.clear()
         reads = {"n": 0}
@@ -313,7 +313,7 @@ class TestBorderResolution:
         import geopandas as gpd
         import numpy as np
         from shapely.geometry import Point
-        from views_faoapi import plotting
+        from views_crafdapi import plotting
 
         def somalia(res):
             url = plotting._borders_url(res)

@@ -1,6 +1,6 @@
-# `views-faoapi` notebooks
+# `views-crafdapi` notebooks
 
-Worked examples for the FAO Forecast API — how to **call the service**, **visualize** what it
+Worked examples for the CRAF'd Forecast API — how to **call the service**, **visualize** what it
 returns, and **reproduce its analytics offline** on synthetic data.
 
 The API serves a **global** forecast (every land PRIO-GRID cell worldwide) and global
@@ -25,14 +25,14 @@ coverage live for historical **and** forecast.
 
 | Notebook | Shows | Needs an API key? |
 |---|---|---|
-| [`01_quickstart.ipynb`](01_quickstart.ipynb) | The HTTP API end to end — authentication, a global-coverage check, historical + forecast subsetting (`pg`/`country`/`gaul0-2`), posterior samples, and HDI/MAP uncertainty (cell-level + aggregated). Data via `FaoApiClient`; `sample_idx` and `/analysis` shown as raw HTTP with an endpoint reference. | **Yes** (live API) |
-| [`02_visualization.ipynb`](02_visualization.ipynb) | PRIO-GRID pixel maps via `views_faoapi.plotting` — **global coverage maps (historical & forecast)**, single-month, shared-scale multi-month panels, all three features, regional GAUL-1 zooms, cross-country comparison. | **Yes** (live API) |
+| [`01_quickstart.ipynb`](01_quickstart.ipynb) | The HTTP API end to end — authentication, a global-coverage check, historical + forecast subsetting (`pg`/`country`/`gaul0-2`), posterior samples, and HDI/MAP uncertainty (cell-level + aggregated). Data via `CrafdApiClient`; `sample_idx` and `/analysis` shown as raw HTTP with an endpoint reference. | **Yes** (live API) |
+| [`02_visualization.ipynb`](02_visualization.ipynb) | PRIO-GRID pixel maps via `views_crafdapi.plotting` — **global coverage maps (historical & forecast)**, single-month, shared-scale multi-month panels, all three features, regional GAUL-1 zooms, cross-country comparison. | **Yes** (live API) |
 | [`03_offline_demo.ipynb`](03_offline_demo.ipynb) | The analytics the service performs — subsetting, HDI/MAP, geographic aggregation, a map — run **in-process on synthetic data** (`_synthetic.py`). | **No** |
 
 ## Conventions
 
-- **Public surface only** — the API client (`FaoApiClient`), the published helpers
-  (`views_faoapi.time`, `views_faoapi.plotting`), and the dataset class for the offline demo.
+- **Public surface only** — the API client (`CrafdApiClient`), the published helpers
+  (`views_crafdapi.time`, `views_crafdapi.plotting`), and the dataset class for the offline demo.
 - **No secrets, no real data committed** — cell outputs are stripped; the live-API notebooks
   read credentials from `.env`; `03` uses synthetic data with **fictional geography** (a toy
   lattice, fixed seed) so anyone can *Run All* with zero credentials.
@@ -59,7 +59,7 @@ cp .env.example .env        # then set APPWRITE_DATASTORE_API_KEY (request one f
 
 - **Getting a key:** request an `APPWRITE_DATASTORE_API_KEY` from the VIEWS team
   (<https://viewsforecasting.org> / your FAO–VIEWS point of contact). Base URL:
-  `https://faoapi.viewsforecasting.org`.
+  `https://crafdapi.viewsforecasting.org`.
 - **Which run am I looking at?** Call `GET /provenance/{forecast|historical}` (or, in a notebook,
   `client.provenance("forecast")`) — it returns the run id, creation time, and methodology version.
   A new forecast run is published periodically and supersedes the previous one, so **record the run

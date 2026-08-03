@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import FAO_PGMDataset
-from views_faoapi.managers.api import dataframe_to_dict
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.managers.api import dataframe_to_dict
 
 pytestmark = pytest.mark.layer2_data
 
@@ -30,7 +30,7 @@ _VIEWS = [
 
 
 def _canonical_served_output():
-    ds = FAO_PGMDataset(make_fao_df(n_cells=4, n_months=2, n_samples=32, seed=4242))
+    ds = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=32, seed=4242))
     out = {}
     for label, level, aggregate in _VIEWS:
         df = ds.calculate_hdi_map(alpha=0.9, level=level, aggregate=aggregate)

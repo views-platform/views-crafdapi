@@ -11,15 +11,15 @@ import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
-from views_faoapi.managers.api import FAOApiManager
-from views_faoapi.managers.disk_cache import FAODiskCacheManager
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.managers.api import CrafdApiManager
+from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager
 
 pytestmark = pytest.mark.layer4_infra
 
 
 def _make_manager(tmp_path):
-    return FAOApiManager.from_config({}, cache_dir=tmp_path / "datasets")
+    return CrafdApiManager.from_config({}, cache_dir=tmp_path / "datasets")
 
 
 def _make_dataset(seed=1):
@@ -138,7 +138,7 @@ class TestDiskPartitionIsolation:
         )
 
     def test_distinct_keys_get_distinct_partitions(self, tmp_path):
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
         cache.write("hash-alpha", "forecast", _make_dataset(1), "file-A")
         cache.write("hash-beta", "forecast", _make_dataset(2), "file-B")
         dirs = self._partition_dirs(tmp_path)
@@ -147,7 +147,7 @@ class TestDiskPartitionIsolation:
 
     def test_key_b_never_serves_key_a_content(self, tmp_path):
         """The core isolation guarantee: caller B never receives caller A's cached data."""
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
         cache.write("hash-alpha", "forecast", _make_dataset(1), "file-A")
         # B has written nothing under this category → a clean miss, never A's data.
         assert cache.read("hash-beta", "forecast") is None
@@ -169,7 +169,7 @@ class TestDiskPartitionIsolation:
     def test_partition_label_is_not_derivable_from_the_key_hash(self, tmp_path):
         """S5 (#323): the on-disk label is salted (HMAC) — not equal to the api_key_hash the
         caller's key maps to, so a filesystem observer cannot tie a partition to a key."""
-        cache = FAODiskCacheManager(tmp_path)
+        cache = CrafdDiskCacheManager(tmp_path)
         key_hash = "deadbeefdeadbeef"
         cache.write(key_hash, "forecast", _make_dataset(), "fid")
         label_dirs = [

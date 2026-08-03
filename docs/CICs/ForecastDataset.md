@@ -4,19 +4,19 @@
 **Owner:** Project maintainers
 **Last reviewed:** 2026-06-26
 **Related ADRs:** ADR-006 (this contract), ADR-021 (fill semantics), ADR-023 (re-baselining), ADR-024 (raw counts), ADR-025 (output schema); register C-81/C-87/C-136..C-142
-**Supersedes (as the public leaf):** `FAO_PGMDataset.md` (the class was renamed `FAO_PGMDataset → ForecastDataset` in Phase 4a of #87; `FAO_PGMDataset` is retained as a back-compat alias). See also `_GridDataset.md` (the renamed base class).
+**Supersedes (as the public leaf):** `ForecastDataset.md` (the class was renamed `ForecastDataset → ForecastDataset` in Phase 4a of #87; `ForecastDataset` is retained as a back-compat alias). See also `_GridDataset.md` (the renamed base class).
 
 ---
 
 ## 1. Purpose
 
-`ForecastDataset` is the faoapi forecast data facade: the single entry point the API layer uses to turn a loaded forecast/historical artifact (a PRIO-GRID × month grid carrying per-cell posterior samples + a 9-column GAUL geo-metadata table) into served HDI/MAP output. It is the renamed leaf of the `_ViewsDataset → _PGDataset → ForecastDataset` chain and **composes** the extracted single-responsibility modules under `src/views_faoapi/forecast/` (ingestion, frames, summarize, geography, aggregate, serialize), each of which it delegates to rather than re-implementing.
+`ForecastDataset` is the faoapi forecast data facade: the single entry point the API layer uses to turn a loaded forecast/historical artifact (a PRIO-GRID × month grid carrying per-cell posterior samples + a 9-column GAUL geo-metadata table) into served HDI/MAP output. It is the renamed leaf of the `_ViewsDataset → _PGDataset → ForecastDataset` chain and **composes** the extracted single-responsibility modules under `src/views_crafdapi/forecast/` (ingestion, frames, summarize, geography, aggregate, serialize), each of which it delegates to rather than re-implementing.
 
 ## 2. Non-Goals
 
 - It does **not** do I/O (no Appwrite, no file reads); it accepts an already-loaded DataFrame.
 - It does **not** apply or invert target transforms — values are raw counts as received (ADR-024).
-- It does **not** own HTTP/caching concerns (that is `FAOApiManager`).
+- It does **not** own HTTP/caching concerns (that is `CrafdApiManager`).
 - It does **not** re-implement the estimator/aggregation math — that is the frozen views-frames leaf via the `forecast/summarize` and `forecast/aggregate` modules.
 
 ## 3. Responsibilities and Guarantees
@@ -37,7 +37,7 @@
 - **Subsetting:** `get_subset_dataframe(...)` / `get_subset_tensor(...)` filter by time/entity/feature/sample.
 - **Frames:** `to_frames()` builds views-frames `PredictionFrame`/`TargetFrame` per target (#88).
 - **Cloning:** `copy()` returns an independent copy via the optimised `__deepcopy__` (shares the underlying numpy sample buffers — ≈1,700× faster than a true deepcopy at global scale; safe as long as cell contents are not mutated in place). This is the public clone API the serving layer uses (C-137).
-- **Back-compat:** `FAO_PGMDataset` is a module-level alias of `ForecastDataset`; existing disk-cache pickles (class path `data.handlers.FAO_PGMDataset`), `isinstance` checks, the test modules, and `notebooks/geo_meta.ipynb` continue to resolve. The `__init__` signature is unchanged, so the disk-cache schema version is unchanged.
+- **Back-compat:** `ForecastDataset` is a module-level alias of `ForecastDataset`; existing disk-cache pickles (class path `data.handlers.ForecastDataset`), `isinstance` checks, the test modules, and `notebooks/geo_meta.ipynb` continue to resolve. The `__init__` signature is unchanged, so the disk-cache schema version is unchanged.
 
 ## 4. Inputs and Assumptions
 
@@ -61,7 +61,7 @@
 ## 7. Boundaries and Interactions
 
 - **Depends on:** `forecast/` modules → `views_frames` / `views_frames_summarize` (the frozen leaf). Dependency direction is one-way toward the leaf (ADP/SDP).
-- **Called by:** `FAOApiManager._get_latest_dataframe` / `_get_latest_dataset`.
+- **Called by:** `CrafdApiManager._get_latest_dataframe` / `_get_latest_dataset`.
 
 ## 8. Test Alignment
 

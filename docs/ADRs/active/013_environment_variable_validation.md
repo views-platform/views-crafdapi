@@ -23,14 +23,14 @@ The 8 required environment variables are:
 |----------|---------|
 | `APPWRITE_ENDPOINT` | Appwrite server URL |
 | `APPWRITE_DATASTORE_PROJECT_ID` | Project ID for the datastore |
-| `APPWRITE_UNFAO_BUCKET_ID` | Storage bucket ID for prediction files |
-| `APPWRITE_UNFAO_BUCKET_NAME` | Storage bucket name (used in logging and metadata) |
-| `APPWRITE_UNFAO_COLLECTION_ID` | Collection ID for file metadata |
-| `APPWRITE_UNFAO_COLLECTION_NAME` | Collection name (used in logging and metadata) |
+| `APPWRITE_CRAFD_BUCKET_ID` | Storage bucket ID for prediction files |
+| `APPWRITE_CRAFD_BUCKET_NAME` | Storage bucket name (used in logging and metadata) |
+| `APPWRITE_CRAFD_COLLECTION_ID` | Collection ID for file metadata |
+| `APPWRITE_CRAFD_COLLECTION_NAME` | Collection name (used in logging and metadata) |
 | `APPWRITE_METADATA_DATABASE_ID` | Database ID for metadata storage |
 | `APPWRITE_METADATA_DATABASE_NAME` | Database name (used in logging and metadata) |
 
-The commented-out validation (`api.py:383-396`) only checked 5 of these 8 variables. It did not validate `APPWRITE_UNFAO_BUCKET_NAME`, `APPWRITE_UNFAO_COLLECTION_NAME`, or `APPWRITE_METADATA_DATABASE_NAME`. The restored validation must cover all 8.
+The commented-out validation (`api.py:383-396`) only checked 5 of these 8 variables. It did not validate `APPWRITE_CRAFD_BUCKET_NAME`, `APPWRITE_CRAFD_COLLECTION_NAME`, or `APPWRITE_METADATA_DATABASE_NAME`. The restored validation must cover all 8.
 
 ---
 
@@ -40,7 +40,7 @@ The commented-out validation (`api.py:383-396`) only checked 5 of these 8 variab
 
 2. **Validation must collect ALL missing variables and report them in a single error.** The system must not fail on the first missing variable and leave the operator to discover the remaining ones through repeated restart cycles.
 
-3. **Validation must run at app startup**, inside the `create_app()` -> `FAOApiManager.__init__()` -> first `_create_appwrite_config()` call path. It must not be deferred to the first data request.
+3. **Validation must run at app startup**, inside the `create_app()` -> `CrafdApiManager.__init__()` -> first `_create_appwrite_config()` call path. It must not be deferred to the first data request.
 
 4. **No `None` values may propagate into `AppwriteConfig` for required fields.** The `AppwriteConfig` constructor must receive validated, non-None string values for all 8 required parameters.
 
@@ -99,7 +99,7 @@ The commented-out validation (`api.py:383-396`) only checked 5 of these 8 variab
 
 1. **Commented-out validation replaced** with the module-level `_validate_appwrite_env()` function at `api.py:40-46` and `_REQUIRED_APPWRITE_ENV_VARS` constant at `api.py:28-37`. All 8 variables are validated. Missing vars produce a single `ValueError` listing all missing names, preceded by a `logger.critical()` call.
 
-2. **Validation called at startup** via `FAOApiManager.__init__()` at `api.py:208` and inside `_create_appwrite_config()` at `api.py:302`, which returns the validated env dict for direct use in `AppwriteConfig` construction.
+2. **Validation called at startup** via `CrafdApiManager.__init__()` at `api.py:208` and inside `_create_appwrite_config()` at `api.py:302`, which returns the validated env dict for direct use in `AppwriteConfig` construction.
 
 3. **`_REQUIRED_APPWRITE_ENV_VARS` is a module-level constant** at `api.py:28-37`, referenceable by tests and health checks.
 
@@ -117,7 +117,7 @@ The commented-out validation (`api.py:383-396`) only checked 5 of these 8 variab
 
 ## Open Questions
 
-- ~~Should `APPWRITE_UNFAO_BUCKET_NAME`, `APPWRITE_UNFAO_COLLECTION_NAME`, and `APPWRITE_METADATA_DATABASE_NAME` be truly required, or are they informational?~~ **Resolved (Sprint 2.5):** Decision 4 is authoritative — all 8 vars are required. The `_NAME` vars are used in Appwrite metadata queries and bucket listing, not just logging. Implementation now validates all 8.
+- ~~Should `APPWRITE_CRAFD_BUCKET_NAME`, `APPWRITE_CRAFD_COLLECTION_NAME`, and `APPWRITE_METADATA_DATABASE_NAME` be truly required, or are they informational?~~ **Resolved (Sprint 2.5):** Decision 4 is authoritative — all 8 vars are required. The `_NAME` vars are used in Appwrite metadata queries and bucket listing, not just logging. Implementation now validates all 8.
 - Should validation also check that `APPWRITE_ENDPOINT` is a valid URL format (e.g., starts with `https://`)? This would catch copy-paste errors but adds format validation beyond presence checking.
 - ~~Should the `REQUIRED_ENV_VARS` list be defined in a central configuration module rather than inside `_create_appwrite_config()`?~~ **Resolved (Sprint 2.5):** `_REQUIRED_APPWRITE_ENV_VARS` is now a module-level constant in `api.py`, referenced by tests and the standalone `_validate_appwrite_env()` function.
 

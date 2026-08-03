@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
+from views_crafdapi.data.handlers import ForecastDataset
 
 pytestmark = pytest.mark.layer2_data
 
@@ -24,7 +24,7 @@ def _ragged_wire_dataset(with_nan_geo):
     through to_value/from_value, which the make_fao_df corpus never covers (S6a / #208)."""
     from views_frames.io import arrow
 
-    from views_faoapi.forecast.ingestion import wire_reader
+    from views_crafdapi.forecast.ingestion import wire_reader
 
     from ._wire_fixtures import _build_sidecar, _sha256
 

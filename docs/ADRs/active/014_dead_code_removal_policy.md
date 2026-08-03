@@ -86,7 +86,7 @@ silent correctness bugs. A removal policy prevents this class of error.
 
 3. **`data/handlers.py`:** All commented-out code blocks removed. No commented-out function or class definitions remain.
 
-4. **CI advisory check:** `grep -rn '^\s*#\s*def \|^\s*#\s*class ' src/views_faoapi/` returns no matches, confirming cleanup is complete.
+4. **CI advisory check:** `grep -rn '^\s*#\s*def \|^\s*#\s*class ' src/views_crafdapi/` returns no matches, confirming cleanup is complete.
 
 ---
 

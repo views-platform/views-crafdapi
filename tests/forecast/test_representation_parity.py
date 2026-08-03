@@ -7,7 +7,7 @@ is a behaviour-preserving refactor) — and it characterizes the *only* numeric
 change (the float32-native collapse, the gated #112), so the ADR-023 diff is
 recorded, not guessed.
 
-Synthetic data only (no real artifact is in the repo; see the un_fao postmortems).
+Synthetic data only (no real artifact is in the repo; see the un_crafd postmortems).
 The corpus deliberately includes even/odd sample counts (the median tie-break),
 varied sizes, and NaN, because those are the corners a representation flip hits.
 
@@ -23,9 +23,9 @@ import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
-from views_faoapi.forecast.serialize import schema
-from views_faoapi.forecast.summarize.estimator import collapse, tower_collapse
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.forecast.serialize import schema
+from views_crafdapi.forecast.summarize.estimator import collapse, tower_collapse
 
 pytestmark = pytest.mark.layer2_data
 

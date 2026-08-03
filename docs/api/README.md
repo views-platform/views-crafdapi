@@ -1,6 +1,6 @@
-# FAO Forecast API — Reference
+# CRAF'd Forecast API — Reference
 
-Consolidated reference for the `views-faoapi` HTTP service: data scopes, authentication, the endpoint catalogue, query parameters, the response envelope, and usage examples. This document is the human-readable companion to the auto-generated OpenAPI schema and to the governing ADRs.
+Consolidated reference for the `views-crafdapi` HTTP service: data scopes, authentication, the endpoint catalogue, query parameters, the response envelope, and usage examples. This document is the human-readable companion to the auto-generated OpenAPI schema and to the governing ADRs.
 
 - **Resource model & surface:** [ADR-026](../ADRs/active/026_api_surface_and_resource_model.md)
 - **Authentication:** [ADR-027](../ADRs/active/027_authentication_and_per_key_isolation.md)
@@ -16,7 +16,7 @@ Consolidated reference for the `views-faoapi` HTTP service: data scopes, authent
 
 ## 1. Overview
 
-faoapi serves VIEWS conflict data to UN FAO over HTTP. It is the **terminal consumer** of the VIEWS pipeline (ADR-028): it reads the latest artifacts produced upstream by the `un_fao` post-processor from an Appwrite bucket, computes summaries, and serves them as JSON. It runs no models and applies no transforms — all values are **raw fatality counts** (ADR-024).
+crafdapi serves VIEWS conflict data to CRAF'd over HTTP. It is the **terminal consumer** of the VIEWS pipeline (ADR-028): it reads the latest artifacts produced upstream by the `un_crafd` post-processor from an Appwrite bucket, computes summaries, and serves them as JSON. It runs no models and applies no transforms — all values are **raw fatality counts** (ADR-024).
 
 **Two data scopes (`category`):**
 
@@ -27,14 +27,14 @@ faoapi serves VIEWS conflict data to UN FAO over HTTP. It is the **terminal cons
 
 Every quantity is reported per **violence type**: `sb` (state-based), `ns` (non-state), `os` (one-sided).
 
-**Base URL (production):** `https://faoapi.viewsforecasting.org`
+**Base URL (production):** `https://crafdapi.viewsforecasting.org`
 **Local development:** `http://localhost:8000` (see the repository README for `uvicorn` startup).
 
 ---
 
 ## 2. Authentication
 
-All data, analysis, file, provenance, and cache endpoints require an **`X-API-Key`** header whose value is your **Appwrite API key** (ADR-027). faoapi delegates authentication and authorization to Appwrite: what you can read is exactly what your key is scoped to. The key must be sent over HTTPS. faoapi never stores the raw key — it partitions per-caller caches by a truncated SHA-256 hash only.
+All data, analysis, file, provenance, and cache endpoints require an **`X-API-Key`** header whose value is your **Appwrite API key** (ADR-027). crafdapi delegates authentication and authorization to Appwrite: what you can read is exactly what your key is scoped to. The key must be sent over HTTPS. crafdapi never stores the raw key — it partitions per-caller caches by a truncated SHA-256 hash only.
 
 ```
 X-API-Key: <your-appwrite-api-key>
@@ -140,28 +140,28 @@ Latest forecast (full, PRIO-GRID grain):
 
 ```bash
 curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
-  https://faoapi.viewsforecasting.org/data/forecast/latest
+  https://crafdapi.viewsforecasting.org/data/forecast/latest
 ```
 
 Forecast HDI + MAP aggregated to GAUL admin-1, 90% HDI, for two months:
 
 ```bash
 curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
-  "https://faoapi.viewsforecasting.org/gaul1/analysis/forecast/hdi-map?aggregate=true&alpha=0.9&time_ids=541,542"
+  "https://crafdapi.viewsforecasting.org/gaul1/analysis/forecast/hdi-map?aggregate=true&alpha=0.9&time_ids=541,542"
 ```
 
 Country-level historical subset for one country (string entity id):
 
 ```bash
 curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
-  "https://faoapi.viewsforecasting.org/country/data/historical/subset?aggregate=true&entity_ids=SDN"
+  "https://crafdapi.viewsforecasting.org/country/data/historical/subset?aggregate=true&entity_ids=SDN"
 ```
 
 Provenance of the live forecast artifact:
 
 ```bash
 curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
-  https://faoapi.viewsforecasting.org/provenance/forecast
+  https://crafdapi.viewsforecasting.org/provenance/forecast
 ```
 
 ---

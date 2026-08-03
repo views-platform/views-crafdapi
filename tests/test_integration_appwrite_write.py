@@ -25,9 +25,9 @@ import pytest
 REQUIRED_ENV_VARS = [
     "APPWRITE_ENDPOINT",
     "APPWRITE_DATASTORE_PROJECT_ID",
-    "APPWRITE_UNFAO_BUCKET_ID",
+    "APPWRITE_CRAFD_BUCKET_ID",
     "APPWRITE_METADATA_DATABASE_ID",
-    "APPWRITE_UNFAO_COLLECTION_ID",
+    "APPWRITE_CRAFD_COLLECTION_ID",
     "APPWRITE_DATASTORE_API_KEY",
 ]
 
@@ -60,7 +60,7 @@ def _unique_filename(prefix="tierb"):
 
 @pytest.fixture(scope="module")
 def appwrite_config():
-    from views_faoapi.managers.appwrite import AppwriteConfig
+    from views_crafdapi.managers.appwrite import AppwriteConfig
 
     kwargs = dict(
         endpoint=os.getenv("APPWRITE_ENDPOINT"),
@@ -68,13 +68,13 @@ def appwrite_config():
         credentials=os.getenv("APPWRITE_DATASTORE_API_KEY"),
         auth_method="api_key",
         cache_ttl_hours=24,
-        bucket_id=os.getenv("APPWRITE_UNFAO_BUCKET_ID"),
-        collection_id=os.getenv("APPWRITE_UNFAO_COLLECTION_ID"),
+        bucket_id=os.getenv("APPWRITE_CRAFD_BUCKET_ID"),
+        collection_id=os.getenv("APPWRITE_CRAFD_COLLECTION_ID"),
         database_id=os.getenv("APPWRITE_METADATA_DATABASE_ID"),
     )
     for env_key, kwarg_key in [
-        ("APPWRITE_UNFAO_BUCKET_NAME", "bucket_name"),
-        ("APPWRITE_UNFAO_COLLECTION_NAME", "collection_name"),
+        ("APPWRITE_CRAFD_BUCKET_NAME", "bucket_name"),
+        ("APPWRITE_CRAFD_COLLECTION_NAME", "collection_name"),
         ("APPWRITE_METADATA_DATABASE_NAME", "database_name"),
     ]:
         val = os.getenv(env_key)
@@ -86,14 +86,14 @@ def appwrite_config():
 
 @pytest.fixture(scope="module")
 def file_manager(appwrite_config):
-    from views_faoapi.managers.appwrite import AppWriteFileManager
+    from views_crafdapi.managers.appwrite import AppWriteFileManager
 
     return AppWriteFileManager(appwrite_config)
 
 
 @pytest.fixture(scope="module")
 def prediction_manager(appwrite_config):
-    from views_faoapi.managers.prediction import PredictionStoreManager
+    from views_crafdapi.managers.prediction import PredictionStoreManager
 
     return PredictionStoreManager(appwrite_file_manager_config=appwrite_config)
 
@@ -105,7 +105,7 @@ def bucket_id(appwrite_config):
 
 @pytest.fixture(scope="module")
 def cached_file_manager(appwrite_config):
-    from views_faoapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
+    from views_crafdapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
 
     cache_dir = tempfile.mkdtemp(prefix="tierb_cache_")
     kwargs = dict(

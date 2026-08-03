@@ -1,6 +1,6 @@
-# FAO Forecast API (views-faoapi)
+# CRAF'd Forecast API (views-crafdapi)
 
-FastAPI service for retrieving and analyzing FAO prediction data stored in Appwrite. It provides:
+FastAPI service for retrieving and analyzing CRAF'd prediction data stored in Appwrite. It provides:
 - Retrieval of latest historical and forecast prediction datasets
 - Flexible subsetting by time, entity, features, and samples
 - Computation of Highest Density Intervals (HDI) and MAP estimates
@@ -8,7 +8,7 @@ FastAPI service for retrieving and analyzing FAO prediction data stored in Appwr
 - Appwrite file browsing and cache management
 - Geospatial metadata enrichment based on PRIO-GRID
 
-This repository is part of the views-platform and focuses on exposing FAO predictions via HTTP.
+This repository is part of the views-platform and focuses on exposing CRAF'd predictions via HTTP.
 
 ## Platform seam contract (pinned)
 
@@ -38,7 +38,7 @@ This API is a consumer on the shared Appwrite seam and conforms to **The Appwrit
 ## Installation
 
 ```bash
-# From repository root (views-faoapi)
+# From repository root (views-crafdapi)
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
@@ -47,23 +47,23 @@ pip install -e .
 
 ## Configuration
 
-The API reads environment variables via `.env` at runtime (loaded in `FAOApiManager.__init__` and located in `views-models`). Set the following:
+The API reads environment variables via `.env` at runtime (loaded in `CrafdApiManager.__init__` and located in `views-models`). Set the following:
 
 ```bash
 # .env
 APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1
 APPWRITE_DATASTORE_PROJECT_ID=your-project-id
-APPWRITE_UNFAO_BUCKET_ID=predictions-bucket-id
-APPWRITE_UNFAO_BUCKET_NAME=predictions-bucket-name
-APPWRITE_UNFAO_COLLECTION_ID=file-metadata-collection-id
-APPWRITE_UNFAO_COLLECTION_NAME=file-metadata-collection-name
+APPWRITE_CRAFD_BUCKET_ID=predictions-bucket-id
+APPWRITE_CRAFD_BUCKET_NAME=predictions-bucket-name
+APPWRITE_CRAFD_COLLECTION_ID=file-metadata-collection-id
+APPWRITE_CRAFD_COLLECTION_NAME=file-metadata-collection-name
 APPWRITE_METADATA_DATABASE_ID=metadata-db-id
 APPWRITE_METADATA_DATABASE_NAME=metadata-db-name
 ```
 
 Notes:
-- `historical_targets` is read by `FAO_PGMDataset(...)` when category is historical.
-- Keep shapefiles in `src/views_faoapi/shapefiles` (already included).
+- `historical_targets` is read by `ForecastDataset(...)` when category is historical.
+- Keep shapefiles in `src/views_crafdapi/shapefiles` (already included).
 - The API requires `X-API-Key` header in each request.
 
 ## Running the API
@@ -72,7 +72,7 @@ From the project root:
 
 ```bash
 source .venv/bin/activate
-uvicorn views_faoapi.managers.api:create_app --factory --host 0.0.0.0 --port 8000
+uvicorn views_crafdapi.managers.api:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
 See ADR-012 for the factory pattern rationale. The API requires `APPWRITE_*` environment variables (see `.env.example` or ADR-013).
@@ -91,7 +91,7 @@ Every endpoint requires `X-API-Key: <your appwrite key>`. The server validates k
 ## Data Model
 
 - Prediction files are fetched from Appwrite and parsed into pandas DataFrames.
-- `FAO_PGMDataset` expects geospatial metadata columns:
+- `ForecastDataset` expects geospatial metadata columns:
   - pg_xcoord, pg_ycoord, country_iso_a3,
   - admin1_gaul1_code, admin1_gaul1_name,
   - admin1_gaul0_code, admin1_gaul0_name,
@@ -208,10 +208,10 @@ curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/pg/data/forecast/s
 curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/country/analysis/forecast/hdi-map?alpha=0.9&entity_ids=USA,FRA&aggregate=true"
 
 # List files in a bucket
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_UNFAO_BUCKET_ID?limit=50&search=forecast"
+curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_CRAFD_BUCKET_ID?limit=50&search=forecast"
 
 # Download a file inline
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_UNFAO_BUCKET_ID/<file_id>/download?download=false"
+curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_CRAFD_BUCKET_ID/<file_id>/download?download=false"
 ```
 
 Python (requests)
@@ -240,17 +240,17 @@ print(r.json())
 
 ## Geospatial Mapping
 
-- Shapefiles under `src/views_faoapi/shapefiles`:
+- Shapefiles under `src/views_crafdapi/shapefiles`:
   - Natural Earth countries
   - PRIO-GRID
   - GAUL Level 1/2
-- `FAO_PGMDataset` joins/aggregates results using metadata columns and supports:
+- `ForecastDataset` joins/aggregates results using metadata columns and supports:
   - level: `country|gaul1|gaul2`
   - aggregation: sum for pred_* targets, first for constant metadata
 
 ## Development
 
-- Code lives under `src/views_faoapi`.
+- Code lives under `src/views_crafdapi`.
 - Key modules:
   - `managers/api.py` — FastAPI routes and lifecycle
   - `managers/appwrite.py` — Appwrite file access
@@ -263,7 +263,7 @@ Logging config in `configs/logging.yaml`.
 
 ## Deployment Notes
 
-**Branch mismatch in views-models (C-17):** The `views-models/apis/un_fao/run.sh` script (line 27) installs views-faoapi from `@main`, but `requirements.txt` in the same directory pins `@development`. This means `run.sh` and `pip install -r requirements.txt` install different versions. The fix lives in the views-models repo — align both to the same branch (recommended: `@main` for production, `@development` for staging).
+**Branch mismatch in views-models (C-17):** The `views-models/apis/un_crafd/run.sh` script (line 27) installs views-crafdapi from `@main`, but `requirements.txt` in the same directory pins `@development`. This means `run.sh` and `pip install -r requirements.txt` install different versions. The fix lives in the views-models repo — align both to the same branch (recommended: `@main` for production, `@development` for staging).
 
 ## Testing
 

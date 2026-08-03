@@ -12,10 +12,10 @@ import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset, _GridDataset
-from views_faoapi.forecast.serialize import schema
-from views_faoapi.forecast.summarize.estimator import collapse
-from views_faoapi.managers.disk_cache import FAODiskCacheManager
+from views_crafdapi.data.handlers import ForecastDataset, _GridDataset
+from views_crafdapi.forecast.serialize import schema
+from views_crafdapi.forecast.summarize.estimator import collapse
+from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager
 
 pytestmark = pytest.mark.layer2_data
 
@@ -38,16 +38,21 @@ def _whole_grid_hdi_map(ds, *, alpha=0.9, features=None, sample_idx=None,
         flat = vt.reshape(-1, vt.shape[2])
         # ADR-025 reduction (#222/S4): MAP + fixed 50/90/95 HDIs + severe (min/max dropped);
         # collapse NaN-fills all-NaN rows, matching the streaming path.
-        cr = collapse(flat, masses=schema.MASSES, enforce_non_negative=enforce_non_negative)
+        cr = collapse(
+            flat, masses=schema.MASSES, enforce_non_negative=enforce_non_negative,
+            thresholds=schema.EXCEEDANCE_THRESHOLDS,
+        )
         shape = vt.shape[:2]
         hdi = {
             mm: (cr.lower(mm).reshape(shape), cr.upper(mm).reshape(shape))
             for mm in schema.MASSES
         }
+        exceedance = {c: cr.exceedance[c].reshape(shape) for c in schema.EXCEEDANCE_THRESHOLDS}
         results.append(
             ds._create_series_value_dataframe(
                 var, cr.map.reshape(shape), cr.severe.reshape(shape),
-                cr.bimodality.reshape(shape), hdi, time_ids, entity_ids
+                cr.bimodality.reshape(shape), hdi, time_ids, entity_ids,
+                exceedance=exceedance,
             )
         )
     return pd.concat(results, axis=1)
@@ -109,7 +114,7 @@ def test_disk_served_run_uses_mmap_store_and_serves_identically(tmp_path):
     """A disk-served run's `_sample_store` is a read-only memmap (paged, not resident), and it
     serves byte-identical HDI/MAP to the in-RAM dataset."""
     ds = ForecastDataset(make_fao_df(n_cells=4, n_months=4, n_samples=40, seed=3))
-    cache = FAODiskCacheManager(tmp_path)
+    cache = CrafdDiskCacheManager(tmp_path)
     cache.write("h", "forecast", ds, "file_1", source_kind="wire", provenance={"run_id": "r"})
 
     out = cache.read("h", "forecast")

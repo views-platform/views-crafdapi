@@ -1,0 +1,35 @@
+# The production systemd unit for the CRAF'd Forecast API (epic #184, S3+S4).
+#
+# Replaces the interim unit from the 2026-06-29 outage recovery (which ran from a
+# personal account). This one runs as the dedicated service account, and every
+# start passes the deploy gate (checkout-deploy-tag.sh), so what serves is always
+# exactly the tag named in ~/.views-crafdapi-deploy-tag.
+#
+# Install:  sudo cp deployment/views-crafdapi.service /etc/systemd/system/
+#           sudo systemctl daemon-reload && sudo systemctl enable --now views-crafdapi
+# Logs:     sudo journalctl -u views-crafdapi -f
+# Deploy:   echo vX.Y.Z > ~views-crafdapi-deploy/.views-crafdapi-deploy-tag
+#           sudo systemctl restart views-crafdapi
+
+[Unit]
+Description=VIEWS CRAF'd Conflict Forecast API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=views-crafdapi-deploy
+WorkingDirectory=/home/views-crafdapi-deploy/views-crafdapi
+EnvironmentFile=/home/views-crafdapi-deploy/.env.crafdapi
+ExecStartPre=/usr/bin/env bash /home/views-crafdapi-deploy/views-crafdapi/scripts/checkout-deploy-tag.sh
+ExecStart=/home/views-crafdapi-deploy/views-crafdapi/.venv/bin/uvicorn \
+    views_crafdapi.managers.api:create_app \
+    --factory --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=views-crafdapi
+
+[Install]
+WantedBy=multi-user.target

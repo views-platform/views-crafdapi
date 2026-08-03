@@ -4,13 +4,13 @@
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** views-pipeline-core ADR-055 (Raw-Space Model I/O Contract), views-models ADR-012 (Target Scale and Prefix Convention), views-hydranet ADR-063 (Regression-head output activation), ADR-003 (Authority of Declarations over Inference), faoapi ADR-023 (re-baselining governance), register C-72 / C-81
-**Informed:** UN FAO API consumers
+**Informed:** UN CRAF'd API consumers
 
 ---
 
 ## Context
 
-faoapi is the **terminal consumer** in the VIEWS forecasting chain: it reads a forecast artifact from Appwrite (produced upstream by views-postprocessing `un_fao`), computes MAP / HDI / point + interval summaries, and serves them to the UN FAO — as JSON via the analysis endpoints and (planned) as a bulk parquet. The numbers FAO consumes are humanitarian-planning inputs: they must be in **raw fatality counts**, not a log-compressed or otherwise transformed scale.
+faoapi is the **terminal consumer** in the VIEWS forecasting chain: it reads a forecast artifact from Appwrite (produced upstream by views-postprocessing `un_crafd`), computes MAP / HDI / point + interval summaries, and serves them to the UN FAO — as JSON via the analysis endpoints and (planned) as a bulk parquet. The numbers FAO consumes are humanitarian-planning inputs: they must be in **raw fatality counts**, not a log-compressed or otherwise transformed scale.
 
 The platform has now **ratified the numerical-scale contract upstream**, and faoapi must declare its position as the consuming end of it:
 
@@ -40,7 +40,7 @@ The tower estimator (`forecast/summarize/estimator.py`) operates directly on the
 
 ### 4. faoapi guards the contract at ingestion (trust-but-verify)
 
-faoapi's correctness depends on the producer (`un_fao`) actually delivering raw counts. Because the prefix is not authoritative and the upstream migration to raw is in flight, faoapi treats raw-scale as a **checked precondition**, not an assumption. The existing value-plausibility gate (register **C-72**, `forecast/ingestion/plausibility.py`) already enforces **finite + non-negative** — consistent with ADR-063's non-negative guarantee. This ADR additionally authorizes a **raw-scale sanity check** (a fail-loud guard that the served distribution looks like counts, e.g. its magnitude is not compressed into a log-like `[0, ~7]` band on active cells), mirroring the views-models transform-undo verification (views-models issue #72). A violation fails loud (HTTP 500 on ingestion), never silently serves a log-scale number to FAO.
+faoapi's correctness depends on the producer (`un_crafd`) actually delivering raw counts. Because the prefix is not authoritative and the upstream migration to raw is in flight, faoapi treats raw-scale as a **checked precondition**, not an assumption. The existing value-plausibility gate (register **C-72**, `forecast/ingestion/plausibility.py`) already enforces **finite + non-negative** — consistent with ADR-063's non-negative guarantee. This ADR additionally authorizes a **raw-scale sanity check** (a fail-loud guard that the served distribution looks like counts, e.g. its magnitude is not compressed into a log-like `[0, ~7]` band on active cells), mirroring the views-models transform-undo verification (views-models issue #72). A violation fails loud (HTTP 500 on ingestion), never silently serves a log-scale number to FAO.
 
 ### 5. Scope
 
@@ -84,7 +84,7 @@ This ADR governs the **target/prediction values** served to FAO. It does not gov
 - The raw-scale guard makes an upstream scale regression a loud ingestion failure, not a silent UN-facing error.
 
 ### Negative / trade-offs
-- faoapi's correctness is explicitly coupled to the producer honouring ADR-055 (un_fao must emit raw). This coupling is real and now documented (a checked precondition rather than a hidden assumption).
+- faoapi's correctness is explicitly coupled to the producer honouring ADR-055 (un_crafd must emit raw). This coupling is real and now documented (a checked precondition rather than a hidden assumption).
 - The legacy `pred_ln_*` names remain in data/examples until upstream renames to `lr_` (ADR-012); this ADR makes clear they are identity-only, but the cosmetic mismatch persists until the producer migrates.
 
 ---

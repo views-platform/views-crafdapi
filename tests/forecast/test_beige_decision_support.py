@@ -26,9 +26,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import FAO_PGMDataset
-from views_faoapi.forecast.serialize import schema
-from views_faoapi.managers.api import FAOApiManager
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.forecast.serialize import schema
+from views_crafdapi.managers.api import CrafdApiManager
 
 pytestmark = pytest.mark.layer2_data
 
@@ -43,7 +43,7 @@ _TARGETS = ("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")
 def beige_client(tmp_path):
     """TestClient over a real cached dataset, so analysis endpoints return
     genuinely-computed responses (mirrors test_api_endpoints.app_client)."""
-    mgr = FAOApiManager.from_config(
+    mgr = CrafdApiManager.from_config(
         {"deployment": {"host": "0.0.0.0", "port": 80}},
         cache_dir=tmp_path / "cache",
     )
@@ -51,7 +51,7 @@ def beige_client(tmp_path):
     mgr.app = FastAPI()
     mgr._register_routes()
 
-    dataset = FAO_PGMDataset(make_fao_df(n_samples=100, targets=_TARGETS))
+    dataset = ForecastDataset(make_fao_df(n_samples=100, targets=_TARGETS))
     h = mgr._get_api_key_hash("test-api-key")
     entry = {
         "data": dataset.dataframe,
@@ -65,7 +65,7 @@ def beige_client(tmp_path):
     mgr._validate_api_key = MagicMock(return_value=MagicMock())
     pm = MagicMock()
     pm.get_latest_manifest.return_value = {"fileId": "f", "filename": "m.json",
-        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_fao"}
+        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_crafd"}
     mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: pm
     mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: MagicMock()
     return TestClient(mgr.app)
@@ -121,7 +121,7 @@ class TestSevereScenarioIsARobustTailNotAHardBound:
 
     @pytest.mark.parametrize("aggregate,level", [(False, None), (True, "gaul0")])
     def test_nested_hdis_bracket_map_and_severe_is_upper_tail(self, aggregate, level):
-        ds = FAO_PGMDataset(make_fao_df(n_cells=4, n_months=2, n_samples=200, seed=7))
+        ds = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=200, seed=7))
         df = ds.calculate_hdi_map(level=level, aggregate=aggregate)  # var-keyed (no endpoint rename)
         var_cols = [c[: -len("_map")] for c in df.columns if c.endswith("_map")]
         assert var_cols, "expected at least one variable with a _map column"

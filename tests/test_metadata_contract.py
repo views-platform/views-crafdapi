@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from views_faoapi.managers.prediction import (
+from views_crafdapi.managers.prediction import (
     PREDICTION_METADATA_FIELDS,
     SYSTEM_METADATA_FIELDS,
     PredictionMetadata,
@@ -23,7 +23,7 @@ from views_faoapi.managers.prediction import (
 
 pytestmark = pytest.mark.layer5_audit
 
-APPWRITE_PKG = Path(__file__).resolve().parent.parent / "src" / "views_faoapi" / "managers" / "appwrite"
+APPWRITE_PKG = Path(__file__).resolve().parent.parent / "src" / "views_crafdapi" / "managers" / "appwrite"
 
 
 def _extract_fixed_attributes_from_ast():

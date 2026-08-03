@@ -6,10 +6,10 @@ import pytest
 from pathlib import Path
 from unittest.mock import Mock
 
-from views_faoapi.data.handlers import FAO_PGMDataset
+from views_crafdapi.data.handlers import ForecastDataset
 
 
-_METADATA_COLS = FAO_PGMDataset._METADATA_COLS
+_METADATA_COLS = ForecastDataset._METADATA_COLS
 
 # Root of the views-platform monorepo checkout (…/views_platform), the parent
 # of this repo. Cross-repo falsification probes read sibling-repo source under it.
@@ -85,9 +85,9 @@ def mock_path_manager():
 
 @pytest.fixture
 def fao_dataset():
-    """Minimal FAO_PGMDataset for aggregation and subset testing."""
+    """Minimal ForecastDataset for aggregation and subset testing."""
     df = make_fao_df()
-    return FAO_PGMDataset(df)
+    return ForecastDataset(df)
 
 
 @pytest.fixture

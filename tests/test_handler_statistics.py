@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 import pytest
-from views_faoapi.data.handlers import _GridDataset, FAO_PGMDataset
+from views_crafdapi.data.handlers import _GridDataset, ForecastDataset
 
 pytestmark = pytest.mark.layer2_data
 
@@ -48,10 +48,11 @@ class TestAnalyzeSamples:
         lo, hi, map_val = simple_dataset._analyze_samples(
             samples, alpha=0.9, enforce_non_negative=False
         )
-        # Re-baselined to the views-frames tower estimator (tower_point/hdi_tower); register C-81.
+        # MAP re-baselined to the views-frames ≥1.9.0 tower-tip estimator (tip_mass 0.25,
+        # ADR-019 Am.3 — the correct top-floor MAP; ADR-034). HDI bounds are unchanged.
         assert lo == pytest.approx(3.3801279067993164, abs=1e-4)
         assert hi == pytest.approx(6.6678876876831055, abs=1e-4)
-        assert map_val == pytest.approx(5.1310577392578125, abs=1e-4)
+        assert map_val == pytest.approx(5.219996452331543, abs=1e-4)
 
     def test_calculate_single_hdi_golden_value(self, simple_dataset):
         rng = np.random.default_rng(42)
@@ -78,7 +79,7 @@ class TestSimonComputeSingleMap:
         result = simple_dataset._compute_single_map(
             samples, enforce_non_negative=False, alpha=0.9
         )
-        assert result == pytest.approx(5.1310577392578125, abs=1e-4)
+        assert result == pytest.approx(5.219996452331543, abs=1e-4)
 
 
 class TestElementwiseSum:
@@ -88,12 +89,12 @@ class TestElementwiseSum:
             np.array([1.0, 2.0, 3.0]),
             np.array([4.0, 5.0, 6.0]),
         ])
-        result = FAO_PGMDataset._elementwise_sum(None, arrays)
+        result = ForecastDataset._elementwise_sum(None, arrays)
         np.testing.assert_array_equal(result, np.array([5.0, 7.0, 9.0]))
 
     def test_single_array_returned_unchanged(self):
         arrays = pd.Series([np.array([10.0, 20.0, 30.0])])
-        result = FAO_PGMDataset._elementwise_sum(None, arrays)
+        result = ForecastDataset._elementwise_sum(None, arrays)
         np.testing.assert_array_equal(result, np.array([10.0, 20.0, 30.0]))
 
 
@@ -115,9 +116,11 @@ class TestEndToEndGoldenValues:
         ds = _GridDataset(pd.DataFrame(data, index=index))
         result = ds.calculate_hdi_map(alpha=0.9, enforce_non_negative=False)
 
-        # Re-baselined to the views-frames tower estimator; register C-81.
+        # MAP re-baselined to views-frames ≥1.9.0 tower-tip (tip_mass 0.25, ADR-019 Am.3 / ADR-034).
+        # Skewed cells shift toward the mode as intended: the exponential cell 100002 drops
+        # 0.690 → 0.458; the symmetric cell 100001 barely moves; HDI bounds unchanged.
         assert result.loc[(500, 100001), "pred_fatalities_map"] == pytest.approx(
-            5.1310577392578125, abs=1e-4
+            5.219996452331543, abs=1e-4
         )
         assert result.loc[(500, 100001), "pred_fatalities_hdi90_lower"] == pytest.approx(
             3.3801279067993164, abs=1e-4
@@ -126,7 +129,7 @@ class TestEndToEndGoldenValues:
             6.6678876876831055, abs=1e-4
         )
         assert result.loc[(500, 100002), "pred_fatalities_map"] == pytest.approx(
-            0.6897088289260864, abs=1e-4
+            0.45783525705337524, abs=1e-4
         )
 
     def test_calculate_hdi_map_enforce_non_negative(self):
@@ -157,12 +160,12 @@ class TestFloat32PrecisionIntegration:
     """
 
     def _make_fao_dataset(self, rng, pred_data):
-        """Build a FAO_PGMDataset with given prediction data."""
+        """Build a ForecastDataset with given prediction data."""
         from tests.conftest import make_fao_df
         df = make_fao_df(n_cells=2, n_months=1, n_samples=len(pred_data[0]))
         df["pred_test"] = pred_data
         df = df.drop(columns=["pred_other"])
-        return FAO_PGMDataset(df)
+        return ForecastDataset(df)
 
     def test_float32_hdi_map_matches_float64_within_tolerance(self):
         """HDI-MAP results from float32 pipeline must be within 1e-3 of float64."""

@@ -23,11 +23,11 @@ all external and internal boundaries must be explicit and validated.
 
 In views-faoapi, the following boundaries are architecturally significant:
 
-- **Appwrite SDK boundary:** The application connects to Appwrite through 8 `APPWRITE_*` environment variables (`APPWRITE_ENDPOINT`, `APPWRITE_DATASTORE_PROJECT_ID`, `APPWRITE_UNFAO_BUCKET_ID`, `APPWRITE_UNFAO_BUCKET_NAME`, `APPWRITE_UNFAO_COLLECTION_ID`, `APPWRITE_UNFAO_COLLECTION_NAME`, `APPWRITE_METADATA_DATABASE_ID`, `APPWRITE_METADATA_DATABASE_NAME`). Missing or misconfigured variables produce runtime failures deep in the call stack rather than at startup.
+- **Appwrite SDK boundary:** The application connects to Appwrite through 8 `APPWRITE_*` environment variables (`APPWRITE_ENDPOINT`, `APPWRITE_DATASTORE_PROJECT_ID`, `APPWRITE_CRAFD_BUCKET_ID`, `APPWRITE_CRAFD_BUCKET_NAME`, `APPWRITE_CRAFD_COLLECTION_ID`, `APPWRITE_CRAFD_COLLECTION_NAME`, `APPWRITE_METADATA_DATABASE_ID`, `APPWRITE_METADATA_DATABASE_NAME`). Missing or misconfigured variables produce runtime failures deep in the call stack rather than at startup.
 
 - **API key authentication boundary:** Every API request passes an `X-API-Key` header that is validated against Appwrite. This boundary separates unauthenticated requests from authenticated state and controls access to all forecast data.
 
-- **Data ingestion boundary:** Prediction files are downloaded from Appwrite as raw bytes and parsed through a format-detection cascade (parquet, CSV, JSON, pickle, feather) before being constructed into a `FAO_PGMDataset` with a validated MultiIndex and required metadata columns.
+- **Data ingestion boundary:** Prediction files are downloaded from Appwrite as raw bytes and parsed through a format-detection cascade (parquet, CSV, JSON, pickle, feather) before being constructed into a `ForecastDataset` with a validated MultiIndex and required metadata columns.
 
 - **Geographic aggregation boundary:** PRIO-GRID cell-level distributions are aggregated to GAUL administrative levels (L0, L1, L2) and country (ISO3) through element-wise summation. This boundary transforms the index structure and the semantic meaning of the data.
 
@@ -57,7 +57,7 @@ Every boundary between components must define:
 Boundaries include:
 
 - Configuration (environment variables) to runtime (Appwrite client initialization)
-- Data ingestion (raw file bytes from Appwrite) to processing (`FAO_PGMDataset` construction)
+- Data ingestion (raw file bytes from Appwrite) to processing (`ForecastDataset` construction)
 - Cell-level data (PRIO-GRID) to aggregated data (GAUL administrative levels)
 - API request (HTTP with headers) to internal processing (authenticated manager instances)
 - Cache tiers (in-memory to disk to remote), each with declared TTL and staleness semantics

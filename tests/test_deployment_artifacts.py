@@ -13,30 +13,32 @@ import pytest
 pytestmark = pytest.mark.layer4_infra
 
 _ROOT = Path(__file__).parent.parent
-_UNIT = (_ROOT / "deployment" / "views-faoapi.service").read_text()
+_UNIT = (_ROOT / "deployment" / "views-crafdapi.service").read_text()
 _GATE = (_ROOT / "scripts" / "checkout-deploy-tag.sh").read_text()
 _BOOTSTRAP = (_ROOT / "deployment" / "bootstrap.sh").read_text()
 
 
 class TestSystemdUnit:
     def test_runs_as_the_service_account(self):
-        assert "User=views-faoapi-deploy" in _UNIT
+        assert "User=views-crafdapi-deploy" in _UNIT
 
     def test_start_passes_the_deploy_gate(self):
         assert "ExecStartPre=" in _UNIT and "checkout-deploy-tag.sh" in _UNIT
 
-    def test_serves_the_factory_app_on_localhost_8000(self):
-        assert "views_faoapi.managers.api:create_app" in _UNIT
+    def test_serves_the_factory_app_on_localhost_8001(self):
+        assert "views_crafdapi.managers.api:create_app" in _UNIT
         assert "--factory" in _UNIT
         assert "--host 127.0.0.1" in _UNIT  # nginx upstream contract — never 0.0.0.0
-        assert "--port 8000" in _UNIT
+        # Port 8001, NOT 8000: crafdapi co-hosts with faoapi (:8000) on the same box;
+        # a shared port would make the two services' units collide (address in use).
+        assert "--port 8001" in _UNIT
 
     def test_self_heals_and_survives_reboot(self):
         assert "Restart=always" in _UNIT
         assert "WantedBy=multi-user.target" in _UNIT
 
     def test_credentials_come_from_the_env_file(self):
-        assert "EnvironmentFile=/home/views-faoapi-deploy/.env.faoapi" in _UNIT
+        assert "EnvironmentFile=/home/views-crafdapi-deploy/.env.crafdapi" in _UNIT
 
 
 class TestDeployGateScript:
@@ -46,10 +48,10 @@ class TestDeployGateScript:
     def test_tag_file_convention_matches_version_endpoint(self):
         """The gate and GET /version must read the same file, so the served
         version is verifiable remotely (S4 x S6)."""
-        from views_faoapi import version as version_mod
-        assert version_mod._DEFAULT_DEPLOY_TAG_FILE == "~/.views-faoapi-deploy-tag"
-        assert ".views-faoapi-deploy-tag" in _GATE
-        assert "FAOAPI_DEPLOY_TAG_FILE" in _GATE  # same override env var
+        from views_crafdapi import version as version_mod
+        assert version_mod._DEFAULT_DEPLOY_TAG_FILE == "~/.views-crafdapi-deploy-tag"
+        assert ".views-crafdapi-deploy-tag" in _GATE
+        assert "CRAFDAPI_DEPLOY_TAG_FILE" in _GATE  # same override env var
 
     def test_verifies_the_tag_exists_before_checkout(self):
         assert "git fetch --tags" in _GATE
@@ -83,7 +85,7 @@ class TestReleaseVersionConsistency:
         import tomllib
 
         lock = tomllib.loads((_ROOT / "uv.lock").read_text())
-        pkg = next(p for p in lock["package"] if p["name"] == "views-faoapi")
+        pkg = next(p for p in lock["package"] if p["name"] == "views-crafdapi")
         return pkg["version"]
 
     def test_pyproject_and_lock_declare_the_same_version(self):
@@ -96,13 +98,13 @@ class TestReleaseVersionConsistency:
 class TestBootstrap:
     def test_creates_the_dedicated_service_account(self):
         assert "useradd -m -s /bin/bash" in _BOOTSTRAP
-        assert 'SVC_USER="views-faoapi-deploy"' in _BOOTSTRAP
+        assert 'SVC_USER="views-crafdapi-deploy"' in _BOOTSTRAP
 
     def test_deploy_key_is_read_only_by_instruction(self):
         assert "READ-ONLY deploy key" in _BOOTSTRAP
 
     def test_preserves_the_legacy_unit_as_rollback(self):
-        assert "views-faoapi-legacy.service" in _BOOTSTRAP
+        assert "views-crafdapi-legacy.service" in _BOOTSTRAP
 
     # þing-01 #275 / PLATFORM-001 D2: the credential origin moved off the laptop `.env`.
     def test_credentials_no_longer_copied_from_a_personal_env(self):
@@ -131,7 +133,7 @@ contract = "PLATFORM-001"
 class = "connection"
 value = "https://example.appwrite.io/v1"
 
-[target.APPWRITE_UNFAO_BUCKET_ID]
+[target.APPWRITE_CRAFD_BUCKET_ID]
 class = "target"
 value = "unfao_bucket"
 
@@ -140,7 +142,7 @@ class = "secret"
 issued_by = "operator"
 note = "no value — a slot"
 
-[excluded.APPWRITE_UNFAO_APPROVED_FILE_IDS]
+[excluded.APPWRITE_CRAFD_APPROVED_FILE_IDS]
 class = "policy"
 """
 
@@ -159,11 +161,11 @@ class = "policy"
     def test_emits_connection_and_target_coordinates(self, tmp_path):
         lines = self._coords(tmp_path)
         assert "APPWRITE_ENDPOINT=https://example.appwrite.io/v1" in lines
-        assert "APPWRITE_UNFAO_BUCKET_ID=unfao_bucket" in lines
+        assert "APPWRITE_CRAFD_BUCKET_ID=unfao_bucket" in lines
 
     def test_never_emits_a_secret_or_an_exclusion(self, tmp_path):
         blob = "\n".join(self._coords(tmp_path))
         # a secret slot has no value; it must never appear, by name or otherwise.
         assert "APPWRITE_DATASTORE_API_KEY" not in blob
         # eligibility exclusions are governed elsewhere and are not coordinates.
-        assert "APPWRITE_UNFAO_APPROVED_FILE_IDS" not in blob
+        assert "APPWRITE_CRAFD_APPROVED_FILE_IDS" not in blob

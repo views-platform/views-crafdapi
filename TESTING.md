@@ -34,14 +34,14 @@ A **failure** (not xfail, not skip) is the only red signal that should ever stop
 
 ## Coverage
 
-**Baseline: 66%** (line + branch), measured 2026-06-26 on the default non-integration suite (`src/views_faoapi`, 3122 statements / 1038 branches). Coverage is a **signal, not a gate** — there is deliberately **no `fail_under`** (a hard coverage gate would recreate the red-by-default trap C-74/C-76 warn against). Config lives in `[tool.coverage.*]` in `pyproject.toml`.
+**Baseline: 66%** (line + branch), measured 2026-06-26 on the default non-integration suite (`src/views_crafdapi`, 3122 statements / 1038 branches). Coverage is a **signal, not a gate** — there is deliberately **no `fail_under`** (a hard coverage gate would recreate the red-by-default trap C-74/C-76 warn against). Config lives in `[tool.coverage.*]` in `pyproject.toml`.
 
 ```bash
 # Measure coverage (term report with missing lines)
-uv run pytest --cov=src/views_faoapi --cov-report=term-missing
+uv run pytest --cov=src/views_crafdapi --cov-report=term-missing
 
 # HTML report
-uv run pytest --cov=src/views_faoapi --cov-report=html   # -> htmlcov/index.html
+uv run pytest --cov=src/views_crafdapi --cov-report=html   # -> htmlcov/index.html
 ```
 
 Well-covered: the `forecast/` package (95–100% — the value-object pipeline), `client.py`, `prediction.py` (93%), `disk_cache.py` (89%). Known low-coverage modules, tracked for follow-up:
@@ -101,7 +101,7 @@ uv run pytest -m integration
 uv run pytest -rsx
 ```
 
-Integration tests require `APPWRITE_ENDPOINT`, `APPWRITE_DATASTORE_PROJECT_ID`, `APPWRITE_UNFAO_BUCKET_ID`, `APPWRITE_METADATA_DATABASE_ID`, `APPWRITE_UNFAO_COLLECTION_ID`, and `APPWRITE_DATASTORE_API_KEY`. They are excluded by default via `addopts = "-m 'not integration'"` in `pyproject.toml`.
+Integration tests require `APPWRITE_ENDPOINT`, `APPWRITE_DATASTORE_PROJECT_ID`, `APPWRITE_CRAFD_BUCKET_ID`, `APPWRITE_METADATA_DATABASE_ID`, `APPWRITE_CRAFD_COLLECTION_ID`, and `APPWRITE_DATASTORE_API_KEY`. They are excluded by default via `addopts = "-m 'not integration'"` in `pyproject.toml`.
 
 ### Verifying the counts
 

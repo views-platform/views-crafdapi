@@ -3,12 +3,12 @@ from unittest.mock import Mock, patch
 from pathlib import Path
 import pandas as pd
 
-from views_faoapi.managers.prediction import (
+from views_crafdapi.managers.prediction import (
     PredictionMetadata,
     PredictionProvenance,
     PredictionStoreManager,
 )
-from views_faoapi.managers.appwrite import (
+from views_crafdapi.managers.appwrite import (
     AppwriteConfig,
     OperationResult,
     AuthMethod,
@@ -203,7 +203,7 @@ def mock_config(mock_path_manager):
 @pytest.fixture
 def mock_appwrite_manager():
     """Mock AppWriteFileManager"""
-    with patch("views_faoapi.managers.prediction.manager.AppWriteFileManager") as mock:
+    with patch("views_crafdapi.managers.prediction.manager.AppWriteFileManager") as mock:
         manager = mock.return_value
         
         # Mock metadata_manager
@@ -215,7 +215,7 @@ def mock_appwrite_manager():
 @pytest.fixture
 def prediction_store(mock_config, mock_appwrite_manager):
     """Create PredictionStoreManager instance with mocked dependencies"""
-    with patch("views_faoapi.managers.prediction.manager.AppWriteFileManager", return_value=mock_appwrite_manager):
+    with patch("views_crafdapi.managers.prediction.manager.AppWriteFileManager", return_value=mock_appwrite_manager):
         store = PredictionStoreManager(mock_config)
         yield store
 
@@ -224,7 +224,7 @@ def prediction_store(mock_config, mock_appwrite_manager):
 class TestPredictionStoreManager:
     def test_initialization(self, mock_config, mock_appwrite_manager):
         """Test PredictionStoreManager initialization"""
-        with patch("views_faoapi.managers.prediction.manager.AppWriteFileManager", return_value=mock_appwrite_manager):
+        with patch("views_crafdapi.managers.prediction.manager.AppWriteFileManager", return_value=mock_appwrite_manager):
             store = PredictionStoreManager(mock_config)
             
             assert store.model_path == mock_config.path_manager
@@ -791,7 +791,7 @@ class TestPredictionStoreManagerIntegration:
 
 class TestQuarantineRollback:
     """C-71: an operator can roll back a bad "latest" upload by quarantining its file
-    ID (via APPWRITE_UNFAO_QUARANTINED_FILE_IDS) — the previous known-good file is then
+    ID (via APPWRITE_CRAFD_QUARANTINED_FILE_IDS) — the previous known-good file is then
     selected automatically, with no Appwrite deletion."""
 
     def _seed(self, mock_appwrite_manager):
@@ -809,14 +809,14 @@ class TestQuarantineRollback:
         )
 
     def test_no_quarantine_selects_newest(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.delenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", raising=False)
+        monkeypatch.delenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", raising=False)
         self._seed(mock_appwrite_manager)
         result = prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"})
         assert [d["fileId"] for d in result] == ["file3", "file2", "file1"]
 
     def test_quarantine_rolls_back_to_previous_good(self, prediction_store, mock_appwrite_manager, monkeypatch):
         # Quarantine the bad newest file -> selection falls back to the prior good one.
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", "file3")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", "file3")
         self._seed(mock_appwrite_manager)
         result = prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"})
         ids = [d["fileId"] for d in result]
@@ -824,24 +824,24 @@ class TestQuarantineRollback:
         assert ids[0] == "file2"  # previous known-good is now "latest"
 
     def test_quarantine_latest_file_id(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", "file3")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", "file3")
         self._seed(mock_appwrite_manager)
         assert prediction_store.get_latest_file_id(filters={"type": "fatalities"}) == "file2"
 
     def test_quarantine_multiple_comma_separated(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", " file3 , file2 ")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", " file3 , file2 ")
         self._seed(mock_appwrite_manager)
         result = prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"})
         assert [d["fileId"] for d in result] == ["file1"]
 
     def test_quarantine_all_leaves_none(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", "file1,file2,file3")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", "file1,file2,file3")
         self._seed(mock_appwrite_manager)
         assert prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"}) == []
         assert prediction_store.get_latest_file_id(filters={"type": "fatalities"}) is None
 
     def test_empty_env_is_noop(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", "")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", "")
         self._seed(mock_appwrite_manager)
         result = prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"})
         assert [d["fileId"] for d in result] == ["file3", "file2", "file1"]
@@ -905,7 +905,7 @@ class TestLatestProvenance:
 
 
 class TestApprovalAllowlist:
-    """C-71 (proactive gate): when APPWRITE_UNFAO_APPROVED_FILE_IDS is set, only approved
+    """C-71 (proactive gate): when APPWRITE_CRAFD_APPROVED_FILE_IDS is set, only approved
     files are eligible for selection; unset leaves selection unrestricted."""
 
     def _seed(self, mock_appwrite_manager):
@@ -922,27 +922,27 @@ class TestApprovalAllowlist:
         )
 
     def test_unset_allowlist_is_unrestricted(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.delenv("APPWRITE_UNFAO_APPROVED_FILE_IDS", raising=False)
+        monkeypatch.delenv("APPWRITE_CRAFD_APPROVED_FILE_IDS", raising=False)
         self._seed(mock_appwrite_manager)
         result = prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"})
         assert [d["fileId"] for d in result] == ["file3", "file2", "file1"]
 
     def test_only_approved_are_eligible(self, prediction_store, mock_appwrite_manager, monkeypatch):
         # Approve an older file -> the newest (file3) is NOT served until approved.
-        monkeypatch.setenv("APPWRITE_UNFAO_APPROVED_FILE_IDS", "file2")
+        monkeypatch.setenv("APPWRITE_CRAFD_APPROVED_FILE_IDS", "file2")
         self._seed(mock_appwrite_manager)
         assert prediction_store.get_latest_file_id(filters={"type": "fatalities"}) == "file2"
 
     def test_unapproved_only_yields_none(self, prediction_store, mock_appwrite_manager, monkeypatch):
-        monkeypatch.setenv("APPWRITE_UNFAO_APPROVED_FILE_IDS", "nonexistent")
+        monkeypatch.setenv("APPWRITE_CRAFD_APPROVED_FILE_IDS", "nonexistent")
         self._seed(mock_appwrite_manager)
         assert prediction_store.get_predictions_by_metadata(filters={"type": "fatalities"}) == []
         assert prediction_store.get_latest_file_id(filters={"type": "fatalities"}) is None
 
     def test_quarantine_and_allowlist_compose(self, prediction_store, mock_appwrite_manager, monkeypatch):
         # Approve file3 and file2, but quarantine file3 -> file2 wins.
-        monkeypatch.setenv("APPWRITE_UNFAO_APPROVED_FILE_IDS", "file3,file2")
-        monkeypatch.setenv("APPWRITE_UNFAO_QUARANTINED_FILE_IDS", "file3")
+        monkeypatch.setenv("APPWRITE_CRAFD_APPROVED_FILE_IDS", "file3,file2")
+        monkeypatch.setenv("APPWRITE_CRAFD_QUARANTINED_FILE_IDS", "file3")
         self._seed(mock_appwrite_manager)
         assert prediction_store.get_latest_file_id(filters={"type": "fatalities"}) == "file2"
 
@@ -951,7 +951,7 @@ class TestMethodologyVersionInProvenance:
     """ADR-023 / C-86: the provenance record carries the faoapi methodology version."""
 
     def test_provenance_includes_methodology_version(self, prediction_store, mock_appwrite_manager):
-        from views_faoapi.methodology import METHODOLOGY_VERSION
+        from views_crafdapi.methodology import METHODOLOGY_VERSION
 
         mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
             success=True,

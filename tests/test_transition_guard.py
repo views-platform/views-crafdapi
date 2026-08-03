@@ -1,7 +1,7 @@
 """ADR-013 §11.4 — the Hop-B legacy transition guard.
 
 Contract artifacts (`type="sampled_forecast_*"`) upload to `unfao_bucket` under the pinned
-consumer name (`un_fao`), which the legacy selector's `name` filter WILL match (ratified F1).
+consumer name (`un_crafd`), which the legacy selector's `name` filter WILL match (ratified F1).
 Without a `type` pin, legacy newest-wins-by-category selection would grab a manifest or arrow
 shard as "the forecast". Every legacy `unfao_bucket` document carries `type="model"`
 (ground-truthed against live Appwrite, 2026-07-15 — all 13 typed docs), so the guard pins the
@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from views_faoapi.managers.prediction import LEGACY_ARTIFACT_TYPE, PredictionStoreManager
+from views_crafdapi.managers.prediction import LEGACY_ARTIFACT_TYPE, PredictionStoreManager
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -23,7 +23,7 @@ pytestmark = pytest.mark.layer4_infra
 def _make_store(captured: dict):
     """A PredictionStoreManager whose metadata search captures the filters it is given."""
     config = MagicMock()
-    config.path_manager.model_name = "un_fao"
+    config.path_manager.model_name = "un_crafd"
     manager = MagicMock()
 
     def _capture(filters=None, **kwargs):
@@ -33,7 +33,7 @@ def _make_store(captured: dict):
         return result
 
     manager.metadata_manager.search_files_by_metadata.side_effect = _capture
-    with patch("views_faoapi.managers.prediction.manager.AppWriteFileManager", return_value=manager):
+    with patch("views_crafdapi.managers.prediction.manager.AppWriteFileManager", return_value=manager):
         return PredictionStoreManager(config)
 
 
@@ -76,7 +76,7 @@ def test_name_injection_still_applies_alongside_the_guard():
     captured = {}
     store = _make_store(captured)
     store.get_predictions_by_metadata(filters={"category": "historical"})
-    assert captured["filters"]["name"] == "un_fao"
+    assert captured["filters"]["name"] == "un_crafd"
     assert captured["filters"]["type"] == LEGACY_ARTIFACT_TYPE
 
 
@@ -86,13 +86,13 @@ def test_guard_excludes_contract_artifacts_from_newest_wins():
     manifest. (The filter dict is the server-side contract; this simulates a backend
     that honors it.)"""
     config = MagicMock()
-    config.path_manager.model_name = "un_fao"
+    config.path_manager.model_name = "un_crafd"
     manager = MagicMock()
 
     docs = [  # newest first — contract wave on top
-        {"fileId": "m1", "category": "forecast", "type": "sampled_forecast_manifest", "name": "un_fao"},
-        {"fileId": "s1", "category": "forecast", "type": "sampled_forecast_shard", "name": "un_fao"},
-        {"fileId": "legacy1", "category": "forecast", "type": "model", "name": "un_fao"},
+        {"fileId": "m1", "category": "forecast", "type": "sampled_forecast_manifest", "name": "un_crafd"},
+        {"fileId": "s1", "category": "forecast", "type": "sampled_forecast_shard", "name": "un_crafd"},
+        {"fileId": "legacy1", "category": "forecast", "type": "model", "name": "un_crafd"},
     ]
 
     def _search(filters=None, **kwargs):
@@ -105,7 +105,7 @@ def test_guard_excludes_contract_artifacts_from_newest_wins():
         return result
 
     manager.metadata_manager.search_files_by_metadata.side_effect = _search
-    with patch("views_faoapi.managers.prediction.manager.AppWriteFileManager", return_value=manager):
+    with patch("views_crafdapi.managers.prediction.manager.AppWriteFileManager", return_value=manager):
         store = PredictionStoreManager(config)
 
     assert store.get_latest_file_id(filters={"category": "forecast"}) == "legacy1"

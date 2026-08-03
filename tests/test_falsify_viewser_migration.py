@@ -55,7 +55,7 @@ class TestPriogridShimIsPermanent:
     def test_no_temporary_removal_comment(self):
         """handlers.py must not treat Viewser as a future dependency ('when Viewser is
         updated') — the shim is permanent, so no comment may schedule its removal."""
-        handlers = SRC_ROOT / "views_faoapi" / "data" / "handlers" / "grid_dataset.py"
+        handlers = SRC_ROOT / "views_crafdapi" / "data" / "handlers" / "grid_dataset.py"
         source = handlers.read_text()
         viewser_future_refs = re.findall(
             r"#.*(?:when|until|after).*[Vv]iewser.*(?:updated|fixed|changed)",
@@ -71,7 +71,7 @@ class TestPriogridShimIsPermanent:
         `_GridDataset._init_dataframe`: upstream still emits `priogrid_gid` (774 platform parquet
         files, C-62/C-63), so removing it would break ingestion of that data. Guards against a
         well-meaning 'dead code' deletion of a load-bearing permanent contract."""
-        handlers = SRC_ROOT / "views_faoapi" / "data" / "handlers" / "grid_dataset.py"
+        handlers = SRC_ROOT / "views_crafdapi" / "data" / "handlers" / "grid_dataset.py"
         source = handlers.read_text()
         assert "priogrid_gid" in source, (
             "the permanent priogrid_gid normalization shim is missing from handlers/grid_dataset.py — "

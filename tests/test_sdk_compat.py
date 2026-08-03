@@ -16,7 +16,7 @@ from appwrite.models.file_list import FileList
 from appwrite.models.preferences import Preferences
 from appwrite.models.bucket import Bucket
 
-from views_faoapi.managers.appwrite import _as_dict, _get
+from views_crafdapi.managers.appwrite import _as_dict, _get
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -250,7 +250,7 @@ class TestListDocumentsDeprecation:
         import ast
         from pathlib import Path
 
-        pkg = Path("src/views_faoapi/managers/appwrite")
+        pkg = Path("src/views_crafdapi/managers/appwrite")
         count = 0
         for py in sorted(pkg.glob("*.py")):
             tree = ast.parse(py.read_text())

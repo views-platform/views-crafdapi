@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
-**Consulted:** ADR-026 (API surface), ADR-011 (caching strategy), ADR-013 (environment-variable validation), ADR-016 (concurrency safety), ADR-009 (boundary contracts), the live auth path in `src/views_faoapi/managers/api.py` + `managers/appwrite/`
+**Consulted:** ADR-026 (API surface), ADR-011 (caching strategy), ADR-013 (environment-variable validation), ADR-016 (concurrency safety), ADR-009 (boundary contracts), the live auth path in `src/views_crafdapi/managers/api.py` + `managers/appwrite/`
 **Informed:** UN FAO / FSFC API consumers; deployment operators
 
 ---
@@ -87,7 +87,7 @@ This ADR governs **how a caller is authenticated and isolated**. It does *not* g
 
 ## Implementation Notes
 
-- Auth entry points: `FAOApiManager._get_api_key_hash`, `_get_prediction_manager`, `_get_appwrite_manager` (`managers/api.py`); the Appwrite-side credential application is `ApiKeyAuth.setup` (`managers/appwrite/`).
+- Auth entry points: `CrafdApiManager._get_api_key_hash`, `_get_prediction_manager`, `_get_appwrite_manager` (`managers/api.py`); the Appwrite-side credential application is `ApiKeyAuth.setup` (`managers/appwrite/`).
 - Every endpoint declares `x_api_key: str = Header(..., description="Appwrite API Key")`; the root `/` endpoint documents the header requirement in its payload.
 - Disk-cache partitioning: `managers/disk_cache.py` `_value_dir` / `_meta_path` / `_lock_path` all prefix with a **salted HMAC partition label** (`hmac(server_salt, api_key_hash)`, #323) — never the raw `api_key_hash`, so the on-disk label is neither the key nor derivable from it (§2).
 - Do **not** add logging that prints `x_api_key`; log the hash if a per-caller log key is needed.
@@ -105,6 +105,6 @@ This ADR governs **how a caller is authenticated and isolated**. It does *not* g
 ## References
 
 - faoapi **ADR-026** (API surface & resource model), **ADR-011** (caching strategy & eviction), **ADR-016** (concurrency safety), **ADR-013** (environment-variable validation), **ADR-022** (deployment/TLS), **ADR-003** (declarations over inference)
-- Live auth path: `src/views_faoapi/managers/api.py` (`_get_api_key_hash`, `_get_prediction_manager`, `_get_appwrite_manager`); `src/views_faoapi/managers/appwrite/` (`ApiKeyAuth`); `src/views_faoapi/managers/disk_cache.py` (per-key partitioning)
+- Live auth path: `src/views_crafdapi/managers/api.py` (`_get_api_key_hash`, `_get_prediction_manager`, `_get_appwrite_manager`); `src/views_crafdapi/managers/appwrite/` (`ApiKeyAuth`); `src/views_crafdapi/managers/disk_cache.py` (per-key partitioning)
 - Risk register: **C-77** (path-to-public credential hygiene — distinct embedded key), cluster **D** (path-to-public)
 - Issue **#4** (API ADRs)

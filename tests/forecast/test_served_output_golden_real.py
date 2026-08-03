@@ -26,7 +26,7 @@ pytestmark = pytest.mark.layer2_data
 
 _REAL_CACHE = Path(
     os.environ.get(
-        "FAOAPI_REAL_CACHE",
+        "CRAFDAPI_REAL_CACHE",
         "appwrite_cache/unfao_bucket/forecast_dataset_20260310_114703.parquet",
     )
 )
@@ -50,8 +50,8 @@ _VIEWS = [
 def _served_output_on_real_slice():
     import pandas as pd
 
-    from views_faoapi.data.handlers import FAO_PGMDataset
-    from views_faoapi.managers.api import dataframe_to_dict
+    from views_crafdapi.data.handlers import ForecastDataset
+    from views_crafdapi.managers.api import dataframe_to_dict
 
     df = pd.read_parquet(_REAL_CACHE)
     month = sorted(df.index.get_level_values("month_id").unique())[0]
@@ -60,7 +60,7 @@ def _served_output_on_real_slice():
     cells = sorted(sub.index.get_level_values("priogrid_id").unique())[:_SUBSET_CELLS]
     sub = sub[sub.index.get_level_values("priogrid_id").isin(cells)]
 
-    ds = FAO_PGMDataset(sub)
+    ds = ForecastDataset(sub)
     out = {"_meta": {"month": int(month), "n_cells": len(cells)}}
     for label, level, aggregate in _VIEWS:
         served = ds.calculate_hdi_map(alpha=0.9, level=level, aggregate=aggregate)

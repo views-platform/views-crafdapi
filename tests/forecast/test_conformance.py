@@ -9,13 +9,13 @@ import pytest
 from views_frames import SpatialLevel
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
-from views_faoapi.forecast.conformance import (
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.forecast.conformance import (
     CONFORMANCE_FLOOR,
     assert_cross_level_law,
     assert_frame,
 )
-from views_faoapi.forecast.geography.level_mapping import build_cell_to_unit_mapping
+from views_crafdapi.forecast.geography.level_mapping import build_cell_to_unit_mapping
 
 pytestmark = pytest.mark.layer2_data
 

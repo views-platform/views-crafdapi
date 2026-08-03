@@ -12,8 +12,8 @@ import pytest
 from fastapi import HTTPException
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
-from views_faoapi.managers.dataset_service import DatasetService
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.managers.dataset_service import DatasetService
 
 pytestmark = pytest.mark.layer4_infra
 

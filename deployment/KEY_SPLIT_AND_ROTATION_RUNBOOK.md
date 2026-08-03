@@ -1,3 +1,9 @@
+> **⚠ INHERITED FROM views-faoapi — DOES NOT APPLY TO CRAF'd.**
+> This runbook closes a key that sits exposed in **faoapi's** git history (issue #338,
+> C-178). CRAF'd was seeded from a scrubbed v1.4.0 snapshot with fresh history and gets
+> its own read-scoped key at **S9** — there is no leaked crafd key to close. This file is
+> scheduled for deletion/relocation at **S9/S12**; do not act on it for CRAF'd.
+
 # Key split & rotation runbook — closing the leaked-key problem, safely
 
 *Written to be read by a human. Operator-only work (Appwrite console + one message

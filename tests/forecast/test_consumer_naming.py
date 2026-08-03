@@ -17,10 +17,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import FAO_PGMDataset
-from views_faoapi.forecast.serialize import schema
-from views_faoapi.forecast.serialize.json_contract import to_consumer_columns
-from views_faoapi.managers.api import FAOApiManager
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.forecast.serialize import schema
+from views_crafdapi.forecast.serialize.json_contract import to_consumer_columns
+from views_crafdapi.managers.api import CrafdApiManager
 
 pytestmark = pytest.mark.layer2_data
 
@@ -55,13 +55,13 @@ def test_to_consumer_columns_renames_only_quantity_columns():
 # --- integration: the served forecast response carries the exact ADR-025 consumer columns ----
 @pytest.fixture
 def client(tmp_path):
-    mgr = FAOApiManager.from_config(
+    mgr = CrafdApiManager.from_config(
         {"deployment": {"host": "0.0.0.0", "port": 80}}, cache_dir=tmp_path / "cache"
     )
     mgr._prediction_bucket_id = "test-bucket"
     mgr.app = FastAPI()
     mgr._register_routes()
-    dataset = FAO_PGMDataset(make_fao_df(n_samples=100, targets=_TARGETS))
+    dataset = ForecastDataset(make_fao_df(n_samples=100, targets=_TARGETS))
     h = mgr._get_api_key_hash("test-api-key")
     # S1 (#264): a warm forecast serves only as a WIRE entry whose identity matches the current
     # manifest — tag it and return a matching manifest from the prediction manager.
@@ -71,7 +71,7 @@ def client(tmp_path):
     mgr._validate_api_key = MagicMock(return_value=MagicMock())
     pm = MagicMock()
     pm.get_latest_manifest.return_value = {"fileId": "f", "filename": "m.json",
-        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_fao"}
+        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_crafd"}
     mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: pm
     mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: MagicMock()
     return TestClient(mgr.app)

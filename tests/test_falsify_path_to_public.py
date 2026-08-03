@@ -33,7 +33,7 @@ def test_no_hardcoded_appwrite_key_in_any_tracked_notebook():
 
 @pytest.mark.xfail(
     strict=False,
-    reason="NEW blocker: bundled FAO GAUL 2024 shapefiles (src/views_faoapi/shapefiles/) "
+    reason="NEW blocker: bundled FAO GAUL 2024 shapefiles (src/views_crafdapi/shapefiles/) "
     "are third-party data with no bundled license/terms. A public flip would redistribute "
     "them and the repo-root MIT LICENSE would purport to relicense data we do not own. "
     "GAUL has redistribution restrictions — verify FAO terms before public.",
@@ -41,7 +41,7 @@ def test_no_hardcoded_appwrite_key_in_any_tracked_notebook():
 def test_no_unlicensed_thirdparty_data_bundled_for_public_release():
     """Bundled third-party geodata must ship with explicit license/terms clearing
     redistribution, or not be in the public tree at all."""
-    shp_dir = REPO / "src" / "views_faoapi" / "shapefiles"
+    shp_dir = REPO / "src" / "views_crafdapi" / "shapefiles"
     if not shp_dir.exists():
         return  # nothing bundled -> fine
     has_terms = any(

@@ -4,7 +4,7 @@
 **Date:** 2026-06-24  
 **Deciders:** Simon (PRIO), Claude Code  
 **Consulted:** ADR-021 (dense-grid fill semantics), risk register C-84, C-81, C-86, C-71  
-**Informed:** FAO API consumers  
+**Informed:** CRAF'd API consumers  
 
 ---
 
@@ -29,7 +29,7 @@ A decision is needed now because the M1 cutover to production (`development` →
 A change is **re-baselining** if it can alter the *published* forecast values (MAP, HDI bounds, `_min`/`_max`, or aggregated level outputs) for inputs that are otherwise unchanged. This includes, non-exhaustively:
 
 - The estimator: `_tower_collapse`, `data/statistics.py`, or the views-frames-summarize version they call.
-- The aggregation rule or grouping (`_aggregate_distributions` and the `FAO_PGMDataset` override).
+- The aggregation rule or grouping (`_aggregate_distributions` and the `ForecastDataset` override).
 - Dense-grid fill semantics or `fill_value` defaults (ADR-021).
 - `enforce_non_negative` / clipping behavior, or the value-plausibility gate (C-72) in a way that changes served values.
 - Adopting a different upstream **source/pipeline** whose values differ (the viewser→datafactory switch; see C-86).

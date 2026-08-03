@@ -51,7 +51,7 @@ Tracer-first (D-15). Slices: **S1** tracer+this ADR · **S2** parity corpus + ra
 
 ### 7. The `grep pandas` ratchet is the acceptance signal
 
-`grep -rl 'import pandas' src/views_faoapi/forecast/` may match only `ingestion/`, `serialize/`, `geography/`; `summarize/`, `aggregate/`, `frames/`, `conformance` must stay pandas-free. `data/handlers.py`'s pandas footprint is on a shrinking budget to its target. Enforced as a CI gate in S2.
+`grep -rl 'import pandas' src/views_crafdapi/forecast/` may match only `ingestion/`, `serialize/`, `geography/`; `summarize/`, `aggregate/`, `frames/`, `conformance` must stay pandas-free. `data/handlers.py`'s pandas footprint is on a shrinking budget to its target. Enforced as a CI gate in S2.
 
 ### 8. Scope
 
@@ -99,7 +99,7 @@ Governs the **forecast/sample internal representation**. Out of scope: the float
 ## Open Questions
 
 - The exact `data/handlers.py` pandas-footprint target for the ratchet (zero vs the serialize edge) — fixed in S2.
-- Whether a real production artifact can be captured as a golden once the un_fao producer delivers one (would strengthen C-146 beyond synthetic).
+- Whether a real production artifact can be captured as a golden once the un_crafd producer delivers one (would strengthen C-146 beyond synthetic).
 
 ---
 

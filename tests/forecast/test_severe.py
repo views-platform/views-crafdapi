@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from views_faoapi.forecast.summarize.severe import expected_shortfall
+from views_crafdapi.forecast.summarize.severe import expected_shortfall
 
 pytestmark = pytest.mark.layer2_data
 

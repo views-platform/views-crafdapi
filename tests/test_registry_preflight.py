@@ -4,7 +4,7 @@ the offending variable. Transition-safe: no registry reachable ⇒ only the pres
 
 import pytest
 
-from views_faoapi.managers.api import (
+from views_crafdapi.managers.api import (
     _registry_coordinates,
     _validate_env_against_registry,
 )
@@ -19,7 +19,7 @@ contract = "PLATFORM-001"
 class = "connection"
 value = "https://example.appwrite.io/v1"
 
-[target.APPWRITE_UNFAO_BUCKET_ID]
+[target.APPWRITE_CRAFD_BUCKET_ID]
 class = "target"
 value = "unfao_bucket"
 
@@ -38,26 +38,26 @@ def _write_registry(tmp_path):
 def test_registry_coordinates_reads_connection_and_target_not_secrets(tmp_path):
     coords = _registry_coordinates(_write_registry(tmp_path))
     assert coords["APPWRITE_ENDPOINT"] == "https://example.appwrite.io/v1"
-    assert coords["APPWRITE_UNFAO_BUCKET_ID"] == "unfao_bucket"
+    assert coords["APPWRITE_CRAFD_BUCKET_ID"] == "unfao_bucket"
     assert "APPWRITE_DATASTORE_API_KEY" not in coords  # a secret slot has no value
 
 
 def test_env_matching_the_registry_passes(tmp_path, monkeypatch):
     monkeypatch.setenv("APPWRITE_REGISTRY", _write_registry(tmp_path))
     monkeypatch.setenv("APPWRITE_ENDPOINT", "https://example.appwrite.io/v1")
-    monkeypatch.setenv("APPWRITE_UNFAO_BUCKET_ID", "unfao_bucket")
+    monkeypatch.setenv("APPWRITE_CRAFD_BUCKET_ID", "unfao_bucket")
     _validate_env_against_registry()  # no raise
 
 
 def test_env_disagreeing_with_registry_raises_naming_the_var(tmp_path, monkeypatch):
     monkeypatch.setenv("APPWRITE_REGISTRY", _write_registry(tmp_path))
-    monkeypatch.setenv("APPWRITE_UNFAO_BUCKET_ID", "a_typo_bucket")  # drifted from the registry
-    with pytest.raises(ValueError, match="APPWRITE_UNFAO_BUCKET_ID"):
+    monkeypatch.setenv("APPWRITE_CRAFD_BUCKET_ID", "a_typo_bucket")  # drifted from the registry
+    with pytest.raises(ValueError, match="APPWRITE_CRAFD_BUCKET_ID"):
         _validate_env_against_registry()
 
 
 def test_no_registry_reachable_is_a_no_op(tmp_path, monkeypatch):
     # transition-safe: registry not pointed at ⇒ only the presence check (elsewhere) runs.
     monkeypatch.delenv("APPWRITE_REGISTRY", raising=False)
-    monkeypatch.setenv("APPWRITE_UNFAO_BUCKET_ID", "anything")
+    monkeypatch.setenv("APPWRITE_CRAFD_BUCKET_ID", "anything")
     assert _validate_env_against_registry() is None

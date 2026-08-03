@@ -12,7 +12,7 @@ C-01 was a Tier 1 silent data corruption risk where a shared `PosteriorDistribut
 instance was mutated concurrently by async request handlers. It was resolved by per-call
 instantiation in `_ViewsDataset`. However, the same pattern — shared mutable state accessed
 from async handlers without synchronization — exists in the three in-memory caches in
-`FAOApiManager` (`_manager_cache`, `_dataframe_cache`, `_file_cache` at `managers/api.py:190-196`).
+`CrafdApiManager` (`_manager_cache`, `_dataframe_cache`, `_file_cache` at `managers/api.py:190-196`).
 
 These caches use **check-then-set patterns** that are not atomic across `await` points:
 
@@ -64,7 +64,7 @@ involves network I/O that should not be duplicated.
   Per-key locks are correct but should target only patterns involving `await`.
 
 ### Alternative C: Immutable cache entries (frozen dataclasses)
-- **Reason for rejection:** Impractical for large DataFrames and `FAO_PGMDataset` objects.
+- **Reason for rejection:** Impractical for large DataFrames and `ForecastDataset` objects.
 
 ### Alternative D: Thread-safe dicts (e.g., `concurrent.futures`)
 - **Reason for rejection:** Wrong concurrency model. FastAPI uses asyncio; thread-safe
@@ -103,13 +103,13 @@ involves network I/O that should not be duplicated.
        async with lock:
            if cache_key not in self._dataframe_cache:  # double-check
                data = await self._download_from_appwrite(...)
-               self._dataframe_cache[cache_key] = FAO_PGMDataset(data)
+               self._dataframe_cache[cache_key] = ForecastDataset(data)
    ```
 
 3. **`_file_cache`:** Same pattern as `_dataframe_cache` if downloads involve `await`;
    `setdefault()` if synchronous.
 
-4. **CIC update:** Update `docs/CICs/FAOApiManager.md` to declare concurrency model per cache.
+4. **CIC update:** Update `docs/CICs/CrafdApiManager.md` to declare concurrency model per cache.
 
 5. **Lock lifecycle:** Lock dict grows monotonically but is bounded by (API keys x categories).
    If C-07 eviction is implemented, evict locks alongside cache entries.
@@ -148,7 +148,7 @@ Current risk: duplicate Appwrite downloads on concurrent cache misses for the sa
 - C-01 (resolved) in the technical risk register (`reports/technical_risk_register.md`)
 - C-07 in the risk register (unbounded caches — eviction interacts with lock lifecycle)
 - ADR-006: Intent Contracts for Non-Trivial Classes (concurrency model requirement)
-- `docs/CICs/FAOApiManager.md` — CIC for `FAOApiManager`
+- `docs/CICs/CrafdApiManager.md` — CIC for `CrafdApiManager`
 - `managers/api.py:190-196` — cache dict declarations
 - `managers/api.py:483-491` — `_manager_cache` check-then-set
 - `managers/api.py:546-551`, `593-617` — `_dataframe_cache` check-then-set with async I/O

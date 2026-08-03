@@ -1,4 +1,4 @@
-"""Phase 4a (#112): the ForecastDataset facade — the FAO_PGMDataset back-compat alias,
+"""Phase 4a (#112): the ForecastDataset facade — the ForecastDataset back-compat alias,
 pickle round-trip (disk-cache path), and the explicit copy() clone (C-137)."""
 
 import pickle
@@ -7,19 +7,19 @@ import numpy as np
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import FAO_PGMDataset, ForecastDataset
+from views_crafdapi.data.handlers import ForecastDataset
 
 pytestmark = pytest.mark.layer2_data
 
 
 def test_fao_pgmdataset_is_forecastdataset_alias():
-    """The rename keeps FAO_PGMDataset working (pickles, isinstance, ~18 test modules)."""
-    assert FAO_PGMDataset is ForecastDataset
+    """The rename keeps ForecastDataset working (pickles, isinstance, ~18 test modules)."""
+    assert ForecastDataset is ForecastDataset
 
 
 def test_isinstance_holds_through_alias():
     ds = ForecastDataset(make_fao_df(seed=1))
-    assert isinstance(ds, FAO_PGMDataset)
+    assert isinstance(ds, ForecastDataset)
 
 
 def test_pickle_roundtrip():

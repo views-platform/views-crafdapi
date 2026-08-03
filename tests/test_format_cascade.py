@@ -1,10 +1,10 @@
-"""Tests for the format auto-detection cascade in FAOApiManager._get_latest_dataframe (C-11).
+"""Tests for the format auto-detection cascade in CrafdApiManager._get_latest_dataframe (C-11).
 
 The cascade tries: parquet → CSV (utf-8 only) → JSON → feather. **Pickle was REMOVED**
 (register C-59): `pd.read_pickle` runs `pickle.load`, which executes arbitrary code on
 deserialization (RCE on untrusted Appwrite bytes). `TestPickleRefused` asserts a crafted
 pickle is no longer executed.
-After parsing, it constructs FAO_PGMDataset, which requires a 2-level MultiIndex and metadata
+After parsing, it constructs ForecastDataset, which requires a 2-level MultiIndex and metadata
 columns. Formats that don't preserve MultiIndex (CSV, JSON, feather) will parse successfully
 but fail at dataset construction.
 
@@ -22,15 +22,15 @@ from fastapi import HTTPException
 from unittest.mock import MagicMock, patch
 
 from tests.conftest import make_fao_df
-from views_faoapi.managers.api import FAOApiManager
-from views_faoapi.managers.prediction import PredictionProvenance
+from views_crafdapi.managers.api import CrafdApiManager
+from views_crafdapi.managers.prediction import PredictionProvenance
 
 pytestmark = pytest.mark.layer2_data
 
 
 def _manager_with_bytes(tmp_path, file_bytes):
-    """Create a FAOApiManager wired to return `file_bytes` from a mock PredictionStoreManager."""
-    mgr = FAOApiManager.from_config(
+    """Create a CrafdApiManager wired to return `file_bytes` from a mock PredictionStoreManager."""
+    mgr = CrafdApiManager.from_config(
         {"deployment": {"host": "0.0.0.0", "port": 80}},
         cache_dir=tmp_path / "cache",
     )
@@ -106,7 +106,7 @@ class TestPickleRefused:
 
 
 # ============================================================
-# Formats that lose MultiIndex — patch FAO_PGMDataset to isolate cascade
+# Formats that lose MultiIndex — patch ForecastDataset to isolate cascade
 # ============================================================
 
 
@@ -119,7 +119,7 @@ def _mock_dataset(df, **kwargs):
 
 class TestCSVFormat:
 
-    @patch("views_faoapi.managers.dataset_service.ForecastDataset", side_effect=_mock_dataset)
+    @patch("views_crafdapi.managers.dataset_service.ForecastDataset", side_effect=_mock_dataset)
     def test_csv_utf8_parsed(self, mock_cls, tmp_path):
         df = _make_test_df()
         csv_bytes = df.to_csv().encode("utf-8")
@@ -132,7 +132,7 @@ class TestCSVFormat:
 
 class TestJSONFormat:
 
-    @patch("views_faoapi.managers.dataset_service.ForecastDataset", side_effect=_mock_dataset)
+    @patch("views_crafdapi.managers.dataset_service.ForecastDataset", side_effect=_mock_dataset)
     def test_json_parsed(self, mock_cls, tmp_path):
         df = _make_test_df().reset_index()
         for col in df.columns:
@@ -147,7 +147,7 @@ class TestJSONFormat:
 
 class TestFeatherFormat:
 
-    @patch("views_faoapi.managers.dataset_service.ForecastDataset", side_effect=_mock_dataset)
+    @patch("views_crafdapi.managers.dataset_service.ForecastDataset", side_effect=_mock_dataset)
     def test_feather_parsed(self, mock_cls, tmp_path):
         df = _make_test_df().reset_index()
         for col in df.columns:
@@ -181,7 +181,7 @@ class TestCascadeBehavior:
         for fmt in ["Parquet:", "CSV (utf-8):", "JSON:", "Feather:"]:
             assert fmt in detail, f"Missing format diagnostic: {fmt}"
 
-    @patch("views_faoapi.managers.dataset_service.ForecastDataset", side_effect=_mock_dataset)
+    @patch("views_crafdapi.managers.dataset_service.ForecastDataset", side_effect=_mock_dataset)
     def test_non_utf8_csv_falls_through_to_later_formats(self, mock_cls, tmp_path):
         """Non-UTF-8 bytes that aren't valid parquet should fail CSV utf-8
         and fall through to JSON/pickle/feather instead of silently
@@ -196,7 +196,7 @@ class TestCascadeBehavior:
         assert "CSV (utf-8):" in detail
 
     def test_no_files_returns_404(self, tmp_path):
-        mgr = FAOApiManager.from_config(
+        mgr = CrafdApiManager.from_config(
             {"deployment": {"host": "0.0.0.0", "port": 80}},
             cache_dir=tmp_path / "cache",
         )
@@ -211,7 +211,7 @@ class TestCascadeBehavior:
         assert exc_info.value.status_code == 404
 
     def test_download_failure_returns_500(self, tmp_path):
-        mgr = FAOApiManager.from_config(
+        mgr = CrafdApiManager.from_config(
             {"deployment": {"host": "0.0.0.0", "port": 80}},
             cache_dir=tmp_path / "cache",
         )
@@ -232,7 +232,7 @@ class TestCascadeBehavior:
         assert "Failed to download" in exc_info.value.detail
 
     def test_empty_download_returns_500(self, tmp_path):
-        mgr = FAOApiManager.from_config(
+        mgr = CrafdApiManager.from_config(
             {"deployment": {"host": "0.0.0.0", "port": 80}},
             cache_dir=tmp_path / "cache",
         )

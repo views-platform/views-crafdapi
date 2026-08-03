@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from views_faoapi.forecast.serialize import schema
-from views_faoapi.forecast.summarize.estimator import collapse
+from views_crafdapi.forecast.serialize import schema
+from views_crafdapi.forecast.summarize.estimator import collapse
 
 pytestmark = pytest.mark.layer2_data
 
@@ -64,15 +64,15 @@ def test_series_of_ambiguous_fails_loud():
 def test_identity_sources_are_real_metadata_columns():
     """Every identity source column must exist in the 9-column GAUL metadata contract —
     so a rename upstream can't leave the schema pointing at a phantom column."""
-    from views_faoapi.data.handlers import ForecastDataset
+    from views_crafdapi.data.handlers import ForecastDataset
 
     meta = set(ForecastDataset._METADATA_COLS)
     for consumer, source in schema.IDENTITY_SOURCE.items():
         assert source in meta, f"{consumer} maps to {source!r}, absent from _METADATA_COLS"
 
 
-# --- the 33-column contract ---------------------------------------------------------------
-def test_series_value_columns_are_the_ten_in_order():
+# --- the per-series value contract (ADR-025 + ADR-034 exceedance) --------------------------
+def test_series_value_columns_are_the_thirteen_in_order():
     assert schema.series_value_columns("sb") == [
         "sb_map",
         "sb_hdi50_lower", "sb_hdi50_upper",
@@ -80,19 +80,20 @@ def test_series_value_columns_are_the_ten_in_order():
         "sb_hdi95_lower", "sb_hdi95_upper",
         "sb_severe_scenario",
         "sb_bimodality_flag",
+        "sb_p_gt25", "sb_p_gt100", "sb_p_gt1000",
         "sb_actual",
     ]
 
 
-def test_bulk_layout_is_exactly_33_unique_columns():
+def test_bulk_layout_is_exactly_45_unique_columns():
     cols = schema.bulk_columns()
-    assert len(cols) == 36
-    assert len(set(cols)) == 36  # no duplicates
+    assert len(cols) == 45
+    assert len(set(cols)) == 45  # no duplicates
     assert cols[:6] == list(schema.IDENTITY_COLUMNS)
-    # 9 value columns per series, in series order
-    assert cols[6:16] == schema.series_value_columns("sb")
-    assert cols[16:26] == schema.series_value_columns("ns")
-    assert cols[26:36] == schema.series_value_columns("os")
+    # 13 value columns per series, in series order
+    assert cols[6:19] == schema.series_value_columns("sb")
+    assert cols[19:32] == schema.series_value_columns("ns")
+    assert cols[32:45] == schema.series_value_columns("os")
 
 
 def test_hdi_col_rejects_bad_bound():

@@ -5,9 +5,9 @@ import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
-from views_faoapi.data.handlers import ForecastDataset
-from views_faoapi.forecast.serialize import schema
-from views_faoapi.forecast.serialize.bulk_parquet import build_bulk_table, write_bulk_parquet
+from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.forecast.serialize import schema
+from views_crafdapi.forecast.serialize.bulk_parquet import build_bulk_table, write_bulk_parquet
 
 pytestmark = pytest.mark.layer2_data
 
@@ -24,10 +24,10 @@ def _historical(seed=2, **kw):
     return ForecastDataset(df, targets=list(_HT))
 
 
-def test_table_is_exactly_the_33_column_adr025_schema():
+def test_table_is_exactly_the_45_column_schema():
     table = build_bulk_table(_forecast(), _historical())
     assert list(table.columns) == schema.bulk_columns()
-    assert len(table.columns) == 36
+    assert len(table.columns) == 45
 
 
 def test_one_row_per_month_and_admin1_with_consumer_identity():
@@ -108,17 +108,17 @@ def test_bulk_endpoint_returns_the_parquet(tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from views_faoapi.data.handlers import FAO_PGMDataset
-    from views_faoapi.managers.api import FAOApiManager
+    from views_crafdapi.data.handlers import ForecastDataset
+    from views_crafdapi.managers.api import CrafdApiManager
 
-    mgr = FAOApiManager.from_config(
+    mgr = CrafdApiManager.from_config(
         {"deployment": {"host": "0.0.0.0", "port": 80}}, cache_dir=tmp_path / "cache"
     )
     mgr._prediction_bucket_id = "test-bucket"
     mgr.app = FastAPI()
     mgr._register_routes()
 
-    fds = FAO_PGMDataset(make_fao_df(n_samples=32, seed=1, targets=_FC))
+    fds = ForecastDataset(make_fao_df(n_samples=32, seed=1, targets=_FC))
     hds = ForecastDataset(make_fao_df(n_samples=1, seed=2, targets=_HT), targets=list(_HT))
     h = mgr._get_api_key_hash("test-api-key")
     def mk(d):
@@ -130,7 +130,7 @@ def test_bulk_endpoint_returns_the_parquet(tmp_path):
     mgr._validate_api_key = MagicMock(return_value=MagicMock())
     pm = MagicMock()
     pm.get_latest_manifest.return_value = {"fileId": "f", "filename": "m.json",
-        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_fao"}
+        "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_crafd"}
     mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: pm
     mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: MagicMock()
 

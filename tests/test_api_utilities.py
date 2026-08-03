@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from fastapi import HTTPException
 
-from views_faoapi.managers.serialization import (
+from views_crafdapi.managers.serialization import (
     convert_numpy_types,
     dataframe_to_dict,
     flatten_numeric_list_columns,

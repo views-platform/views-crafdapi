@@ -13,13 +13,13 @@
 
 It acts as the prediction-domain facade over Appwrite's generic file storage, ensuring that every uploaded prediction carries validated metadata (via `PredictionMetadata`) and that queries are automatically scoped to the current model.
 
-**Location:** `src/views_faoapi/managers/prediction/manager.py`
+**Location:** `src/views_crafdapi/managers/prediction/manager.py`
 
 ---
 
 ## 2. Non-Goals (Explicit Exclusions)
 
-- This class does **not** compute statistics on predictions (HDI, MAP, or any distributional analysis -- that responsibility belongs to `PosteriorDistributionAnalyzer` and `FAO_PGMDataset`).
+- This class does **not** compute statistics on predictions (HDI, MAP, or any distributional analysis -- that responsibility belongs to `PosteriorDistributionAnalyzer` and `ForecastDataset`).
 - This class does **not** manage `DataFrame` or tensor representations of prediction data.
 - This class does **not** handle API routing, HTTP request/response lifecycle, or authentication.
 - This class does **not** interpret or transform prediction data contents; it treats prediction files as opaque binary blobs with structured metadata.
@@ -47,12 +47,12 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 ### Latest-file resolution
 - `get_latest_file_id` returns the `fileId` of the newest prediction matching the given filters (sorted by `$createdAt` descending).
 - `get_latest_file_metadata` returns `Optional[PredictionFileMetadata]` — the file ID plus `$createdAt`/`$updatedAt` timestamps for the newest matching prediction. Returns `None` when no predictions match.
-- `get_latest_provenance` returns `Optional[PredictionProvenance]` — the lineage of the newest matching artifact: its identity (file ID, hash, `$createdAt`, filename), the declared upstream `source`/`pipeline` (`"unknown"` if unstamped), and the faoapi `methodology_version` (from `views_faoapi.methodology.METHODOLOGY_VERSION`, ADR-023) that computes the published HDI/MAP. The serving layer logs this when an artifact enters service and exposes it at `GET /provenance/{category}`, so a silent viewser→datafactory source switch or methodology re-baseline is auditable (C-86).
+- `get_latest_provenance` returns `Optional[PredictionProvenance]` — the lineage of the newest matching artifact: its identity (file ID, hash, `$createdAt`, filename), the declared upstream `source`/`pipeline` (`"unknown"` if unstamped), and the faoapi `methodology_version` (from `views_crafdapi.methodology.METHODOLOGY_VERSION`, ADR-023) that computes the published HDI/MAP. The serving layer logs this when an artifact enters service and exposes it at `GET /provenance/{category}`, so a silent viewser→datafactory source switch or methodology re-baseline is auditable (C-86).
 - `download_latest_file` combines latest-file resolution with download in a single call.
 
 #### Quarantine / rollback override (C-71)
-- `get_predictions_by_metadata` excludes any document whose `fileId` is listed in the `APPWRITE_UNFAO_QUARANTINED_FILE_IDS` environment variable (comma-separated bucket file IDs) **before** sorting. All latest-file resolution flows through this method, so quarantining the current "latest" file rolls selection back to the previous known-good upload — reversibly and without deleting anything from Appwrite. The env var is read at selection time (no redeploy needed); empty/unset means no quarantine. Each exclusion is logged at WARNING level.
-- `get_predictions_by_metadata` also honours an optional **approval allowlist** `APPWRITE_UNFAO_APPROVED_FILE_IDS` (comma-separated bucket file IDs), applied after the quarantine filter: when **non-empty**, only listed files are eligible for selection (a proactive promote-to-production gate — a new upload is not served until approved); when **unset/empty**, selection is unrestricted (the default, behaviour-preserving). Quarantine (blocklist) and approval (allowlist) compose — a file must be approved *and* not quarantined to be selected.
+- `get_predictions_by_metadata` excludes any document whose `fileId` is listed in the `APPWRITE_CRAFD_QUARANTINED_FILE_IDS` environment variable (comma-separated bucket file IDs) **before** sorting. All latest-file resolution flows through this method, so quarantining the current "latest" file rolls selection back to the previous known-good upload — reversibly and without deleting anything from Appwrite. The env var is read at selection time (no redeploy needed); empty/unset means no quarantine. Each exclusion is logged at WARNING level.
+- `get_predictions_by_metadata` also honours an optional **approval allowlist** `APPWRITE_CRAFD_APPROVED_FILE_IDS` (comma-separated bucket file IDs), applied after the quarantine filter: when **non-empty**, only listed files are eligible for selection (a proactive promote-to-production gate — a new upload is not served until approved); when **unset/empty**, selection is unrestricted (the default, behaviour-preserving). Quarantine (blocklist) and approval (allowlist) compose — a file must be approved *and* not quarantined to be selected.
 - **Manifest-first: quarantine the manifest = whole-run rollback (ADR-013 §4.4).** For a wire-contract forecast run, the same blocklist operates at *run* granularity: selection is manifest-first, so quarantining the **run manifest's** fileId makes `get_latest_manifest` return the previous run's manifest — an atomic run-level rollback across the run's 100+ shards by quarantining a single file (the env blocklist applies on restart, which re-reads it). Independently, `DatasetService` keys the served cache on the manifest `fileId` and re-checks it each request (S5/#207), so a newly *published* run is picked up promptly without a restart. Operators act on manifests, never shards. See `reports/ops/forecast_serving.md`.
 
 ### Upload resilience
@@ -131,20 +131,20 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 ## 7. Boundaries and Interactions
 
 ### Layer
-Infrastructure layer (`src/views_faoapi/managers/`).
+Infrastructure layer (`src/views_crafdapi/managers/`).
 
 ### Depends on
-- `AppWriteFileManager` and `AppwriteConfig` (`src/views_faoapi/managers/appwrite/`) -- all Appwrite storage and metadata operations are delegated to this component. Treated as a trusted infrastructure wrapper.
-- `ModelPathManager` (`src/views_faoapi/managers/model.py`) -- provides `model_name` for automatic query scoping.
-- `OperationResult` (`src/views_faoapi/managers/appwrite/`) -- the standard result envelope.
+- `AppWriteFileManager` and `AppwriteConfig` (`src/views_crafdapi/managers/appwrite/`) -- all Appwrite storage and metadata operations are delegated to this component. Treated as a trusted infrastructure wrapper.
+- `ModelPathManager` (`src/views_crafdapi/managers/model.py`) -- provides `model_name` for automatic query scoping.
+- `OperationResult` (`src/views_crafdapi/managers/appwrite/`) -- the standard result envelope.
 - `PredictionMetadata` (defined in the same module) -- validates metadata before upload.
 - `PredictionFileMetadata` (defined in the same module) -- dataclass wrapping `file_id`, `created_at`, `updated_at` for latest-file resolution with timestamps.
 
 ### Called by
-- `FAOApiManager` (or equivalent orchestrator) for prediction upload, download, listing, and management operations.
+- `CrafdApiManager` (or equivalent orchestrator) for prediction upload, download, listing, and management operations.
 
 ### Must not depend on
-- Domain layer (`data/`) -- `PredictionStoreManager` must not import or reference `FAO_PGMDataset`, `_ViewsDataset`, `PosteriorDistributionAnalyzer`, or any statistical/analytical components.
+- Domain layer (`data/`) -- `PredictionStoreManager` must not import or reference `ForecastDataset`, `_ViewsDataset`, `PosteriorDistributionAnalyzer`, or any statistical/analytical components.
 - API/HTTP layer -- this class does not handle routing or request parsing.
 
 ---
@@ -153,8 +153,8 @@ Infrastructure layer (`src/views_faoapi/managers/`).
 
 ### Uploading a prediction file with validated metadata
 ```python
-from views_faoapi.managers.prediction import PredictionStoreManager
-from views_faoapi.managers.appwrite import AppwriteConfig
+from views_crafdapi.managers.prediction import PredictionStoreManager
+from views_crafdapi.managers.appwrite import AppwriteConfig
 
 config = AppwriteConfig(...)
 manager = PredictionStoreManager(appwrite_file_manager_config=config)
@@ -237,8 +237,8 @@ all_preds = manager.list_all_predictions()
 - `list_all_predictions_unfiltered` does not add `model_name` filter.
 - `get_latest_file_id` returns `None` when no files match, not an exception.
 - `get_latest_file_metadata` returns `None` when no files match or the latest file has no `fileId`.
-- `get_predictions_by_metadata` excludes file IDs listed in `APPWRITE_UNFAO_QUARANTINED_FILE_IDS`; quarantining the newest file makes the next-newest the selected "latest" (C-71 rollback).
-- `get_predictions_by_metadata` restricts to `APPWRITE_UNFAO_APPROVED_FILE_IDS` when that allowlist is non-empty; an unset allowlist is unrestricted (C-71 proactive gate).
+- `get_predictions_by_metadata` excludes file IDs listed in `APPWRITE_CRAFD_QUARANTINED_FILE_IDS`; quarantining the newest file makes the next-newest the selected "latest" (C-71 rollback).
+- `get_predictions_by_metadata` restricts to `APPWRITE_CRAFD_APPROVED_FILE_IDS` when that allowlist is non-empty; an unset allowlist is unrestricted (C-71 proactive gate).
 - `get_latest_provenance` reports `source="unknown"` when the artifact has no `source`/`pipeline` field, carries `methodology_version`, and returns `None` when no file matches or the latest has no `fileId` (C-86 / ADR-023).
 - All 12 public methods return the documented types.
 

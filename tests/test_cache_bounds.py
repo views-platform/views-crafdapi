@@ -9,8 +9,8 @@ pytestmark = pytest.mark.layer4_infra
 class TestCacheBounds:
 
     def _make_manager(self, tmp_path):
-        from views_faoapi.managers.api import FAOApiManager
-        return FAOApiManager.from_config({}, cache_dir=tmp_path / "datasets")
+        from views_crafdapi.managers.api import CrafdApiManager
+        return CrafdApiManager.from_config({}, cache_dir=tmp_path / "datasets")
 
     def test_manager_cache_is_bounded(self, tmp_path):
         manager = self._make_manager(tmp_path)

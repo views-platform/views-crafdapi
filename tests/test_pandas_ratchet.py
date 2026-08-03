@@ -16,7 +16,7 @@ import pytest
 
 pytestmark = pytest.mark.layer4_infra
 
-_SRC = Path(__file__).resolve().parent.parent / "src" / "views_faoapi"
+_SRC = Path(__file__).resolve().parent.parent / "src" / "views_crafdapi"
 _IMPORT_RE = re.compile(r"^\s*(?:import pandas\b|from pandas\b|import pandas as\b)", re.M)
 
 # The frozen allowlist of modules permitted to import pandas (baseline 2026-06-27).

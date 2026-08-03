@@ -1,7 +1,7 @@
 """Falsification tests for the claim: 'we understand the splash zone
 of renaming priogrid_id BACK TO priogrid_gid.'
 
-Key finding: this direction breaks the external FAO API contract.
+Key finding: this direction breaks the external CRAF'd API contract.
 The API response JSON includes priogrid_id as a key — renaming it
 is a breaking change for external consumers.
 """
@@ -15,7 +15,7 @@ SRC_ROOT = Path(__file__).resolve().parent.parent / "src"
 
 
 class TestP1_APIResponseExposesColumnName:
-    """The FAO API serializes DataFrames via reset_index() + to_dict().
+    """The CRAF'd API serializes DataFrames via reset_index() + to_dict().
     This puts the index column name into the JSON response.
     Renaming priogrid_id → priogrid_gid breaks external consumers."""
 
@@ -26,7 +26,7 @@ class TestP1_APIResponseExposesColumnName:
 
         (dataframe_to_dict was extracted from api.py to serialization.py in
         epic #144 / S1; this probe follows it to its new home.)"""
-        serde_py = SRC_ROOT / "views_faoapi" / "managers" / "serialization.py"
+        serde_py = SRC_ROOT / "views_crafdapi" / "managers" / "serialization.py"
         source = serde_py.read_text()
         assert "reset_index" in source, (
             "dataframe_to_dict no longer calls reset_index — "

@@ -51,8 +51,8 @@ Contracts must be clear enough that:
 ## Active Contracts
 
 - [`_GridDataset`](_GridDataset.md) — DataFrame-backed dataset with time x entity x feature tensor semantics (formerly `_ViewsDataset`)
-- [`FAO_PGMDataset`](FAO_PGMDataset.md) — VIEWS PRIO-GRID Monthly dataset with geographic metadata and aggregation
-- [`FAOApiManager`](FAOApiManager.md) — FastAPI service orchestration, multi-tier caching, endpoint routing
+- [`ForecastDataset`](ForecastDataset.md) — the forecast facade over the grid + GAUL geo-metadata; the served HDI/MAP entry point (the retired `FAO_PGMDataset` alias's target)
+- [`CrafdApiManager`](CrafdApiManager.md) — FastAPI service orchestration, multi-tier caching, endpoint routing
 - [`AppWriteFileManager`](AppWriteFileManager.md) — Appwrite-backed file storage, metadata management, and caching
 - [`PredictionStoreManager`](PredictionStoreManager.md) — prediction-specific file CRUD with metadata validation
 - [`BulkParquetWriter`](BulkParquetWriter.md) — the ADR-025 admin-1 bulk artifact (33-column wide parquet; forecast quantities + historical `actual`)
