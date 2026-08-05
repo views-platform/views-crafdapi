@@ -84,20 +84,24 @@ part2() {
     # several versions in days. Read [meta].version with the venv's tomllib — never grep, a
     # commented key looks identical to a live one (register C-57). Stamped into the env below so
     # "which registry built this box?" is grep-able, not folkloric.
-    _reg_version="$("${REPO_DIR}/.venv/bin/python" - "${APPWRITE_REGISTRY}" <<'PY' 2>/dev/null || echo unknown
+    #
+    # The venv lives in ${SVC_USER}'s 0750 home, which this admin account cannot traverse — so the
+    # two Python invocations run AS ${SVC_USER} (`sudo -u`), the venv's owner. The registry copy in
+    # /tmp is world-readable, so ${SVC_USER} can read it. (This is the bug crafdapi's first real run
+    # of the registry bootstrap surfaced: faoapi never hit it because its env was hand-built.)
+    _reg_version="$(sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" - "${APPWRITE_REGISTRY}" <<'PY' 2>/dev/null || echo unknown
 import sys, tomllib
 with open(sys.argv[1], "rb") as fh:
     print(tomllib.load(fh).get("meta", {}).get("version", "unknown"))
 PY
 )"
     echo "building ${SVC_HOME}/.env.crafdapi: coordinates from ${APPWRITE_REGISTRY} (registry version ${_reg_version}), secret from operator slot"
-    # Emit the registry-version stamp, then the non-secret coordinates, then append the operator
-    # secret. The pipe to `sudo tee >/dev/null` writes the file root-owned WITHOUT echoing the key
-    # value to the terminal. Use the venv's pinned Python (3.13, has `tomllib`) — it exists after
-    # the gate's `uv sync` above, so the parse never depends on the box's system Python version.
+    # Emit the registry-version stamp, then the non-secret coordinates (emitted AS ${SVC_USER} —
+    # see above), then append the operator secret. The pipe to `sudo tee >/dev/null` writes the file
+    # root-owned WITHOUT echoing the key value to the terminal.
     {
         printf 'APPWRITE_REGISTRY_VERSION=%s\n' "${_reg_version}"
-        "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}"
+        sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}"
         printf 'APPWRITE_DATASTORE_API_KEY=%s\n' "${APPWRITE_DATASTORE_API_KEY}"
     } | sudo tee "${SVC_HOME}/.env.crafdapi" >/dev/null
     sudo chown "${SVC_USER}:${SVC_USER}" "${SVC_HOME}/.env.crafdapi"
