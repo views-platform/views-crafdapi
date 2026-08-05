@@ -75,22 +75,35 @@ part2() {
     [ -f "${APPWRITE_REGISTRY}" ] || {
         echo "FATAL #275: coordinate registry not found at ${APPWRITE_REGISTRY}"
         echo "  PLATFORM-001 A3 must be present first (migration order: registry lands -> re-point)."
-        echo "  Set APPWRITE_REGISTRY to a pinned checkout of views-appwrite's coordinate_registry.toml."
+        echo "  Set APPWRITE_REGISTRY to a pinned views-appwrite checkout of coordinate_registry.toml,"
+        echo "  or (ADR-035 Decision 2) a copy of the versioned registry file placed on the box."
         exit 1
     }
-    echo "building ${SVC_HOME}/.env.crafdapi: coordinates from ${APPWRITE_REGISTRY}, secret from operator slot"
-    # Emit non-secret coordinates from the registry, then append the operator secret. The pipe to
-    # `sudo tee >/dev/null` writes the file root-owned WITHOUT echoing the key value to the terminal.
-    # Use the venv's pinned Python (3.13, has `tomllib`) — it exists after the gate's `uv sync`
-    # above, so the parse never depends on the box's system Python version.
+    # Record WHICH registry version built this box (crafdapi#34 finding 4 / ADR-035): a copied
+    # registry file is otherwise indistinguishable from a stale one, and the contract has moved
+    # several versions in days. Read [meta].version with the venv's tomllib — never grep, a
+    # commented key looks identical to a live one (register C-57). Stamped into the env below so
+    # "which registry built this box?" is grep-able, not folkloric.
+    _reg_version="$("${REPO_DIR}/.venv/bin/python" - "${APPWRITE_REGISTRY}" <<'PY' 2>/dev/null || echo unknown
+import sys, tomllib
+with open(sys.argv[1], "rb") as fh:
+    print(tomllib.load(fh).get("meta", {}).get("version", "unknown"))
+PY
+)"
+    echo "building ${SVC_HOME}/.env.crafdapi: coordinates from ${APPWRITE_REGISTRY} (registry version ${_reg_version}), secret from operator slot"
+    # Emit the registry-version stamp, then the non-secret coordinates, then append the operator
+    # secret. The pipe to `sudo tee >/dev/null` writes the file root-owned WITHOUT echoing the key
+    # value to the terminal. Use the venv's pinned Python (3.13, has `tomllib`) — it exists after
+    # the gate's `uv sync` above, so the parse never depends on the box's system Python version.
     {
+        printf 'APPWRITE_REGISTRY_VERSION=%s\n' "${_reg_version}"
         "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}"
         printf 'APPWRITE_DATASTORE_API_KEY=%s\n' "${APPWRITE_DATASTORE_API_KEY}"
     } | sudo tee "${SVC_HOME}/.env.crafdapi" >/dev/null
     sudo chown "${SVC_USER}:${SVC_USER}" "${SVC_HOME}/.env.crafdapi"
     sudo chmod 600 "${SVC_HOME}/.env.crafdapi"
     N=$(sudo grep -c '^APPWRITE_' "${SVC_HOME}/.env.crafdapi")
-    echo "credentials file written (${N} APPWRITE_ lines: registry coordinates + 1 operator secret; values not displayed; expected >= 9)"
+    echo "credentials file written (${N} APPWRITE_ lines: 1 registry-version stamp + registry coordinates + 1 operator secret; values not displayed; expected >= 9)"
     echo "Then run:  bash bootstrap.sh part3"
 }
 
