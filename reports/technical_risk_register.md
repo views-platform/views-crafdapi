@@ -5,9 +5,9 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-11                                     |
-| Total Concerns    | 17                                             |
-| Open Concerns     | 17                                             |
-| Resolved Concerns | 0                                              |
+| Total Concerns    | 19                                             |
+| Open Concerns     | 18                                             |
+| Resolved Concerns | 1                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -338,6 +338,21 @@ The dtype is, however, an **in-band discriminator**: a real join yields `float32
 
 ---
 
+
+### C-250: README seam-contract pin is stale (`platform-001-v1.2.0`) against the live `appwrite-seam-v1.5.2`
+
+| Field | Value |
+|-------|-------|
+| ID | C-250 |
+| Tier | 4 |
+| Source | /code-review max on S1 (seam-contract D2, epic views-faoapi#383) (2026-08-12) |
+| Trigger | The next reader follows `README.md:17`'s pinned URL / believes `platform-001-v1.2.0` is the current seam-contract edition when repointing or onboarding. |
+| Location | `README.md:17-19` |
+
+The README pins the Appwrite Seam Contract at `platform-001-v1.2.0` and describes a "v1.3.0 rename untagged" — stale: views-appwrite now publishes `appwrite-seam-v1.5.x` tags (current `v1.5.2`) and the contract file was renamed `PLATFORM-001` → "The Appwrite Seam Contract". S1 added a D2 binding note directly below (correctly citing `v1.5.2`), so the two now visibly disagree. **Doc-drift, no runtime effect** — the D2 binding pins `v1.5.2` in code (`seam_contract.REGISTRY_PIN_TAG`), not the README. crafd's equivalent of views-faoapi#340; deliberately out of S1 scope (contract-version tracking is its own concern). Named fix: a crafd doc-hygiene pass refreshing the README seam pin to the current published tag + renamed contract, mirroring faoapi#340.
+
+---
+
 ## Disagreements
 
 (No disagreements registered yet. New IDs start at `D-27` — see the ID Namespace Note.)
@@ -346,7 +361,21 @@ The dtype is, however, an **in-band discriminator**: a real join yields `float32
 
 ## Resolved Concerns
 
-(No resolved concerns yet.)
+### C-249: `seam_contract.declared_value` raises a bare `KeyError` if the registry pin is lowered below the row's first edition
+
+| Field | Value |
+|-------|-------|
+| ID | C-249 |
+| Tier | 4 |
+| Source | /code-review max on S1 (seam-contract D2, epic views-faoapi#383) (2026-08-12) |
+| Trigger | A contributor lowers `REGISTRY_PIN_TAG` below `appwrite-seam-v1.5.2` (the edition where `[contract.UNCRAFD_CONSUMER_DOCUMENT_NAME]` first exists) — e.g. copying faoapi's `v1.5.0` pin out of habit. |
+| Location | `src/views_crafdapi/seam_contract.py` (`declared_value`, `REGISTRY_PIN_TAG`) |
+
+`declared_value` does `tomllib.loads(text)["contract"][contract_key]["value"]`. At a registry edition predating the UNCRAFD row the `[contract]` table (or the key) is absent, so the binding test errors with a bare `KeyError('contract')`/`KeyError('UNCRAFD_CONSUMER_DOCUMENT_NAME')` instead of a message naming the tag + row. **Loud, never silent** — the test fails either way — and the docstring documents the KeyError, so this is a clarity nit, not a correctness risk. Named fix: catch the absent table/key and raise a `ValueError` naming `REGISTRY_PIN_TAG` and the row ("the pinned edition predates this contract row — pin ≥ v1.5.2"). Mirrors the same nuance in views-faoapi's `test_seam_contract_binding` (faoapi#379).
+
+**RESOLVED (2026-08-12, S1):** `declared_value` now catches the absent `[contract]` table/key and raises a clear `ValueError` naming the missing row and the likely cause (a pin predating `appwrite-seam-v1.5.2`). Test: `test_seam_contract_binding.py::test_declared_value_fails_clearly_when_the_row_is_absent`.
+
+---
 
 ---
 
