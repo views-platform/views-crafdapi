@@ -18,6 +18,8 @@ This API is a consumer on the shared Appwrite seam and conforms to **The Appwrit
 
 `platform-001-v1.2.0` is the newest *published* tag; `main` carries the v1.3.0 rename (untagged until the operator cuts it — views-appwrite#21). Moving to a newer version is a deliberate act: read the diff, accept it, repoint. Coordinates are read from the pinned registry, never copied; this API writes its **own** thin Appwrite client (WET-before-DRY — it must not import `views_pipeline_core.modules.{appwrite,datastore}`).
 
+**Served-document-name binding (ADR-017 D2).** The store-document `name` this API filters every query on is declared once in `src/views_crafdapi/seam_contract.py` (`CONSUMER_DOCUMENT_NAME = "un_crafd"`) and bound in CI against the registry's `[contract.UNCRAFD_CONSUMER_DOCUMENT_NAME]` declaration, read at the **immutable tag `appwrite-seam-v1.5.2`** (the pin lives in one place — `REGISTRY_PIN_TAG`; the UNCRAFD row exists only from v1.5.2). This closes the invisible-delivery failure (a producer/consumer name drift returns empty with no error — ADR-017 §1). Changing the name is a **contract amendment**: bump the registry edition and re-pin *both* sides, never one alone. Consumer half of views-postprocessing ADR-017 §5; mirrors views-faoapi#379.
+
 ## Features
 
 - Per-API-key Appwrite client and data-cache

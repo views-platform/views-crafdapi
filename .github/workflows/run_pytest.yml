@@ -19,6 +19,20 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Checkout views-appwrite (sibling — the ADR-017 seam-contract authority)
+      # Tokenless on purpose: the default GITHUB_TOKEN is scoped to THIS repo, so this
+      # step succeeds only because views-appwrite is public. `fetch-depth: 0` brings all
+      # tags; the D2 test (tests/test_seam_contract_binding.py) reads the coordinate
+      # registry at an IMMUTABLE tag via `git show`, so the working-tree ref checked out
+      # here is irrelevant — only the presence of the tags matters. A tag-pinned read,
+      # NOT a coupling to views-appwrite's moving `main`.
+      uses: actions/checkout@v4
+      with:
+        repository: views-platform/views-appwrite
+        ref: main
+        fetch-depth: 0
+        path: _siblings/views-appwrite
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -36,12 +50,16 @@ jobs:
       # Non-integration suite. Integration tests need live Appwrite credentials
       # (APPWRITE_*) that CI does not hold; they are deselected by
       # `addopts = "-m 'not integration'"` in pyproject.toml, made explicit here.
-      # This checkout has no sibling repos, so cross-repo falsification probes
-      # auto-skip via the `requires_sibling_repos` marker (see TESTING.md).
+      # views-appwrite IS checked out above (for the D2 seam-contract binding, which then
+      # FAILS loud rather than skips — it reads $VIEWS_APPWRITE and $CI). The cross-repo
+      # falsification probes target OTHER siblings that are NOT checked out here, so they
+      # still auto-skip via the `requires_sibling_repos` marker (see TESTING.md).
       # The suite is green-by-default: only a genuine failure should fail this
       # job (xfail/skip are expected). `-ra` surfaces skip/xfail reasons in the log.
       # Coverage is reported as a NON-BLOCKING signal — there is deliberately no
       # --cov-fail-under (a gate would recreate the red-by-default trap C-74/C-76).
+      env:
+        VIEWS_APPWRITE: ${{ github.workspace }}/_siblings/views-appwrite
       run: >-
         uv run pytest tests/ -m "not integration" -ra
         --cov=src/views_crafdapi --cov-report=term-missing --cov-report=xml

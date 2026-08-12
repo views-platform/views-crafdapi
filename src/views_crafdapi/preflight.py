@@ -52,6 +52,7 @@ from typing import Any, Dict, List, Optional
 
 from views_crafdapi.forecast import contract
 from views_crafdapi.forecast.ingestion import wire_reader
+from views_crafdapi.seam_contract import CONSUMER_DOCUMENT_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -384,7 +385,7 @@ def preflight(directory: Path | str, *, assemble: bool = True) -> PreflightRepor
         # not manufacturing confidence: a green report here is not a green delivery.
         notes.append(
             "OUT OF SCOPE: this checks the staged BYTES only. It cannot see the Appwrite "
-            "document metadata (`type`, `category`, `name=un_crafd`) that decides whether the "
+            f"document metadata (`type`, `category`, `name={CONSUMER_DOCUMENT_NAME}`) that decides whether the "
             "consumer can find them — a correctly-staged run uploaded under the wrong `name` "
             "is invisible to every query and 503s with 'no manifested run' (C-77 class)."
         )

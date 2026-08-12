@@ -16,6 +16,7 @@ from views_crafdapi.managers.prediction import PredictionStoreManager
 from views_crafdapi.managers import freshness
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.version import version_info
+from views_crafdapi.seam_contract import CONSUMER_DOCUMENT_NAME
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import FileResponse, StreamingResponse
@@ -1270,7 +1271,7 @@ def create_app() -> FastAPI:
         # CrafdDiskCacheManager (`None / "datasets"`). validate=False makes .cache a real
         # Path the disk-cache manager creates on demand. Regression-tested by
         # tests/test_create_app_boot.py (the from_config test seam did not cover this path).
-        model_path = APIPathManager("un_crafd", validate=False)
+        model_path = APIPathManager(CONSUMER_DOCUMENT_NAME, validate=False)
         _fao_manager = CrafdApiManager(model_path=model_path)
         app = _fao_manager.app
     return app
