@@ -235,23 +235,43 @@ class PredictionStoreManager:
         files_list = self.get_predictions_by_metadata(filters=filters)
         if not files_list:
             return None
+        return self._provenance_from(files_list[0])
 
-        latest = files_list[0]
-        file_id = latest.get("fileId")
+    def get_latest_manifest_provenance(self) -> Optional[PredictionProvenance]:
+        """#60: the lineage record of the newest *manifested wire run*, or ``None``.
+
+        `get_latest_provenance({"category": "forecast"})` cannot answer this. That query names
+        no `type`, so the §11.4 transition guard pins it to the legacy type — correctly, since
+        it exists to stop a legacy selection resolving a wire artifact. `crafd_bucket` holds no
+        legacy documents, so the pinned query matches nothing and a caller that stops there
+        concludes "no forecast" about a bucket that is serving one.
+
+        This goes through `get_latest_manifest`, whose `type` is explicit, so the guard leaves
+        it alone. Store-side and therefore worker-independent — unlike
+        `DatasetService.served_forecast_provenance()`, which is `None` until *this* worker has
+        served a forecast."""
+        doc = self.get_latest_manifest()
+        return self._provenance_from(doc) if doc else None
+
+    @staticmethod
+    def _provenance_from(doc: Dict[str, Any]) -> Optional[PredictionProvenance]:
+        """Build the lineage record for one store document. The record shape is owned here and
+        nowhere else, so a lineage query added later cannot drift from the one beside it."""
+        file_id = doc.get("fileId")
         if not file_id:
             return None
 
-        source = latest.get("source") or latest.get("pipeline") or "unknown"
+        source = doc.get("source") or doc.get("pipeline") or "unknown"
         return PredictionProvenance(
             file_id=file_id,
             source=source,
-            created_at=latest.get("$createdAt", ""),
-            filename=latest.get("filename"),
-            name=latest.get("name"),
-            category=latest.get("category"),
-            targets=latest.get("targets"),
-            description=latest.get("description"),
-            file_hash=latest.get("file_hash"),
+            created_at=doc.get("$createdAt", ""),
+            filename=doc.get("filename"),
+            name=doc.get("name"),
+            category=doc.get("category"),
+            targets=doc.get("targets"),
+            description=doc.get("description"),
+            file_hash=doc.get("file_hash"),
         )
 
     def get_latest_manifest(self) -> Optional[Dict[str, Any]]:
