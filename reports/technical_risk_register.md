@@ -4,9 +4,9 @@
 |-------------------|------------------------------------------------|
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
-| Last Updated      | 2026-08-11                                     |
-| Total Concerns    | 19                                             |
-| Open Concerns     | 18                                             |
+| Last Updated      | 2026-08-14                                     |
+| Total Concerns    | 24                                             |
+| Open Concerns     | 23                                             |
 | Resolved Concerns | 1                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -73,6 +73,16 @@ See also inherited `C-148`/`C-153`/`D-12` (the `.dataframe` seal — body not in
 `get_latest_dataframe` looks up the run manifest once per forecast request to re-key the cache. On any exception it logs a WARNING and leaves `manifest_doc` at the `_MANIFEST_UNFETCHED` sentinel, so `_identity_ok` receives `manifest_known=False` and returns `True` unconditionally — the warm entry is served regardless of whether the manifest has changed, been replaced, or been quarantined. The comment at `:601-603` states the intent ("never drop a good entry because the metadata query flickered"), and the tier is High rather than Critical because the event is logged and the window is bounded by the 4-hour `TTLCache`. The residual risk is that the C-71 quarantine gate — the operator's only no-deploy rollback path — is defeated by exactly the Appwrite instability that makes a rollback urgent, and neither `/health` nor `/provenance` reports a degraded state during that window (`_forecast_serving_state` is set to `{"degraded": False}` on the warm hit at `:239-241`).
 
 Part of the same root cause as `C-234`: both are deliberate transition-safety fall-throughs in an otherwise fail-visible design (ADR-033). See also inherited `C-71`, `C-166`, `C-172` (bodies not in this register).
+
+**Extended 2026-08-14, corrected 2026-08-15 (expert-review, #60): the same missing signal has a second surface, and the first description of it was wrong.**
+
+`/provenance/forecast` gained a store-side manifest path so it could report a wire run on a worker that has not served one (#60). On that path `forecast_serving_state()` returns `None`, so `serving_state` and `refusal_reason` are omitted — the endpoint answers 200 with a file id, timestamp and freshness verdict for the newest *manifested* run, with nothing stating whether that run is servable.
+
+The first draft of this note claimed the silent case was "the endpoint answers 200 while `/data/forecast/latest` returns 503". **That is wrong and worth recording as an error rather than overwriting.** Every forecast 503 first sets `_forecast_serving_state`, so that response *does* carry `serving_state` and `refusal_reason`. The genuinely blind case is narrower: a worker that has **never attempted** a forecast serve, where the state was never set at all. An operator following the original wording would have hunted for a field that is present and missed the case that is blind.
+
+A mitigating `is_served` field was added and then **removed** — it derived from `_last_forecast_provenance`, which is never cleared on refusal and is not keyed by API key, so it reported `true` for a run no longer served and `false` on a worker actively serving. A field that is wrong in both directions is worse than no field.
+
+Location extends to `src/views_crafdapi/managers/api.py::_forecast_lineage` and `src/views_crafdapi/forecast/provenance.py`.
 
 ---
 
@@ -359,6 +369,108 @@ The README pins the Appwrite Seam Contract at `platform-001-v1.2.0` and describe
 
 ---
 
+### C-251: The forecast-lineage precedence rule is encoded three times, in two different orders
+
+| Field | Value |
+|-------|-------|
+| ID | C-251 |
+| Tier | 3 — no wrong answer today: `/health` and `/provenance` were reconciled to the same order by #60. The cost is that one rule now lives in three places with nothing holding them equal, and they demonstrably diverged once already. |
+| Source | expert-review (2026-08-14), #60 |
+| Trigger | When the forecast freshness anchor moves from the manifest document's `$createdAt` to the run manifest's own completion time (which `api.py`'s own comment already calls it), change `/health` and `forecast/provenance.py` in the same commit — nothing links them, and `/health` reads the raw store key while the lineage path reads it through `_provenance_from`. |
+| Location | `src/views_crafdapi/managers/api.py::get_health` (inline served → manifest → legacy chain), `src/views_crafdapi/managers/api.py::get_provenance` (the call site), `src/views_crafdapi/forecast/provenance.py::_base_record` (the declared rule) |
+
+"Which source answers *what forecast is live?*" is answered in three places. `/health` walks served → manifest → legacy inline. `/provenance` delegates to `forecast/provenance.py`, which declares manifest > stored. Before #60 the `/provenance` call site gated the manifest lookup on `stored is None`, encoding served → legacy → manifest — the opposite store-side order — and an empirical probe produced two endpoints giving **opposite freshness verdicts about the same store in the same process**: `/health` reporting the manifest's timestamp and `is_stale: false`, `/provenance` reporting a superseded legacy artifact and `is_stale: true`.
+
+#60 fixed the `/provenance` side by removing the gate, so the two now agree. What was not fixed is that they agree *by coincidence of two independent implementations*. `/health` also reads the timestamp as a raw store key (`m.get("$createdAt")`) while the lineage path reads it through `_provenance_from`'s defaulting — so the same value arrives by two routes with different failure behaviour.
+
+The correct shape is for `/health` to call the same resolver and delete its inline chain. That was deliberately not done in #60 to keep the change scoped to the reported 404.
+
+Same family as `C-243` (two descriptions of one thing drifting apart), and the structural cause of the bug `C-255` records.
+
+---
+
+### C-252: On the manifest-only lineage path, `source` is unattributable — the exact field C-86 exists to expose
+
+| Field | Value |
+|-------|-------|
+| ID | C-252 |
+| Tier | 3 — honest-absent, not wrong: the endpoint reports `"unknown"` and `served: false` rather than guessing. But it is the normal crafd response on a cold worker, and `source` is the field whose whole purpose is making a silent upstream switch visible. |
+| Source | expert-review (2026-08-14), #60 |
+| Trigger | When a second ensemble is delivered to `crafd_bucket` and an operator needs to confirm *which* one is live from `/provenance/forecast` alone, check whether the answer still depends on whether that worker has served a forecast yet. If it does, either stamp `source` on the manifest producer-side (views-postprocessing `contract/wire/sink.py`) or resolve the ensemble from the shard header at report time. |
+| Location | `src/views_crafdapi/managers/prediction/manager.py::_provenance_from`, `src/views_crafdapi/forecast/provenance.py` (module docstring records the limit) |
+
+`_provenance_from` derives `source` from `doc.get("source") or doc.get("pipeline") or "unknown"`. No producer stamps either field on a manifest: views-postprocessing's wire sink uploads `{name, category, loa, filename, type, targets, description}`, and `PredictionMetadata.to_dict()` emits exactly `{loa, name, type, targets, category, description}`. The ensemble identity lives in the shard header's arrow KV blob at `metadata.provenance.ensemble` and is read only when a run is actually ingested.
+
+So on a worker that has not yet served a forecast — which is every worker after a restart, and the shape `crafd_bucket` presents by default because it is greenfield and has no legacy record to fall back to — `/provenance/forecast` answers 200 with `source: "unknown"`. It becomes attributable the moment that worker serves the run. The value is therefore **worker-state-dependent for the same store and the same HTTP call**, which is the same defect shape as `C-254` records for `run_id`.
+
+Verified 2026-08-14 against production: `/provenance/historical` returned `"source": "unknown"` on a real delivered artifact.
+
+Cross-refs `C-254` (the sibling schema-variance defect on the same path), `C-251` (why two paths answer differently).
+
+---
+
+### C-253: The lineage route makes two uncached metadata round trips, the first guaranteed empty, and the second sorts client-side
+
+| Field | Value |
+|-------|-------|
+| ID | C-253 |
+| Tier | 3 — latency and Appwrite request cost on an endpoint designed to be the *cheap* alternative to fetching the dataframe. No correctness impact. |
+| Source | expert-review (2026-08-14), #60 |
+| Trigger | When `/provenance/forecast` is added to a monitor's polling loop (the Better Stack checks in `reports/ops/betterstack_monitoring.md` currently poll `/ping` only), measure the per-call round trips first — at one poll per 3 minutes this is two full metadata queries per poll, one of which cannot match anything. |
+| Location | `src/views_crafdapi/managers/api.py::get_provenance`, `src/views_crafdapi/managers/prediction/manager.py::get_predictions_by_metadata`, `src/views_crafdapi/managers/appwrite/metadata.py` (the paging call) |
+
+#60 made the route fetch both store sources unconditionally, because gating one on the other's absence silently inverts the precedence (`C-251`). The correctness argument is sound; the cost is that on `crafd_bucket` the legacy query is pinned by the §11.4 guard to `type="model"` and therefore matches **nothing on 100% of requests** — it exists purely to be ranked below the manifest.
+
+Underneath, `get_predictions_by_metadata` pages the full result set with `Query.limit(DEFAULT_PAGE_LIMIT)` + `offset` and no `order_desc`, then sorts client-side and takes `docs[0]`. A probe with 250 matching documents produced 3 HTTP round trips returning 250 documents to select one. There is no cache in front of either query.
+
+Cheaper without changing the precedence: push `order_desc('$createdAt') + limit(1)` server-side, and skip the legacy query when a manifest was found (ranking is unaffected — the manifest already wins). Same family as `C-235`: a correct implementation whose cost was never measured against the shape of the data.
+
+---
+
+### C-254: `run_id` appears in the lineage response only on workers that have served a forecast
+
+| Field | Value |
+|-------|-------|
+| ID | C-254 |
+| Tier | 3 — a documented field that is present or absent depending on process state, not on the data. Consumers in this repo hedge with `.get()`, so it is a contract/doc mismatch rather than a live crash. |
+| Source | expert-review (2026-08-14), #60 |
+| Trigger | When a notebook, monitor or partner script is written to key off `run_id` from `/provenance/forecast` — as `client.py`'s docstring invites — confirm it survives an API restart. It will `KeyError` on the first call to a fresh worker. |
+| Location | `src/views_crafdapi/forecast/provenance.py` (`_SERVED_IDENTITY_KEYS`), `src/views_crafdapi/managers/prediction/metadata.py::PredictionProvenance.to_dict`, `src/views_crafdapi/client.py` (documents the field) |
+
+`run_id` is overlaid from the served record but is **not** a key of `PredictionProvenance.to_dict()`. So the response carries it once a worker has served the run and omits it entirely otherwise — for the same run, the same store and the same HTTP call, changing across a restart. `client.py` documents the return as "the run id / filename, creation time, methodology version, freshness verdict", so the field is advertised.
+
+The manifest-only path is exactly where `run_id` is most useful (it is the only identifier a cold worker can offer beyond a file id) and exactly where it is absent. It is recoverable from the manifest filename — `<run_id>__manifest.json` — but nothing extracts it, deliberately: parsing identity out of a filename is the kind of inference ADR-003 forbids, so the fix belongs producer-side or in an explicit metadata field.
+
+Same family as `C-244` (the served contract differs from the document that describes it), and the sibling of `C-252` on the same path.
+
+---
+
+### C-255: The §11.4 legacy pin makes every type-less category query silently empty on a wire-only bucket — four callers and the historical path still depend on it
+
+| Field | Value |
+|-------|-------|
+| ID | C-255 |
+| Tier | 2 — this is the root cause of #60, already proven to produce a confident wrong answer once. The remaining callers are latent only because the historical leg has not yet moved to the wire contract; when it does, the failure is silent by construction. |
+| Source | expert-review (2026-08-14), #60 |
+| Trigger | When the historical artifact moves onto the wire contract (ADR-033's plan; `C-169`), re-check every type-less `{"category": ...}` query **before** the first delivery — `/data/historical/latest`, the C-172 invalidation lookup, `get_latest_file_id`, `get_latest_file_metadata`, `download_latest_file`, and `/provenance/historical`. Each returns "nothing found" against a wire-only bucket while the artifact is present. |
+| Location | `src/views_crafdapi/managers/prediction/manager.py::get_predictions_by_metadata` (the guard), `src/views_crafdapi/managers/prediction/constants.py` (the "inert here" claim), `src/views_crafdapi/managers/dataset_service.py` (historical selection, C-172 invalidation), `src/views_crafdapi/managers/api.py::get_provenance` (historical branch) |
+
+The ADR-013 §11.4 transition guard pins any query naming a `category` and no `type` to `type="model"`. It is **correct** and must not be relaxed: it exists so a legacy selection can never resolve a wire artifact as "the dataset".
+
+Its consequence is category-agnostic and was not reasoned through. `crafd_bucket` is greenfield on the wire contract and holds **no** `type="model"` documents, so a type-less category query matches nothing — not "the legacy answer", but *no answer* — and every caller that reads that as "absent" concludes the artifact does not exist. #60 was one instance: `/provenance/forecast` returned 404 for a run the API was serving correctly, verified in production 2026-08-14 while `/health` reported the same forecast as fresh and `smoke.py` returned 1,030 IDN cells.
+
+#60 fixed the forecast lineage path only. The same shape remains in the historical selection path, the C-172 cache-invalidation lookup, three file-level helpers, and `/provenance/historical`. These are latent **only** because historical is currently delivered as `type="model"` — which happens to match the pin. The named trigger above is when that stops being true.
+
+The compounding hazard is where the failure surfaces: a historical lookup that returns nothing is swallowed by the bulk-parquet path and ships `s_actual` as all-`NaN` behind HTTP 200, which is `C-248` exactly. Selection returning empty and the consumer being unable to tell are two halves of one silent-null failure.
+
+`constants.py` still records that the guard is *"inert here"* because crafd has no pre-wire documents. That belief is what produced #60: the guard is inert for **selection**, which is what it was written for, and precisely **not** inert for a type-less lineage or metadata query, where having no legacy documents is exactly what guarantees the empty result. The correction currently lives only in `forecast/provenance.py`'s docstring, which a `constants.py` reader has no reason to open.
+
+Cross-refs `C-248` (the silent-null consumer half), `C-251` (the duplicated precedence that let two endpoints disagree about this), `C-169`/`C-172` (inherited; bodies not in this register).
+
+---
+
+---
+
 ## Resolved Concerns
 
 ### C-249: `seam_contract.declared_value` raises a bare `KeyError` if the registry pin is lowered below the row's first edition
@@ -374,8 +486,6 @@ The README pins the Appwrite Seam Contract at `platform-001-v1.2.0` and describe
 `declared_value` does `tomllib.loads(text)["contract"][contract_key]["value"]`. At a registry edition predating the UNCRAFD row the `[contract]` table (or the key) is absent, so the binding test errors with a bare `KeyError('contract')`/`KeyError('UNCRAFD_CONSUMER_DOCUMENT_NAME')` instead of a message naming the tag + row. **Loud, never silent** — the test fails either way — and the docstring documents the KeyError, so this is a clarity nit, not a correctness risk. Named fix: catch the absent table/key and raise a `ValueError` naming `REGISTRY_PIN_TAG` and the row ("the pinned edition predates this contract row — pin ≥ v1.5.2"). Mirrors the same nuance in views-faoapi's `test_seam_contract_binding` (faoapi#379).
 
 **RESOLVED (2026-08-12, S1):** `declared_value` now catches the absent `[contract]` table/key and raises a clear `ValueError` naming the missing row and the likely cause (a pin predating `appwrite-seam-v1.5.2`). Test: `test_seam_contract_binding.py::test_declared_value_fails_clearly_when_the_row_is_absent`.
-
----
 
 ---
 

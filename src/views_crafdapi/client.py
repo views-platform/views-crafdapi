@@ -174,7 +174,8 @@ class CrafdApiClient:
         """Return the provenance/lineage of the latest *served* artifact for ``category``.
 
         Wraps ``GET /provenance/{category}``: the run id / filename, creation time, methodology
-        version, freshness verdict, and (for forecasts) the served mode and serving state —
+        version, and (for forecasts) the freshness verdict, served mode and
+        serving state —
         everything needed to record *which forecast run produced a number or figure*.
         """
         if category not in ("historical", "forecast"):
