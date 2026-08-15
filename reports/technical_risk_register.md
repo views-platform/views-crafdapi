@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-15                                     |
-| Total Concerns    | 25                                             |
-| Open Concerns     | 24                                             |
+| Total Concerns    | 26                                             |
+| Open Concerns     | 25                                             |
 | Resolved Concerns | 1                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -495,6 +495,28 @@ The consequence is not theoretical: an absent key fails as `401 … User (role: 
 Mitigated in this change: `README.md` now carries a table distinguishing all three, and `01`/`02` fail at their first cell with the remedy. What is **not** mitigated is that nothing enforces the table against `RELEASE_RUNBOOK.md` — they can drift again, and `tests/test_doc_accuracy.py`'s checks do not cover it.
 
 Cross-refs **C-84** (both keys expire 2026-11-17 — the named trigger), **#28**.
+
+---
+
+
+### C-257: The `un_fao` → `un_crafd` launcher clone is the second partner copy, and nothing links them
+
+| Field | Value |
+|-------|-------|
+| ID | C-257 |
+| Tier | 3 — WET-before-DRY at n=2 is a defensible choice and nothing is shipping wrong. What is missing is the trigger that stops "today" lasting indefinitely, and any link that would make a fix to one prompt a look at the other. |
+| Source | manual (2026-08-15), D9 close-out of epic #40 |
+| Trigger | **Rule of Three, and a second condition that has already nearly fired.** Extract when either: (a) a **third** partner postprocessor is added, or (b) **the first bug is hand-patched in both launchers**. (b) came within one commit of firing during this delivery — views-models#385 (the pin is not applied) and #392 (a failed install does not stop the run) were both fixed in `tools/launcher/postprocessor.sh`, which `un_fao` and `un_crafd` already share. Had that body not been extracted first, both fixes would have needed hand-applying twice. |
+| Owner | Whoever adds the third partner, or takes the first launcher bug after this one. |
+| Location | `views-models/postprocessors/un_crafd/` and `views-models/postprocessors/un_fao/` (a different repo; recorded here because epic #40 created the duplicate) |
+
+`un_crafd` was created by cloning `un_fao`'s directory skeleton. The partition was made deliberately and is the right one **today**: `configs/*` and `main.py` vary by **partner**, so copying is correct; `run.sh` varies by **delivery protocol**, so it was extracted into the shared `tools/launcher/postprocessor.sh` rather than duplicated (un_fao's launcher went 136 → 21 lines). That extraction is why views-models#385/#392 were single fixes.
+
+What remains duplicated is the per-partner surface: two `config_meta.py`, two `config_queryset.py`, two `main.py`, two `requirements.txt`. Those are *supposed* to differ — but `requirements.txt` is currently **byte-identical** in both, which is how the `views-datafactory` floor conflict (#386) hit both partners at once and was diagnosed twice.
+
+views-postprocessing registered the first instance of this pattern — its own partner-manager clone — as **C-33**, with the same Rule-of-Three trigger. This is the second. Registering it is the point: WET at n=2 is a choice; *unregistered* duplication is drift that nobody decided on.
+
+Cross-refs **C-33** (views-postprocessing, the first instance), views-models **#385**, **#392**, **#386**, **#333** (the story that created the clone).
 
 ---
 
