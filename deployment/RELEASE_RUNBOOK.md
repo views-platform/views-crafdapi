@@ -195,9 +195,19 @@ faoapi (`views-faoapi` on :8000) is untouched throughout. Then tell the agent wh
 ## Every future release, forever after
 
 ```bash
-echo v0.1.1 | sudo -u views-crafdapi-deploy tee /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
+echo v0.2.0 | sudo -u views-crafdapi-deploy tee /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
 sudo systemctl restart views-crafdapi
-APPWRITE_DATASTORE_API_KEY=<CRAF'd caller key> .venv/bin/python scripts/smoke.py --expect-tag v0.1.1  # verify + warm
+APPWRITE_DATASTORE_API_KEY=<CRAF'd caller key> .venv/bin/python scripts/smoke.py --expect-tag v0.2.0  # verify + warm
 ```
 
-Rollback: same three lines, previous number.
+Rollback: same three lines with the previous tag (`v0.1.0`).
+
+**The tag must exist on the remote before the restart** — the service checks out what this file
+names, so a tag that is only local leaves the service on the old version while the file claims
+otherwise. `git push origin <tag>` first.
+
+`--expect-tag` reads `/version`, so it fails until the restart has actually taken. That is the
+check working, not a problem; re-run it a few seconds later.
+
+Deployed so far: **v0.1.0** (2026-08-02, first stand-up — bucket empty by design, honest 503s),
+**v0.2.0** (the first CRAF'd delivery is live and `/provenance/forecast` reports it).
