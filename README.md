@@ -49,7 +49,14 @@ pip install -e .
 
 ## Configuration
 
-The API reads environment variables via `.env` at runtime (loaded in `CrafdApiManager.__init__` and located in `views-models`). Set the following:
+The API reads its configuration from the environment, loaded in `CrafdApiManager.__init__`. **Where that comes from differs between running locally and running deployed** — the original text here named a third location (`views-models`) that is neither, which is #28:
+
+| | Coordinates (`APPWRITE_*`) | The one secret (`APPWRITE_DATASTORE_API_KEY`) |
+|---|---|---|
+| **Local dev / notebooks** | `.env` at the root of **this** repo, resolved via `pyprojroot.here()` (`managers/model.py`); copy `.env.example` | same `.env` |
+| **Deployed** (`deployment/RELEASE_RUNBOOK.md`) | the **views-appwrite registry** (`APPWRITE_REGISTRY`), written into `.env.crafdapi` | **exported into the environment by the operator** — *"never from anyone's `.env`"* |
+
+`views-models/.env` holds the key the **postprocessor** delivers with. It is a different consumer of the same secret, not this API's config source. Set the following for local work:
 
 ```bash
 # .env
