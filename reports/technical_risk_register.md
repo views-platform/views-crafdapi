@@ -4,9 +4,9 @@
 |-------------------|------------------------------------------------|
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
-| Last Updated      | 2026-08-14                                     |
-| Total Concerns    | 24                                             |
-| Open Concerns     | 23                                             |
+| Last Updated      | 2026-08-15                                     |
+| Total Concerns    | 25                                             |
+| Open Concerns     | 24                                             |
 | Resolved Concerns | 1                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -468,6 +468,33 @@ The compounding hazard is where the failure surfaces: a historical lookup that r
 Cross-refs `C-248` (the silent-null consumer half), `C-251` (the duplicated precedence that let two endpoints disagree about this), `C-169`/`C-172` (inherited; bodies not in this register).
 
 ---
+
+---
+
+
+### C-256: The Appwrite key has three legitimate homes and every document that names one has named a different one
+
+| Field | Value |
+|-------|-------|
+| ID | C-256 |
+| Tier | 3 — no correctness impact; the cost is that a new user (or an agent) following the docs cannot authenticate, and the failure surfaces as an Appwrite *scope* error that names neither a file nor a key. |
+| Source | review-diff (2026-08-15), during D7 (#47) |
+| Trigger | When the CRAF'd serve key is rotated (it expires **2026-11-17**, C-84), update all three homes in the same change — the deployed `.env.crafdapi`, the operator's export, and any local `.env` — and re-check that `README.md`'s table still matches `deployment/RELEASE_RUNBOOK.md`. |
+| Location | `README.md` (Configuration), `deployment/RELEASE_RUNBOOK.md`, `notebooks/README.md`, `.env.example`, `views-models/.env` (a different repo, same secret) |
+
+The same secret legitimately lives in three places for three different consumers, and nothing holds the documentation of them consistent:
+
+1. **Local dev / notebooks** — `.env` at this repo's root, found by `load_dotenv()` and `pyprojroot.here()`.
+2. **Deployed** — coordinates come from the views-appwrite registry into `.env.crafdapi`; the secret is exported into the environment by the operator. `RELEASE_RUNBOOK.md` is explicit: *"never from anyone's `.env`"*.
+3. **The postprocessor** — `views-models/.env`, which is what actually delivers into the bucket.
+
+`README.md` said the API's `.env` was "located in `views-models`" — option 3, which is the one consumer it is *not*. That is **#28**, open since before this epic. The D7 fix for it initially replaced the wrong answer with a different wrong answer (asserting the root `.env` unconditionally, which is false for the deployed service), because the claim was inferred from `pyprojroot.here()` without reading `RELEASE_RUNBOOK.md`. Both drafts were single-location claims about a three-location fact.
+
+The consequence is not theoretical: an absent key fails as `401 … User (role: guests) missing scopes (["buckets.read"])` and a placeholder key as `401 … not authorized`. Neither message mentions a key, a file, or `.env`. Two full notebook runs were spent rediscovering this during D7 before the notebooks were given guards that name the file and the fix.
+
+Mitigated in this change: `README.md` now carries a table distinguishing all three, and `01`/`02` fail at their first cell with the remedy. What is **not** mitigated is that nothing enforces the table against `RELEASE_RUNBOOK.md` — they can drift again, and `tests/test_doc_accuracy.py`'s checks do not cover it.
+
+Cross-refs **C-84** (both keys expire 2026-11-17 — the named trigger), **#28**.
 
 ---
 
