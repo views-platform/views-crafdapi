@@ -75,22 +75,64 @@ part2() {
     [ -f "${APPWRITE_REGISTRY}" ] || {
         echo "FATAL #275: coordinate registry not found at ${APPWRITE_REGISTRY}"
         echo "  PLATFORM-001 A3 must be present first (migration order: registry lands -> re-point)."
-        echo "  Set APPWRITE_REGISTRY to a pinned checkout of views-appwrite's coordinate_registry.toml."
+        echo "  Set APPWRITE_REGISTRY to a pinned views-appwrite checkout of coordinate_registry.toml,"
+        echo "  or (ADR-035 Decision 2) a copy of the versioned registry file placed on the box."
         exit 1
     }
-    echo "building ${SVC_HOME}/.env.crafdapi: coordinates from ${APPWRITE_REGISTRY}, secret from operator slot"
-    # Emit non-secret coordinates from the registry, then append the operator secret. The pipe to
-    # `sudo tee >/dev/null` writes the file root-owned WITHOUT echoing the key value to the terminal.
-    # Use the venv's pinned Python (3.13, has `tomllib`) — it exists after the gate's `uv sync`
-    # above, so the parse never depends on the box's system Python version.
-    {
-        "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}"
+    # Record WHICH registry version built this box (crafdapi#34 finding 4 / ADR-035): a copied
+    # registry file is otherwise indistinguishable from a stale one, and the contract has moved
+    # several versions in days. Read [meta].version with the venv's tomllib — never grep, a
+    # commented key looks identical to a live one (register C-57). Stamped into the env below so
+    # "which registry built this box?" is grep-able, not folkloric.
+    #
+    # The venv lives in ${SVC_USER}'s 0750 home, which this admin account cannot traverse — so the
+    # two Python invocations run AS ${SVC_USER} (`sudo -u`), the venv's owner. The registry copy in
+    # /tmp is world-readable, so ${SVC_USER} can read it. (This is the bug crafdapi's first real run
+    # of the registry bootstrap surfaced: faoapi never hit it because its env was hand-built.)
+    _reg_version="$(sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" - "${APPWRITE_REGISTRY}" <<'PY' 2>/dev/null || echo unknown
+import sys, tomllib
+with open(sys.argv[1], "rb") as fh:
+    print(tomllib.load(fh).get("meta", {}).get("version", "unknown"))
+PY
+)"
+    echo "building ${SVC_HOME}/.env.crafdapi: coordinates from ${APPWRITE_REGISTRY} (registry version ${_reg_version}), secret from operator slot"
+    # Emit the registry-version stamp, then the non-secret coordinates (emitted AS ${SVC_USER} —
+    # see above), then append the operator secret. The pipe to `sudo tee >/dev/null` writes the file
+    # root-owned WITHOUT echoing the key value to the terminal.
+    # Build into a private temp file and MOVE it into place only once the content is known
+    # good. Writing `sudo tee` straight at the live path truncated it BEFORE knowing whether
+    # registry_to_env.py would succeed: under `set -euo pipefail` a registry the service user
+    # cannot read, malformed TOML, or a missing coordinate value aborted the function with the
+    # live file already emptied and the chown/chmod below never reached — leaving a root-owned
+    # 0644 one-line file and a Restart=always unit looping on _validate_appwrite_env, with the
+    # previously working credentials destroyed. Re-running part2 is exactly what the runbook
+    # tells an operator to do when a step fails, so this was reachable on the recovery path.
+    _tmp_env="$(sudo mktemp "${SVC_HOME}/.env.crafdapi.XXXXXX")"
+    # 0600 before a secret is written, not after: the old ordering left the key at root's
+    # umask (0644) for the window between `tee` and `chmod`.
+    sudo chmod 600 "$_tmp_env"
+    if ! {
+        printf 'APPWRITE_REGISTRY_VERSION=%s\n' "${_reg_version}"
+        sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}"
         printf 'APPWRITE_DATASTORE_API_KEY=%s\n' "${APPWRITE_DATASTORE_API_KEY}"
-    } | sudo tee "${SVC_HOME}/.env.crafdapi" >/dev/null
-    sudo chown "${SVC_USER}:${SVC_USER}" "${SVC_HOME}/.env.crafdapi"
-    sudo chmod 600 "${SVC_HOME}/.env.crafdapi"
-    N=$(sudo grep -c '^APPWRITE_' "${SVC_HOME}/.env.crafdapi")
-    echo "credentials file written (${N} APPWRITE_ lines: registry coordinates + 1 operator secret; values not displayed; expected >= 9)"
+    } | sudo tee "$_tmp_env" >/dev/null; then
+        sudo rm -f "$_tmp_env"
+        echo "FATAL: could not build the credentials file (registry read or secret emit failed)." >&2
+        echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
+        return 1
+    fi
+    N=$(sudo grep -c '^APPWRITE_' "$_tmp_env")
+    if [ "$N" -lt 9 ]; then
+        sudo rm -f "$_tmp_env"
+        echo "FATAL: built credentials file has only ${N} APPWRITE_ lines (expected >= 9)." >&2
+        echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
+        return 1
+    fi
+    sudo chown "${SVC_USER}:${SVC_USER}" "$_tmp_env"
+    # Same filesystem, so this is atomic: readers see the old file or the new one, never a
+    # half-written one.
+    sudo mv "$_tmp_env" "${SVC_HOME}/.env.crafdapi"
+    echo "credentials file written (${N} APPWRITE_ lines: 1 registry-version stamp + registry coordinates + 1 operator secret; values not displayed; expected >= 9)"
     echo "Then run:  bash bootstrap.sh part3"
 }
 

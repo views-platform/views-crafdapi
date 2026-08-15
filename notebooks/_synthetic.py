@@ -1,6 +1,6 @@
 """Synthetic, leak-free demo data for the offline notebook (03_offline_demo.ipynb).
 
-Generates a FAO-shaped forecast frame on a **toy lattice with fictional geography** — no
+Generates a CRAF'd-shaped forecast frame on a **toy lattice with fictional geography** — no
 real countries, coordinates, or UN data — so the offline demo is fully reproducible and
 runnable by anyone with zero credentials (mirrors the views-frames `notebooks/_synthetic.py`
 convention). Fixed seed => deterministic.
@@ -28,7 +28,7 @@ def make_demo_dataframe(
     first_month_id: int = 600,
     seed: int = 0,
 ) -> pd.DataFrame:
-    """Build a synthetic FAO forecast DataFrame on an ``n_x by n_y`` toy lattice.
+    """Build a synthetic CRAF'd forecast DataFrame on an ``n_x by n_y`` toy lattice.
 
     Each grid cell carries `n_samples` posterior draws for two targets (`pred_lr_ged_sb`,
     `pred_lr_ged_ns`) with a spatial hotspot in one corner, so maps and HDI/MAP summaries show

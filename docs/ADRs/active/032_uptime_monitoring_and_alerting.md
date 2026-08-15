@@ -80,7 +80,7 @@ Self-hosted **Uptime Kuma** (open-source, focused, EU-hostable, no lock-in — t
 
 The governing invariant, kept forever: **a monitor must be able to survive the thing it monitors dying.** SaaS passes this by default; self-hosting passes it only with independent infra plus upkeep we will actually do.
 
-**Added payoff of the revisit (recorded 2026-07-20):** self-hosted Uptime Kuma also unlocks **personal-messenger alert channels — Signal, Telegram — that Better Stack does not offer natively.** This is a genuine bonus of the revisit path, *not* a reason to self-host now: email + phone-call alerting already meets the need loudly, so a preferred messenger channel does not justify taking on the operational cost today. It is banked as one more thing the self-hosted move buys once its two conditions are met.
+**Added payoff of the revisit (recorded 2026-07-20):** self-hosted Uptime Kuma also unlocks **personal-messenger alert channels — Signal, Telegram — that Better Stack does not offer natively.** This is a genuine bonus of the revisit path, *not* a reason to self-host now: email alerting already meets the need, so a preferred-messenger or phone-call channel does not justify taking on the operational cost today. It is banked as one more thing the self-hosted move buys once its two conditions are met.
 
 ### 5. Scope
 
@@ -99,7 +99,7 @@ This decision covers faoapi now and is the **template for the other planned VIEW
 **Costs / accepted trade-offs**
 - We give up, *for now*, the full "own-it" ideal — mitigated by the reversibility discipline (§3) and the documented revisit path (§4).
 - A free-tier cap (Better Stack: ~10 monitors) will eventually need review as APIs multiply; that review is a known future trigger, not a surprise.
-- **Alert channels are email + phone call** (Slack/Teams deliberately unused; no native Signal/WhatsApp on Better Stack). Accepted now because a phone call is the loudest possible signal and email covers the multi-person requirement; personal-messenger channels are deferred to the self-hosted revisit (§4).
+- **Alert channel is email.** Better Stack's free tier — the plan we run — alerts by **email only**; phone **Call**, SMS, and push are paid add-ons we do not have (Slack/Teams deliberately unused; no native Signal/WhatsApp either). Email covers the multi-person requirement. The louder channels — a phone call ("the loudest possible signal") and personal messengers — are the **paid / self-hosted upgrade path** (§4). *(Corrected 2026-08-06: an earlier draft claimed "email + phone call"; Call is not on the free tier, so faoapi and crafdapi alert by email only.)*
 - Some data (our endpoint URL, uptime history) sits with an EU SaaS; weighed against C-79 and judged acceptable for a *liveness* endpoint that exposes nothing an outside observer couldn't already probe.
 
 **Ongoing**

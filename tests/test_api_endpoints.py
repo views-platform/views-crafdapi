@@ -541,6 +541,121 @@ class TestProvenanceEndpoint:
         resp = client.get("/provenance/historical", headers=HEADERS)
         assert resp.status_code == 404
 
+    def test_provenance_reports_a_manifested_run_with_no_legacy_record(self, app_client):
+        """#60 regression, reproduced from production 2026-08-14.
+
+        `crafd_bucket` is greenfield on the wire contract, so a type-less category query — which
+        ADR-013 §11.4 correctly pins to `type="model"` — matches nothing. The route used to stop
+        there and 404 while the API was serving that very run: `/health` reported a forecast
+        created 18:35:54 and smoke.py returned 1,030 IDN cells, but `/provenance/forecast`
+        answered "No forecast prediction files found in the bucket: crafd_bucket".
+
+        Nothing here is served by this worker, so the served record is absent too — the manifest
+        is the ONLY source that can answer, which is exactly the production shape.
+
+        The manifest lineage is built by the REAL `_provenance_from` from a real manifest store
+        document, not hand-stubbed — otherwise the method the fix adds never executes and the
+        test cannot fail for the reason it claims.
+        """
+        from views_crafdapi.managers.prediction.manager import PredictionStoreManager
+
+        # A manifest document exactly as views-postprocessing's wire sink uploads it:
+        # PredictionMetadata.to_dict() emits {loa,name,type,targets,category,description} —
+        # note there is NO `source`/`pipeline` field, which is why `source` reads "unknown".
+        manifest_doc = {
+            "fileId": "6a7f5fda000d0f4e1c22",
+            "filename": "rusty_bucket_forecasting_20260727_095355__manifest.json",
+            "$createdAt": "2026-08-14T18:35:54.962+00:00",
+            "name": "un_crafd",
+            "type": "sampled_forecast_manifest",
+            "category": "forecast",
+            "loa": "pgm",
+            "targets": ["lr_ged_sb", "lr_ged_ns", "lr_ged_os"],
+        }
+
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_provenance.return_value = None          # no legacy doc: greenfield
+        mock_pm.get_latest_manifest_provenance.side_effect = (
+            lambda: PredictionStoreManager._provenance_from(manifest_doc)
+        )
+        mgr._dataset_service._last_forecast_provenance = None      # cold worker
+
+        resp = client.get("/provenance/forecast", headers=HEADERS)
+        assert resp.status_code == 200, "a served run must never be reported as absent"
+        data = resp.json()["data"]
+        assert data["file_id"] == "6a7f5fda000d0f4e1c22"
+        assert data["name"] == "un_crafd"
+        assert data["targets"] == ["lr_ged_sb", "lr_ged_ns", "lr_ged_os"]
+        assert "freshness" in data
+        # Honest about what a manifest alone cannot say. The ensemble identity lives in the
+        # shard header, not the manifest's store metadata; and nothing here has been served, so
+        # this describes the newest manifested run rather than a verified-servable artifact.
+        assert data["source"] == "unknown"  # no producer stamps source on a manifest
+        assert data["mode"] is None
+
+    def test_provenance_prefers_the_manifest_over_a_legacy_record(self, app_client):
+        """The route must fetch BOTH store sources and let the module rank them.
+
+        Gating the manifest lookup on `stored is None` inverts the documented precedence: a
+        legacy record beside a newer manifested run would win, and /provenance would name an
+        artifact this build refuses to serve (S1/#264) while /health reports the manifest.
+        """
+        from views_crafdapi.managers.prediction import PredictionProvenance
+
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_provenance.return_value = PredictionProvenance(
+            file_id="legacy_001", source="orange_ensemble", name="orange_ensemble",
+            created_at="2026-03-01T00:00:00.000Z", filename="old.parquet", file_hash="cafe",
+        )
+        mock_pm.get_latest_manifest_provenance.return_value = PredictionProvenance(
+            file_id="manifest_001", source="unknown", name="un_crafd",
+            created_at="2026-08-13T00:00:00.000Z", filename="run__manifest.json",
+        )
+        mgr._dataset_service._last_forecast_provenance = None
+
+        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
+        assert data["file_id"] == "manifest_001"
+        assert data["source"] != "orange_ensemble"
+        assert mock_pm.get_latest_manifest_provenance.called, "the manifest must always be consulted"
+
+    def test_provenance_degrades_to_legacy_when_the_manifest_lookup_raises(self, app_client):
+        """An Appwrite blip must not 500 the endpoint an operator uses to diagnose it.
+
+        `/health` and `_load_wire_run` both wrap this same call defensively; so does this.
+        """
+        from views_crafdapi.managers.prediction import PredictionProvenance
+
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.side_effect = RuntimeError("appwrite is down")
+        mock_pm.get_latest_provenance.return_value = PredictionProvenance(
+            file_id="legacy_001", source="orange_ensemble",
+            created_at="2026-03-01T00:00:00.000Z", filename="old.parquet",
+        )
+        mgr._dataset_service._last_forecast_provenance = None
+
+        resp = client.get("/provenance/forecast", headers=HEADERS)
+        assert resp.status_code == 200, "must degrade to the legacy record, not 500"
+        assert resp.json()["data"]["file_id"] == "legacy_001"
+
+    def test_provenance_404s_when_the_store_answers_with_nothing_usable(self, app_client):
+        """An unstubbed MagicMock's `to_dict()` collapses to `{}` — a truthy object carrying no
+        record. The 404 must be decided by production semantics, not by mock configuration."""
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_provenance.return_value = None
+        mgr._dataset_service._last_forecast_provenance = None
+        # deliberately NOT stubbing get_latest_manifest_provenance
+
+        assert client.get("/provenance/forecast", headers=HEADERS).status_code == 404
+
+    def test_provenance_404s_only_when_there_is_genuinely_no_forecast(self, app_client):
+        """The 404 must survive the fix — an empty bucket is still an empty bucket."""
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_provenance.return_value = None
+        mock_pm.get_latest_manifest_provenance.return_value = None
+        mgr._dataset_service._last_forecast_provenance = None
+
+        assert client.get("/provenance/forecast", headers=HEADERS).status_code == 404
+
     def test_provenance_exposes_full_served_decision(self, app_client):
         """S7 (#252, ADR-033 observability): /provenance/forecast reports the full *served* decision
         — artifact_id, mode, status, freshness, and refusal_reason when degraded — sourced from the

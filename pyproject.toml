@@ -43,7 +43,9 @@ build-backend = "hatchling.build"
 [tool.ruff]
 # Notebooks are exploratory dev artifacts and are not part of the linted
 # surface (CI lints src/ and tests/ only — see risk register C-34).
-extend-exclude = ["notebooks"]
+# `_siblings/` holds other repos checked out in CI (views-appwrite, for the ADR-017
+# seam-contract binding test) — never our code, so never our lint surface.
+extend-exclude = ["notebooks", "_siblings"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/views_crafdapi"]

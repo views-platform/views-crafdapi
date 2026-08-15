@@ -16,6 +16,7 @@ from views_crafdapi.managers.prediction import PredictionStoreManager
 from views_crafdapi.managers import freshness
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.version import version_info
+from views_crafdapi.seam_contract import CONSUMER_DOCUMENT_NAME
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import FileResponse, StreamingResponse
@@ -112,6 +113,7 @@ from views_crafdapi.managers.serialization import (  # noqa: E402
 )
 from views_crafdapi.forecast.serialize.json_contract import to_consumer_columns  # noqa: E402
 from views_crafdapi.forecast.serialize.bulk_parquet import write_bulk_parquet  # noqa: E402
+from views_crafdapi.forecast import provenance as forecast_provenance  # noqa: E402
 
 class CrafdApiManager(APIManager):
     """
@@ -270,6 +272,19 @@ class CrafdApiManager(APIManager):
         env = _validate_appwrite_env()
 
         return AppwriteConfig(
+            # Without this the config's `path_manager` defaults to None, so
+            # `PredictionStoreManager.model_path` is None, so
+            # `get_predictions_by_metadata`'s `hasattr(self.model_path, 'model_name')` is
+            # False and the `name` filter is **silently skipped** — every prediction query
+            # runs unscoped across the collection. That defeats the S1/#53 seam-contract
+            # binding (`seam_contract.CONSUMER_DOCUMENT_NAME`, "the name this API owns and
+            # filters every prediction query on") and re-opens the ADR-017 §1
+            # invisible-delivery hole it closes: a producer uploading under another
+            # consumer's name would be served happily. Every test that appeared to cover
+            # this injected a MagicMock config, whose `model_name` attribute auto-exists.
+            # getattr, not attribute access: the `from_config` alternate constructor does not
+            # set `_model_path`. Production always does (`CrafdApiManager(model_path=...)`).
+            path_manager=getattr(self, "_model_path", None),
             endpoint=env["APPWRITE_ENDPOINT"],
             project_id=env["APPWRITE_DATASTORE_PROJECT_ID"],
             credentials=x_api_key,
@@ -373,6 +388,53 @@ class CrafdApiManager(APIManager):
     def _get_latest_dataset(self, manager: PredictionStoreManager, x_api_key: str, category: str, force_refresh: bool = False) -> ForecastDataset:
         """Delegate the data-fetch pipeline to the composed DatasetService (epic #144 / S2)."""
         return self._dataset_service.get_latest_dataset(manager, x_api_key, category, force_refresh)
+
+    def _forecast_lineage(self, manager: PredictionStoreManager) -> Optional[Dict[str, Any]]:
+        """The complete `/provenance/forecast` record, or ``None`` when no forecast exists.
+
+        #60: a forecast can be reported by three sources and they are not interchangeable —
+        `forecast/provenance.py` owns the precedence and the reasons. The bug this replaces
+        asked the LEGACY store first and 404'd on its silence; in a greenfield wire bucket that
+        silence is guaranteed, so a live, correctly-served run could never be reported.
+
+        Both store sources are fetched unconditionally. Gating one on the other's absence
+        silently inverts the precedence: a legacy record sitting beside a newer manifested run
+        would win, and the endpoint would name an artifact this build refuses to serve
+        (S1/#264) while `/health` reports the manifest.
+        """
+        served = self._dataset_service.served_forecast_provenance()
+        # Guarded like every other caller of this query: `/health` wraps it, and
+        # `_load_wire_run` turns it into Refused("manifest_lookup_error"). An Appwrite blip
+        # must degrade the lineage answer to the legacy record fetched below, not 500 the
+        # endpoint an operator is using to diagnose that very incident.
+        try:
+            manifest = manager.get_latest_manifest_provenance()
+        except Exception as e:  # noqa: BLE001 — same policy as api.py's health probe
+            logger.warning("Manifest lineage lookup failed (non-blocking): %s", e)
+            manifest = None
+        stored = manager.get_latest_provenance(filters={"category": "forecast"})
+        data = forecast_provenance.forecast_record(
+            served=served,
+            manifest_record=manifest.to_dict() if manifest else None,
+            stored_record=stored.to_dict() if stored else None,
+        )
+        if data is None:
+            return None
+
+        # S3 (#246, ADR-033 §4): the freshness verdict of the served artifact.
+        data["freshness"] = freshness.forecast_freshness(
+            forecast_provenance.freshness_input(served, data),
+            self._forecast_freshness_sla_days,
+        )
+        # S4 (#249, ADR-033 §6): the bounded grace-fallback state. `degraded: True` means the
+        # newest run was refused and a last-good run is being served (or was refused past the
+        # SLA); its `reason` is surfaced as `refusal_reason`.
+        serving_state = self._dataset_service.forecast_serving_state()
+        if serving_state is not None:
+            data["serving_state"] = serving_state
+            if serving_state.get("degraded") and serving_state.get("reason"):
+                data["refusal_reason"] = serving_state["reason"]
+        return data
 
     def _register_routes(self):
         """Register all API routes."""
@@ -557,71 +619,17 @@ class CrafdApiManager(APIManager):
                     detail=f"Invalid category: {category}. Expected 'forecast' or 'historical'."
                 )
             try:
-                provenance = manager.get_latest_provenance(filters={"category": category})
-                if provenance is None:
+                if category == "forecast":
+                    data = self._forecast_lineage(manager)
+                else:
+                    provenance = manager.get_latest_provenance(filters={"category": category})
+                    data = provenance.to_dict() if provenance else None
+
+                if data is None:
                     raise HTTPException(
                         status_code=404,
                         detail=f"No {category} prediction files found in the bucket: {self._prediction_bucket_id}"
                     )
-                data = provenance.to_dict()
-                # S7 (#252, ADR-033 observability): expose the full *served* decision for forecasts,
-                # not just the store's newest record: {artifact_id, mode, freshness, status,
-                # refusal_reason?}. The served provenance (what is actually live) is authoritative;
-                # it may differ from the store's newest artifact, so prefer it when present.
-                if category == "forecast":
-                    served = self._dataset_service.served_forecast_provenance()
-                    if served:
-                        data["artifact_id"] = served.get("file_id")
-                        data["mode"] = served.get("mode")          # "wire" | "legacy"
-                        data["status"] = served.get("status")      # producer-declared maturity
-                        data["source"] = served.get("source", data.get("source"))
-                        # #290: the served run is authoritative — overlay its identity/time labels
-                        # too, so the record is internally consistent. Without this, the store's
-                        # newest LEGACY record's name/filename/created_at bleed through and read as
-                        # "still serving orange_ensemble" while a wire run is in fact live.
-                        for _k in ("name", "filename", "created_at", "run_id"):
-                            if served.get(_k) is not None:
-                                data[_k] = served[_k]
-                        # #290 hardening: a wire run assembled by a pre-#290 build stored no
-                        # name/filename in its cached provenance (the disk cache survives restart,
-                        # C-66), so after a deploy those keys stay absent from `served` until a
-                        # re-ingest. Reconstruct them from the run's own source/run_id so a stale
-                        # legacy label can never survive a wire serve — self-heals on the next
-                        # serve, no post-deploy force_refresh required.
-                        if served.get("mode") == "wire":
-                            if served.get("name") is None and served.get("source"):
-                                data["name"] = served["source"]
-                            if served.get("filename") is None and served.get("run_id"):
-                                data["filename"] = served["run_id"]
-                            # #290 full reconcile: the served wire run owns the WHOLE record —
-                            # replace the store's newest LEGACY descriptive fields so nothing from a
-                            # superseded artifact (its file_id, single-file hash, test description,
-                            # or pred_ln_* targets) bleeds through. `targets` is None for a run
-                            # cached by a pre-#290 build (not recoverable without a re-ingest) —
-                            # honest-absent beats wrong.
-                            if served.get("file_id"):
-                                data["file_id"] = served["file_id"]
-                            data["targets"] = served.get("targets")
-                            data["file_hash"] = None  # a wire run is a manifest of many hashed shards, not one file
-                            if served.get("run_id"):
-                                data["description"] = f"Sampled-forecast wire-contract run {served['run_id']}"
-                        created_at = served.get("created_at") or data.get("created_at")
-                    else:
-                        data["artifact_id"] = data.get("file_id")
-                        data["mode"] = None
-                        created_at = data.get("created_at")
-                    # S3 (#246, ADR-033 §4): the freshness verdict of the served artifact.
-                    data["freshness"] = freshness.forecast_freshness(
-                        created_at, self._forecast_freshness_sla_days
-                    )
-                    # S4 (#249, ADR-033 §6): the bounded grace-fallback state. `degraded: True`
-                    # means the newest run was refused and a last-good run is being served (or was
-                    # refused past the SLA); its `reason` is surfaced as `refusal_reason`.
-                    serving_state = self._dataset_service.forecast_serving_state()
-                    if serving_state is not None:
-                        data["serving_state"] = serving_state
-                        if serving_state.get("degraded") and serving_state.get("reason"):
-                            data["refusal_reason"] = serving_state["reason"]
                 return {"success": True, "data": data}
             except HTTPException:
                 raise
@@ -1270,7 +1278,7 @@ def create_app() -> FastAPI:
         # CrafdDiskCacheManager (`None / "datasets"`). validate=False makes .cache a real
         # Path the disk-cache manager creates on demand. Regression-tested by
         # tests/test_create_app_boot.py (the from_config test seam did not cover this path).
-        model_path = APIPathManager("un_crafd", validate=False)
+        model_path = APIPathManager(CONSUMER_DOCUMENT_NAME, validate=False)
         _fao_manager = CrafdApiManager(model_path=model_path)
         app = _fao_manager.app
     return app
