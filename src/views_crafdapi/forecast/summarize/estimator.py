@@ -106,6 +106,16 @@ def collapse(
 
     valid = ~np.isnan(flat).all(axis=1)
     if valid.any():
+        # `nan_to_num` looks like it defeats `vfs.exceedance`'s non-finite guard — it was filed
+        # as such (#66) — but a *partially* NaN row cannot reach here. `wire_reader` calls
+        # `validate_value_plausibility()` before assembly, and `assert_prediction_samples_plausible`
+        # REFUSES a run carrying any NaN/Inf sample (C-72). So on the wire path `flat[valid]` rows
+        # are either wholly finite or wholly NaN (excluded by `valid` above), and this call is a
+        # no-op. Measured on the delivered run: 0 partially-NaN rows in 388,452.
+        #
+        # It is kept as defence for the legacy path, which has no such gate. The coupling is
+        # worth knowing: if C-72 is ever relaxed, this line turns a refusal into a plausible
+        # wrong number — `vfs.exceedance` would otherwise raise with a message naming the cause.
         v = np.nan_to_num(flat[valid], nan=0.0, posinf=0.0, neginf=0.0)
         frame = build_prediction_frame(
             v, time=np.zeros(v.shape[0], dtype=np.int64), unit=np.arange(v.shape[0])
