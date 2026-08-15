@@ -72,20 +72,33 @@ def _max_assembled_bytes() -> int:
     return val
 
 
+def _unidentifiable_reason(provenance: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The ADR-033 §3 identifiability rule, stated once.
+
+    Two callers need it at different moments and must not drift: `_load_wire_run` checks it
+    *before* committing a run to any cache (#70), and `_identifiable_gate` checks it on the way
+    out, which still catches a run an earlier build already persisted.
+    """
+    source = (provenance or {}).get("source")
+    if not source or source == "unknown":
+        return f"served run has no identifiable source (source={source!r})"
+    return None
+
+
 def _identifiable_gate(served: selection.Served) -> selection.SelectionResult:
     """S2 (#247, ADR-033 §3): refuse to serve a run we cannot identify — no/`unknown` `source`.
 
     An *audit* requirement (which run, from which producer), **not** an eligibility judgment:
     a manifested wire run carries its producing-ensemble provenance, so this excludes only an
     unattributable artifact. Composable gate (ADR-033 §1); appended to the selection gate set.
+
+    Retained after #70 moved the primary check earlier: this still refuses a run that a
+    *previous* build persisted to the disk cache before the gate existed at ingest time, which
+    a check at ingest alone would serve forever.
     """
-    source = (served.provenance or {}).get("source")
-    if not source or source == "unknown":
-        return selection.Refused(
-            "unidentifiable",
-            detail=f"served run has no identifiable source (source={source!r})",
-            file_id=served.file_id,
-        )
+    reason = _unidentifiable_reason(served.provenance)
+    if reason is not None:
+        return selection.Refused("unidentifiable", detail=reason, file_id=served.file_id)
     return served
 
 
@@ -806,6 +819,28 @@ class DatasetService:
                 # stamped in the sidecar provenance) takes precedence.
                 "created_at": wire_prov.get("created_at") or manifest_doc.get("$createdAt"),
             }
+            # #70: identifiability is checked HERE, before anything is committed. It used to run
+            # only on this method's RETURN VALUE — by which point `write_value_dir` had already
+            # rmtree+replaced the last-good disk slot with this run and the warm cache had been
+            # populated. A run refused as unidentifiable was then served anyway: the grace
+            # fallback re-read the slot, which now held the refused run, and the next request hit
+            # the warm entry, passed `_forecast_entry_servable` and `_identity_ok`, and returned
+            # it with `degraded: False` and /health green. The gate never ran again for the life
+            # of that entry, and the genuinely good previous run was gone.
+            #
+            # Returning here reclaims only the staging dir (the `finally` below), leaving the
+            # previous last-good entry intact — which is what the comment at the call site has
+            # always claimed happens on a failed ingest.
+            unidentifiable = _unidentifiable_reason(provenance)
+            if unidentifiable is not None:
+                logger.error(
+                    "Wire run %r refused BEFORE caching (nothing committed): %s",
+                    manifest.run_id, unidentifiable,
+                )
+                return selection.Refused(
+                    "unidentifiable", detail=unidentifiable, file_id=manifest_file_id
+                )
+
             if not self._disk_cache.write_value_dir(
                 api_key_hash, category, assembler.out_dir, manifest_file_id,
                 rows=rows, columns=[], source_kind="wire", provenance=provenance,
