@@ -272,6 +272,19 @@ class CrafdApiManager(APIManager):
         env = _validate_appwrite_env()
 
         return AppwriteConfig(
+            # Without this the config's `path_manager` defaults to None, so
+            # `PredictionStoreManager.model_path` is None, so
+            # `get_predictions_by_metadata`'s `hasattr(self.model_path, 'model_name')` is
+            # False and the `name` filter is **silently skipped** — every prediction query
+            # runs unscoped across the collection. That defeats the S1/#53 seam-contract
+            # binding (`seam_contract.CONSUMER_DOCUMENT_NAME`, "the name this API owns and
+            # filters every prediction query on") and re-opens the ADR-017 §1
+            # invisible-delivery hole it closes: a producer uploading under another
+            # consumer's name would be served happily. Every test that appeared to cover
+            # this injected a MagicMock config, whose `model_name` attribute auto-exists.
+            # getattr, not attribute access: the `from_config` alternate constructor does not
+            # set `_model_path`. Production always does (`CrafdApiManager(model_path=...)`).
+            path_manager=getattr(self, "_model_path", None),
             endpoint=env["APPWRITE_ENDPOINT"],
             project_id=env["APPWRITE_DATASTORE_PROJECT_ID"],
             credentials=x_api_key,
