@@ -31,7 +31,14 @@ fi
 # Run from the repo root regardless of how we were invoked.
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-git fetch --tags --quiet origin
+# --force, because `git fetch --tags` will NOT overwrite a tag the box already has.
+# 2026-08-15: v0.2.0 was cut without a version bump, the gate correctly refused it, the tag
+# was re-cut on a fixed commit — and the box kept serving its stale copy of that tag name and
+# failed identically. The operator had no way to see why: the tag file said v0.2.0, the remote
+# said v0.2.0, and the code was a different v0.2.0. Re-cutting a tag is rare and should not be
+# routine, but when it happens the box must converge on the remote rather than silently pin an
+# object nobody can find any more.
+git fetch --tags --force --quiet origin
 
 if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     echo "FATAL deploy-gate: tag not found on origin: $TAG" >&2
