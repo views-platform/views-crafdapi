@@ -13,7 +13,7 @@ as the API, packaged wide at admin-1 (GAUL level-1) grain: one row per `(month_i
 - Identity columns are the consumer-facing GAUL names (admin-0 country, not M49), from the
   9-column metadata via `schema.IDENTITY_SOURCE`.
 
-All values are raw fatality counts (ADR-024). Written via pyarrow (pandas not required by the
+Most values are raw fatality counts (ADR-024), but **not all**: the three ADR-034 §3 exceedance columns per series (`s_p_gt25/100/1000`) are probabilities in [0, 1], and `s_bimodality_flag` is a 0/1 flag. Written via pyarrow (pandas not required by the
 engine, ADR-030 spirit — a thin DataFrame→parquet is acceptable here in `serialize/`).
 """
 

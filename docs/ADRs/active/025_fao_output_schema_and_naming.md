@@ -36,6 +36,15 @@ No `ged_`, `lr_`, `ln_`, or `pred_` prefix appears in FAO output. Series stems a
 
 ### 4. Canonical column schema (36 columns)
 
+> **Amended 2026-08-15 (ADR-034 §3, register C-244).** The served schema is now **45** columns:
+> ADR-034 added three exceedance columns per series (`s_p_gt25`, `s_p_gt100`, `s_p_gt1000`),
+> live on both served products since commit `449bc13`. **`schema.bulk_columns()` is the
+> authority**, not this section — a contributor reconciling code *to* this ADR would delete nine
+> live columns. The 36 below is what was decided here and is left intact as that record.
+>
+> ADR-034 is still **Proposed**; its thresholds are placeholders pending CRAF'd sign-off, and
+> confirmed values would *rename* those columns (the threshold is part of the name by design).
+
 | Group | Columns |
 |-------|---------|
 | Identity (6) | `month_id`, `admin1_code`, `admin1_name`, `country_code`, `country_name`, `country_iso3` |

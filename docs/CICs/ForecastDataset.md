@@ -37,7 +37,8 @@
 - **Subsetting:** `get_subset_dataframe(...)` / `get_subset_tensor(...)` filter by time/entity/feature/sample.
 - **Frames:** `to_frames()` builds views-frames `PredictionFrame`/`TargetFrame` per target (#88).
 - **Cloning:** `copy()` returns an independent copy via the optimised `__deepcopy__` (shares the underlying numpy sample buffers — ≈1,700× faster than a true deepcopy at global scale; safe as long as cell contents are not mutated in place). This is the public clone API the serving layer uses (C-137).
-- **Back-compat:** `ForecastDataset` is a module-level alias of `ForecastDataset`; existing disk-cache pickles (class path `data.handlers.ForecastDataset`), `isinstance` checks, the test modules, and `notebooks/geo_meta.ipynb` continue to resolve. The `__init__` signature is unchanged, so the disk-cache schema version is unchanged.
+- **Back-compat: none, and none needed (corrected 2026-08-15).** This bullet previously promised that the pre-rename name `FAO_PGMDataset` remained a module-level alias. It does not exist — `hasattr(views_crafdapi.data.handlers, "FAO_PGMDataset")` is `False`. The guarantee was silently dropped in the rename, and a sed pass rewrote the claim into "`ForecastDataset` is a module-level alias of `ForecastDataset`", which read as intact.
+  The concern it addressed is moot: since S5 (#154) the disk cache stores a **value dir** and reconstructs via `ForecastDataset.from_value`, not a pickle, so no persisted class path has to resolve. `__init__` is unchanged and the disk-cache schema version is unchanged.
 
 ## 4. Inputs and Assumptions
 
