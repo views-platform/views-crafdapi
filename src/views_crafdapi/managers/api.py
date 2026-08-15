@@ -181,7 +181,9 @@ class CrafdApiManager(APIManager):
         self.app = FastAPI(
             title="VIEWS-CRAF'd Conflict Forecast API",
             description="VIEWS historical and forecasted fatalities data and statistical analysis for the Complex Risk Analytics Fund (CRAF'd).",
-            version="0.1.0",
+            # Derived, not literal: a hardcoded copy here drifted from pyproject
+            # and is one more thing to remember at release time.
+            version=version_info()["version"],
             lifespan=lifespan
         )
         
