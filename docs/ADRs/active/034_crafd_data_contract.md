@@ -22,8 +22,21 @@ dataset is **an extension of FAO's, not a different quantity**:
 
 The FAO product declaration this mirrors is `views-postprocessing/unfao/product.py`
 (`TARGETS=("lr_ged_sb","lr_ged_ns","lr_ged_os")`, `loa="pgm"`, `CONSUMER_DOCUMENT_NAME="un_fao"`).
-**No CRAF'd producer exists yet** (`views-postprocessing/crafd/` is absent), so this contract is
-the specification the future producer's `product.py` must implement — a co-design, not a read.
+~~**No CRAF'd producer exists yet** (`views-postprocessing/crafd/` is absent), so this contract is
+the specification the future producer's `product.py` must implement — a co-design, not a read.~~
+
+> **Superseded 2026-08-15.** The producer landed **2026-08-03**
+> (`views-postprocessing/crafd/`: `product.py`, `appwrite_env.py`, `managers/crafd.py`) and has
+> since delivered. The first CRAF'd run — `rusty_bucket_forecasting_20260727_095355` — was
+> uploaded 2026-08-14 and is live; `GET /provenance/forecast` reports
+> `mode: wire, source: rusty_bucket`. See `reports/ops/first_crafd_delivery.md`.
+>
+> So this section is no longer a co-design. §3's exceedance columns are **already live on both
+> served products** (the JSON `hdi-map` response and the bulk parquet), shipped in `449bc13`.
+>
+> **This ADR stays Proposed.** Its own ratification gate — CRAF'd confirming (a) the additional
+> target list and (b) the exceedance thresholds — has not happened. The thresholds 25/100/1000
+> remain operator-chosen placeholders, and confirmed values would *rename* the columns.
 
 ---
 
