@@ -99,14 +99,39 @@ PY
     # Emit the registry-version stamp, then the non-secret coordinates (emitted AS ${SVC_USER} —
     # see above), then append the operator secret. The pipe to `sudo tee >/dev/null` writes the file
     # root-owned WITHOUT echoing the key value to the terminal.
-    {
+    # Build into a private temp file and MOVE it into place only once the content is known
+    # good. Writing `sudo tee` straight at the live path truncated it BEFORE knowing whether
+    # registry_to_env.py would succeed: under `set -euo pipefail` a registry the service user
+    # cannot read, malformed TOML, or a missing coordinate value aborted the function with the
+    # live file already emptied and the chown/chmod below never reached — leaving a root-owned
+    # 0644 one-line file and a Restart=always unit looping on _validate_appwrite_env, with the
+    # previously working credentials destroyed. Re-running part2 is exactly what the runbook
+    # tells an operator to do when a step fails, so this was reachable on the recovery path.
+    _tmp_env="$(sudo mktemp "${SVC_HOME}/.env.crafdapi.XXXXXX")"
+    # 0600 before a secret is written, not after: the old ordering left the key at root's
+    # umask (0644) for the window between `tee` and `chmod`.
+    sudo chmod 600 "$_tmp_env"
+    if ! {
         printf 'APPWRITE_REGISTRY_VERSION=%s\n' "${_reg_version}"
         sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}"
         printf 'APPWRITE_DATASTORE_API_KEY=%s\n' "${APPWRITE_DATASTORE_API_KEY}"
-    } | sudo tee "${SVC_HOME}/.env.crafdapi" >/dev/null
-    sudo chown "${SVC_USER}:${SVC_USER}" "${SVC_HOME}/.env.crafdapi"
-    sudo chmod 600 "${SVC_HOME}/.env.crafdapi"
-    N=$(sudo grep -c '^APPWRITE_' "${SVC_HOME}/.env.crafdapi")
+    } | sudo tee "$_tmp_env" >/dev/null; then
+        sudo rm -f "$_tmp_env"
+        echo "FATAL: could not build the credentials file (registry read or secret emit failed)." >&2
+        echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
+        return 1
+    fi
+    N=$(sudo grep -c '^APPWRITE_' "$_tmp_env")
+    if [ "$N" -lt 9 ]; then
+        sudo rm -f "$_tmp_env"
+        echo "FATAL: built credentials file has only ${N} APPWRITE_ lines (expected >= 9)." >&2
+        echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
+        return 1
+    fi
+    sudo chown "${SVC_USER}:${SVC_USER}" "$_tmp_env"
+    # Same filesystem, so this is atomic: readers see the old file or the new one, never a
+    # half-written one.
+    sudo mv "$_tmp_env" "${SVC_HOME}/.env.crafdapi"
     echo "credentials file written (${N} APPWRITE_ lines: 1 registry-version stamp + registry coordinates + 1 operator secret; values not displayed; expected >= 9)"
     echo "Then run:  bash bootstrap.sh part3"
 }

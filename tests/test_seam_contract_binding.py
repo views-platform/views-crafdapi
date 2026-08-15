@@ -102,3 +102,49 @@ def test_declared_value_fails_clearly_when_the_row_is_absent():
 
     with pytest.raises(ValueError, match=r"no \[contract\."):
         seam_contract.declared_value('[meta]\nversion = "1.4.0"\n')
+
+
+def test_the_config_carries_the_path_manager_so_the_name_filter_actually_applies(tmp_path):
+    """The binding above is worthless if the query never carries the name.
+
+    `AppwriteConfig.path_manager` defaults to `None`. When `_create_appwrite_config` omitted it,
+    `PredictionStoreManager.model_path` was `None`, `hasattr(model_path, 'model_name')` was
+    False, and `get_predictions_by_metadata` **silently skipped** `filters["name"]` — every
+    prediction query ran unscoped across the collection while `seam_contract` and `README.md`
+    both stated the opposite.
+
+    No existing test could observe it: they inject a `MagicMock()` config, and a MagicMock's
+    `.path_manager.model_name` auto-exists. This one builds the real thing.
+    """
+    import os
+    from unittest.mock import patch
+
+    from views_crafdapi.managers.api import CrafdApiManager
+    from views_crafdapi.seam_contract import CONSUMER_DOCUMENT_NAME
+
+    env = {
+        "APPWRITE_ENDPOINT": "https://example.invalid/v1",
+        "APPWRITE_DATASTORE_PROJECT_ID": "proj",
+        "APPWRITE_CRAFD_BUCKET_ID": "bucket",
+        "APPWRITE_CRAFD_BUCKET_NAME": "bucket-name",
+        "APPWRITE_CRAFD_COLLECTION_ID": "coll",
+        "APPWRITE_CRAFD_COLLECTION_NAME": "coll-name",
+        "APPWRITE_METADATA_DATABASE_ID": "db",
+        "APPWRITE_METADATA_DATABASE_NAME": "db-name",
+    }
+    # Build it the way production does — `create_app()` -> CrafdApiManager(model_path=...).
+    # `from_config` is a test-only alternate constructor that never sets `_model_path`, so
+    # using it here would test a path no deployment takes.
+    from views_crafdapi.managers.model import APIPathManager
+
+    with patch.dict(os.environ, env, clear=False):
+        mgr = CrafdApiManager(
+            model_path=APIPathManager(CONSUMER_DOCUMENT_NAME, validate=False)
+        )
+        config = mgr._create_appwrite_config("a-key")
+
+    assert config.path_manager is not None, (
+        "path_manager is None — the name filter will be silently skipped and every prediction "
+        "query runs unscoped across the collection"
+    )
+    assert config.path_manager.model_name == CONSUMER_DOCUMENT_NAME
