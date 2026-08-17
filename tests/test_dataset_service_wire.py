@@ -708,3 +708,82 @@ def test_force_refresh_unservable_run_fails_visible(monkeypatch):
         svc.get_latest_dataframe(mgr, "key", "forecast", force_refresh=True)
     assert e.value.status_code == 503
     mgr.get_latest_provenance.assert_not_called()
+
+
+# ── #70: the identifiability gate must run BEFORE anything is cached ──────────────────
+# Previously it ran on `_load_wire_run`'s RETURN VALUE, by which point the run had already
+# rmtree+replaced the last-good disk slot and populated the warm cache. The refusal was then
+# undone by the grace fallback re-reading the slot it had just poisoned.
+
+
+def _manager_for(run, *, manifest_id):
+    """Like `_wire_manager` but with an explicit manifest fileId, so a SECOND run in the same
+    test resolves its own bytes instead of colliding with the first."""
+    mgr = MagicMock()
+    doc = dict(run.manifest_doc)
+    doc["fileId"] = manifest_id
+    mgr.get_latest_manifest.return_value = doc
+
+    def resolve(names, artifact_type):
+        if artifact_type == SHARD_ARTIFACT_TYPE:
+            return {run.shard_name: f"shard_{manifest_id}"}
+        if artifact_type == SIDECAR_ARTIFACT_TYPE:
+            return {run.sidecar_name: f"sidecar_{manifest_id}"}
+        return {}
+
+    mgr.resolve_artifact_file_ids.side_effect = resolve
+    bytes_by_id = {
+        manifest_id: json.dumps(run.manifest).encode(),
+        f"shard_{manifest_id}": run.shard_bytes,
+        f"sidecar_{manifest_id}": run.sidecar_bytes,
+    }
+    mgr.download_prediction.side_effect = lambda fid, *a, **k: MagicMock(
+        success=True, data={"file_bytes": bytes_by_id[fid]}
+    )
+    return mgr
+
+
+def test_an_unidentifiable_run_is_refused_and_stays_refused(tmp_path):
+    """Request 1 refuses; request 2 must refuse too, not serve it warm."""
+    run = make_wire_run(run_id="bad_run", ensemble=None)
+    svc = _service(cache_dir=tmp_path)
+    mgr = _manager_for(run, manifest_id="mani_bad")
+
+    for attempt in (1, 2):
+        with pytest.raises(HTTPException) as exc:
+            svc.get_latest_dataframe(mgr, "key", "forecast")
+        assert exc.value.status_code == 503, f"attempt {attempt} did not fail visible"
+        assert "unidentifiable" in str(exc.value.detail), (
+            f"attempt {attempt} refused for the wrong reason: {exc.value.detail}"
+        )
+
+
+def test_an_unidentifiable_run_does_not_destroy_the_last_good_entry(tmp_path):
+    """The call site promises a failed ingest 'leaves the last-good disk entry intact'.
+
+    Before #70 the refused run had already rmtree+replaced it, so the grace fallback re-read
+    the slot the refusal had just poisoned and served the refused run as last-good.
+    """
+    good = make_wire_run(run_id="good_run", ensemble="rusty_bucket")
+    svc = _service(cache_dir=tmp_path)
+
+    df = svc.get_latest_dataframe(_manager_for(good, manifest_id="mani_good"), "key", "forecast")
+    assert len(df) > 0
+    on_disk = svc._disk_cache.read(HASH, "forecast")
+    assert on_disk["provenance"]["run_id"] == "good_run"
+
+    # A NEWER, unattributable run arrives and is fully downloadable — so without the #70 check
+    # it reaches write_value_dir and replaces the slot above.
+    bad = make_wire_run(run_id="bad_run", ensemble=None)
+    svc._dataframe_cache.clear()  # force the remote path rather than a warm hit
+    try:
+        svc.get_latest_dataframe(_manager_for(bad, manifest_id="mani_bad"), "key", "forecast")
+    except HTTPException:
+        pass  # refused, or served-last-good; the disk slot is what this asserts on
+
+    still = svc._disk_cache.read(HASH, "forecast")
+    assert still is not None, "the last-good entry was destroyed by a refused run"
+    assert still["provenance"]["run_id"] == "good_run", (
+        f"the refused run replaced the last-good entry (disk holds "
+        f"{still['provenance']['run_id']!r})"
+    )

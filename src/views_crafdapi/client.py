@@ -136,8 +136,17 @@ class CrafdApiClient:
         Wraps ``GET /{level}/analysis/{data_type}/hdi-map`` so consumers don't hand-roll HTTP.
         For a forecast, each row carries, per violence series, the point estimate and nested
         credible intervals — ``sb_map`` and ``sb_hdi{50,90,95}_{lower,upper}`` (and ``ns_``/``os_``),
-        plus ``sb_severe_scenario`` and ``sb_bimodality_flag``. Values are **raw fatality counts**
-        (ADR-024); see ``docs/api/data_dictionary.md``.
+        plus ``sb_severe_scenario``, ``sb_bimodality_flag`` and the ADR-034 exceedance columns
+        ``sb_p_gt{25,100,1000}``.
+
+        **Not every column is a count.** Three kinds appear (ADR-024, ADR-034 §3):
+
+        * **counts** — ``s_map``, the six ``s_hdi*`` bounds, ``s_severe_scenario``
+        * **probabilities in [0, 1]** — ``s_p_gt25/100/1000``. ``sb_p_gt25 = 0.4`` means a 40%
+          chance of exceeding 25 fatalities, **not** 0.4 fatalities
+        * **flags** — ``s_bimodality_flag`` (0/1, NaN where the posterior is missing)
+
+        See ``docs/api/data_dictionary.md``.
 
         Parameters mirror :meth:`fetch_subset`, plus:
         alpha : Primary HDI mass (0.9 → 90%); the response always includes the signed-off 50/90/95

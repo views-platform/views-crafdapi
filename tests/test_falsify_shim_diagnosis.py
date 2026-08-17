@@ -14,7 +14,7 @@ import pytest
 
 pytestmark = pytest.mark.xfail(
     strict=False,
-    reason="documents open priogrid concerns C-61..C-65 (see #79)",
+    reason="documents open priogrid concerns C-61..C-65 (register entries; the bare '#79' this once cited resolves to an unrelated issue in this repo and has been dropped)",
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

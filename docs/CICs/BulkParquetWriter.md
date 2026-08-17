@@ -50,7 +50,7 @@ ADR-025 columns; 33 base + per-series bimodality_flag = **36**). `build_bulk_tab
 
 ## 5. Outputs and Side Effects
 
-- `build_bulk_table` → a `pandas.DataFrame` (36 columns). `write_bulk_parquet` → writes a parquet
+- `build_bulk_table` → a `pandas.DataFrame` (**45 columns**: 6 identity + 3 series × 13; ADR-034 §3 added `s_p_gt25/100/1000` per series. `schema.bulk_columns()` is authoritative — register C-244). `write_bulk_parquet` → writes a parquet
   file, returns its `Path`. No caching, no network.
 
 ## 6. Failure Modes and Loudness

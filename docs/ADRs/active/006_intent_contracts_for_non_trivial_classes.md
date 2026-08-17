@@ -60,7 +60,7 @@ When in doubt, treat the class as non-trivial.
 
 The following classes in views-faoapi are explicitly identified as non-trivial and require intent contracts:
 
-- **`PosteriorDistributionAnalyzer`** -- Stateful statistical analyzer that computes MAP estimates, empirical HDIs, and enforces HDI nesting and MAP containment. Encodes domain logic that directly shapes the numbers delivered to the FAO.
+- ~~**`PosteriorDistributionAnalyzer`**~~ -- *Removed 2026-08-15 from this list: the class no longer exists.* It was the v1 hand-rolled MAP/HDI estimator, replaced by the views-frames tower estimator at methodology v2 (register C-81). It survives only as a historical note in `views_crafdapi/methodology.py`. Left struck through rather than deleted so the list still records what was once judged to need a contract.
 
 - **`ForecastDataset`** -- Dataset class with geographic metadata alignment, PRIO-GRID to GAUL aggregation, and element-wise distribution summation. Maintains internal state (geo_metadata, levels, tensor caches) and enforces structural invariants (MultiIndex shape, metadata column presence).
 

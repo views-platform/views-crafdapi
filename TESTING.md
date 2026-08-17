@@ -1,6 +1,6 @@
 # Test Architecture
 
-The test suite has **674 tests across 53 files** (verified 2026-06-26 via `uv run pytest --collect-only -o addopts=""`), organized in 5 layers. Each layer catches a different class of bug; removing any layer creates a blind spot.
+The test suite has **1,126 tests across 95 files** (verified 2026-08-15 via `uv run pytest --collect-only -o addopts=""`), organized in 5 layers. *The previous figure here — 674 across 53, from 2026-06-26 — had drifted by two thirds; a count nobody re-derives is a claim, not a measurement (ADR-014 §1).* Each layer catches a different class of bug; removing any layer creates a blind spot.
 
 > **Counts drift.** The totals below are a dated snapshot. Re-verify with the commands in [Verifying the counts](#verifying-the-counts) rather than trusting a stale number — and update this file when a story changes them.
 
@@ -14,7 +14,7 @@ The test suite has **674 tests across 53 files** (verified 2026-06-26 via `uv ru
 | 4 — Infrastructure | `layer4_infra` | Green / Beige | 247 | SDK normalization, cache bounds, import safety, deployment config, model-config loading, disk-cache versioning + concurrency. |
 | 5 — Audit & Regression | `layer5_audit` | Red | 52 | Prior bugs stay fixed; documented gaps tracked; SDK-compat assumptions hold; the `test_falsify_*` falsification suite. |
 | *(unmarked)* | *(none)* | — | 88 | Tests without a layer marker — many `test_falsify_*` probes, `test_client`, `test_time`, `test_cache_isolation`, etc. See [Marker hygiene](#marker-hygiene). |
-| **Total** | | | **674** | of which **53 are `integration`** (deselected by default). |
+| **Total** | | | **1,126** | of which **48 are deselected by default** (`integration`). |
 
 The red/beige/green column is the ADR-005 taxonomy (adversarial / realistic-misuse / supportive); the `layerN` markers are the operational selectors. See `docs/ADRs/active/005_testing_as_mandatory_critical_infrastructure.md` for the taxonomy definitions and the five named beige decision-support scenarios.
 

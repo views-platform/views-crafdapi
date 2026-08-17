@@ -132,7 +132,11 @@ PY
     # Same filesystem, so this is atomic: readers see the old file or the new one, never a
     # half-written one.
     sudo mv "$_tmp_env" "${SVC_HOME}/.env.crafdapi"
-    echo "credentials file written (${N} APPWRITE_ lines: 1 registry-version stamp + registry coordinates + 1 operator secret; values not displayed; expected >= 9)"
+    echo "credentials file written (${N} APPWRITE_ lines: 1 registry-version stamp + registry coordinates + 1 operator secret; values not displayed)"
+    # The >= 9 floor above is deliberately unchanged, but note what it now counts: the
+    # ADR-035 registry-version stamp is itself an APPWRITE_ line, so the effective
+    # requirement is 8 real coordinates + the stamp, one looser than when the floor was
+    # chosen. Tightening it means recounting what the registry actually emits.
     echo "Then run:  bash bootstrap.sh part3"
 }
 
@@ -143,6 +147,10 @@ part3() {
        ! grep -q "views-crafdapi-deploy" /etc/systemd/system/views-crafdapi.service; then
         sudo cp /etc/systemd/system/views-crafdapi.service /etc/systemd/system/views-crafdapi-legacy.service
         echo "old unit preserved as views-crafdapi-legacy.service (rollback path)"
+        # NOTE: this branch is guarded on an EXISTING unit, so on a greenfield install it
+        # never runs and no -legacy unit is ever created. Any later message pointing an
+        # operator at views-crafdapi-legacy.service as a rollback is therefore only valid
+        # when this branch fired. The real rollback is the deploy-tag file (RELEASE_RUNBOOK).
     fi
     sudo cp "${REPO_DIR}/deployment/views-crafdapi.service" /etc/systemd/system/views-crafdapi.service
     sudo systemctl daemon-reload

@@ -12,14 +12,13 @@ from views_crafdapi.data.handlers import ForecastDataset
 pytestmark = pytest.mark.layer2_data
 
 
-def test_fao_pgmdataset_is_forecastdataset_alias():
-    """The rename keeps ForecastDataset working (pickles, isinstance, ~18 test modules)."""
-    assert ForecastDataset is ForecastDataset
-
-
-def test_isinstance_holds_through_alias():
-    ds = ForecastDataset(make_fao_df(seed=1))
-    assert isinstance(ds, ForecastDataset)
+# Removed 2026-08-15: `test_fao_pgmdataset_is_forecastdataset_alias` and
+# `test_isinstance_holds_through_alias`. Both guarded the pre-rename `FAO_PGMDataset` alias; a
+# sed pass rewrote their subject to the new name, leaving
+# `assert ForecastDataset is ForecastDataset` and `isinstance(ForecastDataset(...),
+# ForecastDataset)` — tautologies that cannot fail. Verified today: the alias does not exist, so
+# there is nothing to test. Deleted rather than repaired; the guarantee is gone and the CIC now
+# says so. The pickle round-trip below is the real coverage and is retained.
 
 
 def test_pickle_roundtrip():

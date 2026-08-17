@@ -53,6 +53,7 @@ def make_wire_run(
     target: str = _TARGET,
     time_id: int = _TIME_ID,
     with_nan_geo: bool = True,
+    ensemble: str | None = "fixture_ensemble",
 ) -> WireRun:
     """Build one conformant single-shard run as in-memory bytes + matching store docs."""
     n, s = n_cells, sample_count
@@ -76,7 +77,13 @@ def make_wire_run(
         "run_id": run_id,
         "generated_at": "2026-07-20T00:00:00Z",
         "id_semantics": {"time": "views_month_id", "unit": "priogrid_id"},
-        "provenance": {"ensemble": "fixture_ensemble", "pipeline_core_version": "0.0.0", "reconciled": False},
+        # `ensemble=None` omits the key entirely — an unattributable run, which ADR-033 §3
+        # refuses. Used by the #70 regression test.
+        "provenance": (
+            {"ensemble": ensemble, "pipeline_core_version": "0.0.0", "reconciled": False}
+            if ensemble is not None
+            else {"pipeline_core_version": "0.0.0", "reconciled": False}
+        ),
         "sharding": {"scheme": "per_month", "index": 0, "count": 1},
     }
     tmp = Path(tempfile.mktemp(suffix=".arrow.parquet"))

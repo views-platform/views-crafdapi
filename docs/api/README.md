@@ -168,7 +168,7 @@ curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
 
 ## 7. Versioning & change policy
 
-The API surface, the column schema, and the numerical scale are FAO-facing contracts. Changes that alter published columns, names, or values are coordinated with FSFC and governed by [ADR-023](../ADRs/active/023_rebaselining_published_forecasts_governance.md) (re-baselining) and the FAO Release Notes. The current schema/naming convention and its amendment of Release Note 01 are described in [ADR-025](../ADRs/active/025_fao_output_schema_and_naming.md). No `/v1` URL prefix is applied yet (see ADR-026, Open Questions).
+The API surface, the column schema, and the numerical scale are **CRAF'd-facing** contracts (this repo serves CRAF'd; the FAO instance is views-faoapi). Changes that alter published columns, names, or values are governed by [ADR-023](../ADRs/active/023_rebaselining_published_forecasts_governance.md) (re-baselining). The current schema/naming convention and its amendment of Release Note 01 are described in [ADR-025](../ADRs/active/025_fao_output_schema_and_naming.md). No `/v1` URL prefix is applied yet (see ADR-026, Open Questions).
 
 ---
 
