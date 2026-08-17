@@ -59,6 +59,33 @@ cp .env.example .env        # then set APPWRITE_DATASTORE_API_KEY (request one f
 `02` additionally needs `geopandas` for the border overlay (installed by `uv sync`).
 `03_offline_demo.ipynb` needs no `.env` and no network.
 
+### Outputs are committed on purpose
+
+`01` and `02` are stored **with their executed outputs**, matching views-faoapi. Someone
+browsing this repo on GitHub sees the real numbers and the six maps without needing a key —
+which is the point, since these notebooks are the worked example an external analyst is pointed
+at. `03_offline_demo.ipynb` stays stripped (also matching faoapi): it is deterministic and runs
+in seconds, so stored output adds nothing.
+
+The cost is honest: `02` is ~1.1 MB of embedded PNGs, and re-executing it produces a large diff
+even when nothing meaningful changed. Two consequences:
+
+* **Do not strip the outputs** to make a diff smaller. That silently removes the only thing a
+  browsing reader can see.
+* **Re-execute both when the served run changes** — the outputs name a specific run
+  (`rusty_bucket_forecasting_20260727_095355`) and a specific window, so after a new delivery
+  they describe something that is no longer live:
+
+  ```bash
+  .venv/bin/python -m pytest --nbmake notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb
+  # then, to refresh the stored outputs:
+  .venv/bin/jupyter nbconvert --to notebook --execute --inplace \
+      notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb
+  ```
+
+Outputs are checked for secrets before commit: the auth cell prints `API key : set`, never the
+value, and no long token appears in any stored output.
+
 ### The forecast window moves
 
 A forecast run covers a **fixed 36-month window**, and that window advances every time a new
