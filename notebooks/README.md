@@ -79,9 +79,11 @@ even when nothing meaningful changed. Two consequences:
   ```bash
   .venv/bin/python -m pytest --nbmake notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb
   # then, to refresh the stored outputs:
-  .venv/bin/jupyter nbconvert --to notebook --execute --inplace \
+  uv run --with nbconvert jupyter nbconvert --to notebook --execute --inplace \
       notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb
   ```
+
+`--with nbconvert`, for the same reason as `--with jupyterlab` above: neither is in the dev group, and `.venv/bin/jupyter nbconvert` *looks* available — `--version` prints `7.16.6` — while actually running it raises `ModuleNotFoundError: No module named 'nbconvert'`. The command above was executed end to end before being written here.
 
 Outputs are checked for secrets before commit: the auth cell prints `API key : set`, never the
 value, and no long token appears in any stored output.
