@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 30                                             |
-| Open Concerns     | 28                                             |
+| Total Concerns    | 31                                             |
+| Open Concerns     | 29                                             |
 | Resolved Concerns | 2                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -639,3 +639,32 @@ The same logical operation — joint-sum `(N, S)` cell samples to a geographic l
 `LEVEL_METADATA_COLUMNS` declares which metadata columns each served level carries. Nothing validates that `geo_metadata` actually has them. The pre-S7 aggregate path guarded each column with `if meta_col in aggregated_df.columns` and **silently omitted** any that were missing — so a `geo.parquet` written by an older schema yields a response quietly missing `admin1_gaul0_name`, with a 200 and no signal. `__init__` reindexes for uniqueness but does not check the column set; `from_value` assigns `pd.read_parquet(...)` with no check at all.
 
 PR #93 preserves the silent-skip behaviour deliberately, to keep the change behaviour-neutral. The underlying gap is registered rather than fixed inside a performance PR. Cross-refs: **C-244** (schema documented at 36 columns against 45 in code) — both are the served column set drifting from its declaration.
+
+---
+
+### C-262: Neither service on the shared box has a memory ceiling, and the box has already run out three times
+
+| Field | Value |
+|-------|-------|
+| ID | C-262 |
+| Tier | 2 |
+| Source | production `dmesg` + `systemctl status`, taken during the v0.4.0 deploy (2026-08-18) |
+| Trigger | Before the next dataset grows — a longer month horizon, the ADR-034 `ADDITIONAL_TARGETS` list, or a finer grain — check the peak of BOTH units against the box total, not just the one you changed. Also check this before adding any endpoint that materialises a full-history frame. |
+| Location | `/etc/systemd/system/views-crafdapi.service`, `/etc/systemd/system/views-faoapi.service` (neither declares `MemoryMax=`); `deployment/RELEASE_RUNBOOK.md` |
+
+`views-crafdapi` and `views-faoapi` share one 22 GiB host. Measured on 2026-08-18, before the S7 deploy:
+
+| | |
+|---|---|
+| box total | 22 GiB |
+| `views-faoapi` `MemoryCurrent` | 5.9 G |
+| `views-crafdapi` (v0.3.0, 21 h uptime) | 7.8 G, **peak 14.8 G** |
+| available | 13 GiB |
+
+crafd's own peak plus faoapi's resident set is **20.7 of 22 GiB**. There is no headroom left over, and nothing enforces a share.
+
+It has already failed. `dmesg` records **three OOM kills of views-faoapi on 2026-08-14** (06:45, 07:10, 07:26) at ~23.3 GB anonymous RSS each — and crucially `constraint=CONSTRAINT_NONE ... global_oom`, meaning the *whole box* exhausted memory rather than a cgroup limit being enforced. The kernel picked faoapi because it was the largest consumer at that moment. On a different request mix it would have picked crafdapi, and a faoapi request would have taken down the CRAF'd API with no crafd-side signal at all. That coupling is the concern; the OOM itself is views-faoapi#418's problem.
+
+S7 improves the arithmetic (crafd's bulk peak measured 10.5 GB against v0.3.0's ~14.8 G) but does not address the coupling. `MemoryMax=` on both units converts "the box falls over and the kernel chooses a victim" into "this request fails, loudly, in the service that caused it" — a bounded local change, and the failure becomes attributable. Deliberately not bundled into the v0.4.0 deploy.
+
+Cross-refs: **C-235**/**C-169** (what drives crafd's peak), **views-faoapi#418** (the neighbouring service's own memory defect).
