@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from typing import List, Union, Optional
 from views_crafdapi.forecast.aggregate.cross_level import aggregate_via_leaf, elementwise_sum
+from views_crafdapi.forecast.aggregate.reduction import joint_sum_to_level
 from views_crafdapi.forecast.geography.metadata_table import (
     LEVEL_METADATA_COLUMNS,
     LEVELS,
@@ -525,78 +526,85 @@ class ForecastDataset(_GridDataset):
                 result = result.join(self.geo_metadata, how="left")
             return result
         
-        # Aggregation path: aggregate distributions FIRST, then compute HDI
+        # Aggregation path (ADR-030 S7): joint-sum the cell samples to `level` as arrays, then
+        # reduce. Pandas is asked only for the group index and the metadata columns; the samples
+        # are read straight from the contiguous `(N, S)` store and never enter a DataFrame.
         if level is None:
             raise ValueError("Must specify 'level' when aggregate=True")
-        
-        # Step 1: Get raw distributions at cell level
-        raw_df = super().get_subset_dataframe(
-            time_ids=time_ids,
-            features=features,
-            sample_idx=sample_idx,
-            entity_ids=entity_ids,
-        )
-        
-        # Add metadata for grouping
-        raw_df = raw_df.join(self.geo_metadata, how="left")
-        
-        # Step 2: Aggregate distributions element-wise (preserves time dimension)
-        aggregated_df = self._aggregate_distributions(raw_df, level=level)
-        
-        # Step 3: Compute HDI and MAP on aggregated distributions
+
         target_level_col = self.levels[level]
         time_col = self._time_id
         selected_vars = features if features else self.targets
         if not isinstance(selected_vars, list):
             selected_vars = [selected_vars]
-        
-        # Define which metadata columns to include for each level
-        level_metadata_mapping = {
-            "country": [],  # country_iso_a3 is used as index, no separate name column
-            "gaul0": ["country_iso_a3", "admin1_gaul0_name"],
-            "gaul1": ["country_iso_a3", "admin1_gaul1_name", "admin1_gaul0_name"],
-            "gaul2": ["country_iso_a3", "admin2_gaul2_name", "admin1_gaul1_name", "admin1_gaul0_name"],
-        }
-        metadata_cols_to_include = level_metadata_mapping.get(level, [])
-        
-        results = []
-        for var_name in selected_vars:
-            if var_name not in aggregated_df.columns:
-                continue
+        # Which metadata columns each level carries through aggregation (single source of truth
+        # in forecast.geography.metadata_table).
+        metadata_cols_to_include = LEVEL_METADATA_COLUMNS.get(level, [])
 
-            # Same ADR-025 reduction as the cell path (#222/S4): MAP + fixed 50/90/95 HDIs +
-            # severe_scenario, via the shared `schema`/`json_contract` builder — so the aggregate
-            # and cell schemas can never diverge. Var-keyed; sb/ns/os rename is a boundary step.
-            value_cols = series_value_column_names(var_name)
+        # Step 1: the group index and the metadata, from a frame carrying NO sample column.
+        # This is the memory story. The path this replaces materialised one ndarray object per
+        # (cell, month, target) here — ~7M of them for the delivered run, ~10.9 GB — purely to
+        # stack them back into `(N, S)` for the joint-sum two steps later.
+        mask = self.subset_mask(time_ids=time_ids, entity_ids=entity_ids)
+        positions = np.flatnonzero(mask)
+        keyframe = (
+            pd.DataFrame(index=self.dataframe.index[mask])
+            .join(self.geo_metadata, how="left")
+            .reset_index()
+        )
 
-            # C-235: reduce the whole variable in ONE `collapse` call, exactly as the cell path
-            # does (`grid_dataset.py`, S6b-1/#208). `collapse` is vectorised over `(N, S)`; the
-            # previous form called it once per `(month, unit)` — 262,656 times for the delivered
-            # run against the cell path's 108 — so `/data/forecast/bulk` took ~500 s and 504'd at
-            # the proxy (#79). Same reduction, same inputs, same order: only the batch width
-            # changes, which is why the goldens must stay byte-identical.
-            column = aggregated_df[var_name]
-            widths = {
-                len(v) for v in column
-                if isinstance(v, np.ndarray) and v.ndim == 1 and len(v) > 0
+        # `observed=True` is load-bearing: the country level groups by `country_iso_a3`, which is
+        # `category` dtype. With the pandas default a categorical key emits a row for EVERY
+        # category — all ~250 countries — even for a single-country request. This groupby fixes
+        # the output index and its order, exactly as the pre-S7 `_aggregate_distributions` did.
+        grouped = keyframe.groupby([time_col, target_level_col], observed=True)
+        group_meta = (
+            grouped.agg({c: "first" for c in metadata_cols_to_include})
+            if metadata_cols_to_include
+            else None
+        )
+        out_index = group_meta.index if group_meta is not None else grouped.size().index
+        if len(out_index) == 0:
+            return pd.DataFrame()
+
+        row_of_key = {key: i for i, key in enumerate(out_index)}
+        stats = {
+            var: {
+                name: np.full(len(out_index), np.nan, dtype=np.float64)
+                for name in series_value_column_names(var)
             }
-            # A ragged column cannot be stacked. It should not occur (the joint-sum emits one
-            # `(S,)` array per group), but stacking silently on a ragged column would produce an
-            # object array and a wrong reduction, so fall back per row and say so.
-            batchable = len(widths) == 1
-            if not batchable and widths:
-                logger.warning(
-                    "aggregate reduction for %s has ragged sample widths %s — reducing per row "
-                    "(C-235 batching skipped)", var_name, sorted(widths),
-                )
+            for var in selected_vars
+        }
 
-            rows = list(aggregated_df.index)
-            usable = [
-                isinstance(v, np.ndarray) and v.ndim == 1 and len(v) > 0 for v in column
-            ]
-            data = None
-            if batchable and any(usable):
-                block = np.stack([v for v, ok in zip(column, usable) if ok])  # (n_usable, S)
+        # Step 2: per month, per target — take that month's rows as a contiguous `(N, S)` block,
+        # joint-sum it to the level, and `collapse` the result in ONE call. Streaming per month
+        # holds one month of cells resident instead of the whole request (the cell path's
+        # pattern, S6b-1 / #208). Groups are `(time, unit)` and a month is one time value, so no
+        # group spans two months: the draws summed, their order, and the reduction are all
+        # identical to doing every month at once — which is why the goldens must not move.
+        times = keyframe[time_col].to_numpy()
+        codes = keyframe[target_level_col].to_numpy()
+        sample_index = None
+        if sample_idx is not None:
+            sample_index = sample_idx if isinstance(sample_idx, list) else [sample_idx]
+
+        for month in pd.unique(times):
+            in_month = times == month
+            month_positions = positions[in_month]
+            month_times = times[in_month]
+            month_codes = codes[in_month]
+            for var_name in selected_vars:
+                values = self._sample_array(var_name)[month_positions]
+                if sample_index is not None:
+                    values = values[:, sample_index]
+                keys, block = joint_sum_to_level(values, month_times, month_codes)
+                if not keys:
+                    continue
+
+                # Same ADR-025 reduction as the cell path (#222/S4): MAP + fixed 50/90/95 HDIs +
+                # severe_scenario, through the shared `schema`/`json_contract` builder — so the
+                # aggregate and cell schemas can never diverge. One `collapse` call per (month,
+                # target), matching the cell path's call count (C-235).
                 cr = collapse(
                     block,
                     masses=schema.MASSES,
@@ -611,50 +619,30 @@ class ForecastDataset(_GridDataset):
                     {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
                     exceedance=cr.exceedance,
                 )
+                rows = np.fromiter(
+                    (row_of_key[k] for k in keys), dtype=np.intp, count=len(keys)
+                )
+                for name, column in data.items():
+                    target = stats[var_name].setdefault(
+                        name, np.full(len(out_index), np.nan, dtype=np.float64)
+                    )
+                    target[rows] = column
 
-            var_results = []
-            reduced_at = 0  # position within the batched block, advanced only for usable rows
-            for position, idx in enumerate(rows):
-                time_id, geo_unit = idx
-                result_row = {time_col: time_id, target_level_col: geo_unit}
-                if usable[position] and data is not None:
-                    result_row.update(
-                        {name: float(col[reduced_at]) for name, col in data.items()}
-                    )
-                    reduced_at += 1
-                elif usable[position]:
-                    # Ragged fallback: one row, one call — the pre-C-235 behaviour, kept so a
-                    # malformed column degrades in speed rather than in correctness.
-                    cr = collapse(
-                        column.iloc[position],
-                        masses=schema.MASSES,
-                        enforce_non_negative=enforce_non_negative,
-                        thresholds=schema.EXCEEDANCE_THRESHOLDS,
-                    )
-                    row_data = series_value_data(
-                        var_name, cr.map, cr.severe, cr.bimodality,
-                        {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
-                        exceedance=cr.exceedance,
-                    )
-                    result_row.update({name: float(col[0]) for name, col in row_data.items()})
-                else:
-                    result_row.update({name: np.nan for name in value_cols})
-
+        # Step 3: build the DataFrame once, from stacked arrays — the serialize seam ADR-030 §1
+        # allows. Column order matches the pre-S7 path: each target's value columns, then the
+        # level's metadata columns once (duplicates across targets dropped, as before).
+        results = []
+        for var_name in selected_vars:
+            var_df = pd.DataFrame(stats[var_name], index=out_index)
+            if group_meta is not None:
                 for meta_col in metadata_cols_to_include:
-                    if meta_col in aggregated_df.columns:
-                        result_row[meta_col] = aggregated_df.iloc[position][meta_col]
-
-                var_results.append(result_row)
-
-            var_df = pd.DataFrame(var_results).set_index([time_col, target_level_col])
+                    var_df[meta_col] = group_meta[meta_col].astype(object)
             results.append(var_df)
-        
+
         if not results:
             return pd.DataFrame()
-        
-        # Concatenate results and deduplicate metadata columns
+
         final_result = pd.concat(results, axis=1)
-        # Remove duplicate columns (metadata cols may appear multiple times)
         final_result = final_result.loc[:, ~final_result.columns.duplicated()]
         return final_result
 

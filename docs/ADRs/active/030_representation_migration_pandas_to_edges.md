@@ -122,3 +122,63 @@ Epic #154 is **complete**, byte-identical throughout:
 - **S8 (terminal)** the chain was **rationalized, not deleted** (register **D-21**): `_PGDataset` retired; `_ViewsDataset` renamed **`_GridDataset`** and kept as the generic geo-less base; a full single-class merge was rejected (would complect responsibilities + relocate the geo fail-loud, C-156/C-157). The C-147 swamp — the object-dtype spine — was drained at S4; the "delete the chain" AC was an over-specified *means* and is amended here.
 
 **Gated / not in this epic:** the float32-native collapse (**#112 / 4b**, ADR-023) — this epic kept the legacy float64 collapse so every slice stayed byte-identical, and measured the 4b delta for the ADR-023 diff. **Out of scope (retained pandas):** the historical/scalar feature path (ADR-030 §1); `data/handlers.py` stays on the ratchet allowlist as the DataFrame-returning serving boundary.
+
+---
+
+## Addendum — S7 for the aggregate path (2026-08-18)
+
+The 2026-06-28 closeout lists S1–S6 and S8. **S7 (tensor-native subset) is absent from it**:
+the epic closed with the store flipped but the aggregate read path still going through pandas.
+That gap is what register **C-235** and issue **#79** turned out to be.
+
+`calculate_hdi_map(aggregate=True)` made a four-step round trip around a store that was already
+contiguous — `get_subset_dataframe` exploded `(N, S)` into one ndarray object per row per target
+(`pd.Series(list(arr), dtype=object)`), `_stack_cells` put them back for the views-frames leaf,
+the group sums were scattered into object cells again, and the reduction stacked them a third
+time. The DataFrame carried no information across those steps; it carried only itself.
+
+**S7 as landed.** The reduction is `forecast/aggregate/reduction.py::joint_sum_to_level` — one
+pandas-free function, streamed per month by `calculate_hdi_map` exactly as the cell path streams
+(S6b-1 / #208). Groups are `(time, unit)` and a month is one time value, so no group spans two
+months: per-month reduction sums the same draws in the same order as reducing every month at
+once. Pandas keeps two jobs on this path, both at seams §1 already allows — the group index and
+metadata (`groupby(observed=True)`, which fixes row order and so the served order) and the final
+frame assembled from stacked arrays.
+
+Measured against the delivered run (`rusty_bucket_forecasting_20260727_095355`, 2.33M cells,
+S=128, 36 months), full month range, all four aggregate levels:
+
+| level | wall before | wall after | peak RSS before | peak RSS after |
+|---|---|---|---|---|
+| country | 29.8 s | 23.2 s | 10.7 GB | 4.5 GB |
+| gaul0 | 27.9 s | 23.7 s | 10.7 GB | 4.6 GB |
+| gaul1 | 59.4 s | 28.2 s | 10.9 GB | 4.7 GB |
+| gaul2 | 313.7 s | 49.2 s | 13.7 GB | 6.6 GB |
+| **total** | **430.8 s** | **124.3 s** | | |
+
+All four levels **byte-identical** over every value, index entry and column, at a
+10-decimal encoding; gaul1 was re-compared at **exact float bits** (`float.hex()`, 45,488,383
+bytes) to confirm the encoding was not hiding a sub-ulp difference. C-146 (cells with no code for
+the level are excluded, not summed into a phantom unit) survives as a named predicate,
+`has_level_code`, rather than `pd.factorize`'s `-1` sentinel.
+
+**The endpoint (#79).** `/data/forecast/bulk` builds the full 45-column table in **31.2 s at
+10.5 GB peak** with historical included (23.4 s / 4.5 GB without) — against the 300 s nginx
+`proxy_read_timeout` that made it return 504. It was 501 s before C-235 and 109 s after.
+
+**What is still on the historical leg.** Loading historical on a *cold* disk cache costs a
+13.1 GB transient (`pd.read_parquet` of 28.4M rows), measured before this change. On a warm
+cache — how the box actually serves — both datasets together sit at 4.4 GB, and the historical
+leg's contribution to the build is the difference between the two rows above, ~6 GB. That leg is
+**C-169**, §8 out-of-scope here, and it is now the larger remaining term. It did not have to be
+fixed for the endpoint to come inside budget, so per the plan's own stop condition it was not.
+
+**Ratchet (§7).** `forecast/` still imports pandas only in `ingestion/`, `serialize/`,
+`geography/` — `aggregate/reduction.py` is pandas-free (`np.unique`, not `pd.factorize`).
+`data/handlers/grid_dataset.py` is unchanged at 55 references; `forecast_dataset.py` went
+**24 → 28**. The count went the wrong way, and that is recorded rather than explained away: the
+index/assembly pandas that `_aggregate_distributions` used to own is now written out in
+`calculate_hdi_map`. What changed is what pandas is *used for* — it no longer touches a single
+sample. `_aggregate_distributions` and `_frame_native_joint_sum` remain for
+`get_subset_dataframe(aggregate=True)`, which has a live caller (`managers/api.py:668`) that
+genuinely wants a DataFrame; the two paths are deliberately allowed to duplicate.

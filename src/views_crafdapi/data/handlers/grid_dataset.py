@@ -955,6 +955,32 @@ class _GridDataset:
 
         return result
 
+    def subset_mask(
+        self,
+        time_ids: Optional[Union[int, List[int]]] = None,
+        entity_ids: Optional[Union[int, List[int]]] = None,
+    ) -> np.ndarray:
+        """Boolean mask over `.dataframe` rows for a (time, entity) selection.
+
+        The selection step of `get_subset_dataframe`, without materialising any column. The
+        aggregate path (ADR-030 S7) needs the same selection but reads its samples from the
+        `(N, S)` store via `_sample_array`, so it takes the mask and never builds the
+        object-dtype sample columns. Extracted so the two paths cannot drift on what "the
+        subset" means.
+        """
+        mask = np.ones(len(self.dataframe), dtype=bool)
+        if time_ids is not None:
+            if not isinstance(time_ids, list):
+                time_ids = [time_ids]
+            mask &= self.dataframe.index.get_level_values(self._time_id).isin(time_ids)
+        if entity_ids is not None:
+            if not isinstance(entity_ids, list):
+                entity_ids = [entity_ids]
+            mask &= self.dataframe.index.get_level_values(self._entity_id).isin(
+                entity_ids
+            )
+        return mask
+
     def get_subset_dataframe(
         self,
         time_ids: Optional[Union[int, List[int]]] = None,
@@ -974,17 +1000,7 @@ class _GridDataset:
         if entity_ids == [] or time_ids == []:
             # Return empty DataFrame if no entities or time IDs specified
             return self.dataframe.iloc[0:0]
-        mask = np.ones(len(self.dataframe), dtype=bool)
-        if time_ids is not None:
-            if not isinstance(time_ids, list):
-                time_ids = [time_ids]
-            mask &= self.dataframe.index.get_level_values(self._time_id).isin(time_ids)
-        if entity_ids is not None:
-            if not isinstance(entity_ids, list):
-                entity_ids = [entity_ids]
-            mask &= self.dataframe.index.get_level_values(self._entity_id).isin(
-                entity_ids
-            )
+        mask = self.subset_mask(time_ids=time_ids, entity_ids=entity_ids)
 
         # Validate + resolve the selected columns
         if features is not None:

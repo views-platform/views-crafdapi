@@ -102,7 +102,7 @@ Part of the same root cause as `C-233` (deliberate transition-safety fall-throug
 
 ---
 
-### C-235: The aggregate reduction is a per-row Python loop while the cell-level path beside it streams
+### C-235 (RESOLVED): The aggregate reduction is a per-row Python loop while the cell-level path beside it streams
 
 | Field | Value |
 |-------|-------|
@@ -113,6 +113,28 @@ Part of the same root cause as `C-233` (deliberate transition-safety fall-throug
 | Location | `src/views_crafdapi/data/handlers/forecast_dataset.py:533-544,562-604`, consumed by `src/views_crafdapi/forecast/serialize/bulk_parquet.py:84` and `src/views_crafdapi/managers/api.py:509-542` |
 
 The cell-level reduction was deliberately rewritten (S6b-1, `grid_dataset.py:1254-1318`) to stream one month at a time so the full `(n_time, n_entity, S, targets)` grid — sized at ~57 GB in the code's own comment — is never materialized. The aggregate path was not given the same treatment: `ForecastDataset.calculate_hdi_map` first materializes the entire cell-level subset and joins the geo table (`:533-541`), then iterates `for idx in aggregated_df.index:` calling the vectorized `collapse()` on a **single row** per `(month, unit)` per variable (`:572-593`), each call constructing a fresh `PredictionFrame`. At gaul2 grain across a full month horizon and three targets this is tens of thousands of single-row collapses. `/data/forecast/bulk` sits on the same path via `build_bulk_table`. No benchmark, load test, or timeout bound exists for it; the only operational signal is `smoke.py`'s 600-second default per-request timeout and its warm-retry-once helper, which exists precisely because cold loads already run long.
+
+**RESOLVED 2026-08-18 (two changes).** The reduction was batched first (PR #92): `collapse` is
+vectorised over `(N, S)`, so the whole variable reduces in one call — 29,184 calls to 3 on a
+4-month gaul1 query, 54.9 s to 9.1 s. That fixed the call count but not the memory: the path
+still exploded the contiguous `(N, S)` store into one ndarray object per row per target to
+satisfy the DataFrame interface, then stacked them back for the joint-sum.
+
+The round trip was then removed (ADR-030 **S7 addendum**): `forecast/aggregate/reduction.py`
+joint-sums arrays directly, streamed per month exactly as the cell path does. Full month range
+against the delivered run, all four aggregate levels: **430.8 s → 124.3 s**, peak RSS
+**10.7–13.7 GB → 4.5–6.6 GB**, every level byte-identical (gaul1 re-checked at exact float bits).
+`/data/forecast/bulk` — the trigger's own benchmark — builds in **31.2 s at 10.5 GB** including
+historical, against a 300 s proxy timeout; it was 501 s and returning 504 (#79).
+
+The trigger's second clause is discharged too: the benchmark it asked for now exists as
+`tests/forecast/test_aggregate_reduction_is_batched.py` (call-count bound) and
+`tests/forecast/test_aggregate_path_is_array_native.py` (no explode, no re-stack). Both were
+confirmed to fail against the pre-change code rather than merely passing against the new.
+
+Still open on this path, deliberately: the historical leg's `pd.read_parquet` of 28.4M rows
+(**C-169**) is now the larger remaining term — a 13.1 GB transient on a cold cache, ~6 GB of the
+build's peak warm. It did not need fixing for the endpoint to come inside budget.
 
 ---
 
