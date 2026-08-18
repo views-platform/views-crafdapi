@@ -78,8 +78,13 @@ def test_this_repo_adopted_the_adr_prefix_convention_it_proposed():
 def test_adr_033_citations_name_which_repos_adr_017_they_mean():
     """#58. A bare `ADR-017` in ADR-033 resolves to this repo's own ADR — the wrong document."""
     text = (REPO / "docs" / "ADRs" / "active" / "033_fail_visible_forecast_selection.md").read_text()
-    qualified = text.count("views-models ADR-017") + text.count("vmo_017")
+    # Count only `ADR-017` occurrences, and only the prefixed subset of *those* as qualified.
+    # The earlier form added `vmo_017` hits — which contain no "ADR-017" substring — to
+    # `qualified` while `total` counted "ADR-017" alone, so adopting the convention the way
+    # this test's own failure message prescribes drove `bare` negative and the assertion could
+    # never pass. A guard that cannot go green stops being a guard.
     total = text.count("ADR-017")
+    qualified = text.count("views-models ADR-017")
     bare = total - qualified
     assert bare == 0, (
         f"#58: {bare} of {total} `ADR-017` citations in ADR-033 are unqualified. Every one means "

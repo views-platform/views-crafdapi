@@ -15,12 +15,17 @@ what a future edit would silently regress.
 import inspect
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.data.handlers.grid_dataset import _GridDataset
-from views_crafdapi.forecast.aggregate.reduction import has_level_code, joint_sum_to_level
+from views_crafdapi.forecast.aggregate.reduction import (
+    encode_level_codes,
+    has_level_code,
+    joint_sum_to_level,
+)
 
 pytestmark = pytest.mark.layer2_data
 
@@ -96,10 +101,23 @@ def test_cells_without_a_level_code_are_excluded_not_summed_together():
 
     assert list(has_level_code(codes)) == [True, False, True, False]
 
-    keys, block = joint_sum_to_level(values, time, codes)
-    assert keys == [(1, "A")], f"unmapped cells leaked into the aggregate: {keys}"
+    keep, unit_ids, labels = encode_level_codes(codes)
+    keys, block = joint_sum_to_level(values[keep], time[keep], unit_ids)
+    assert [labels[u] for _, u in keys] == ["A"], "unmapped cells leaked into the aggregate"
     # Rows 0 and 2 only — rows 1 and 3 have no code for this level.
     np.testing.assert_array_equal(block[0], values[0] + values[2])
+
+
+def test_missing_codes_survive_pandas_nullable_dtypes():
+    """`pd.NA` is not caught by the terse `c == c` NaN idiom — `bool(pd.NA)` raises.
+
+    Reachable because `ForecastDataset.__init__` only casts `geo_metadata` to `category` when
+    it arrives as `object`, so a `geo.parquet` carrying `string`/arrow-backed dtypes reaches
+    the predicate unconverted. A raise here surfaces as HTTP 500 naming neither column nor
+    level, on exactly the C-146 case the function is named for.
+    """
+    codes = pd.array(["A", pd.NA, "B"], dtype="string").to_numpy()
+    assert list(has_level_code(codes)) == [True, False, True]
 
 
 def test_joint_sum_adds_aligned_draws_not_summary_statistics():
@@ -112,8 +130,10 @@ def test_joint_sum_adds_aligned_draws_not_summary_statistics():
     time = np.array([5, 5, 6])
     codes = np.array([3, 3, 3])
 
-    keys, block = joint_sum_to_level(values, time, codes)
+    keep, unit_ids, labels = encode_level_codes(codes)
+    keys, block = joint_sum_to_level(values[keep], time[keep], unit_ids)
 
+    assert labels is None, "integer codes are their own labels"
     assert keys == [(5, 3), (6, 3)]
     np.testing.assert_array_equal(block[0], [3.0, 30.0])   # aligned draws, not 2x the mean
     np.testing.assert_array_equal(block[1], [100.0, 100.0])

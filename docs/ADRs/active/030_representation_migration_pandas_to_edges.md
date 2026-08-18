@@ -150,11 +150,15 @@ S=128, 36 months), full month range, all four aggregate levels:
 
 | level | wall before | wall after | peak RSS before | peak RSS after |
 |---|---|---|---|---|
-| country | 29.8 s | 23.2 s | 10.7 GB | 4.5 GB |
-| gaul0 | 27.9 s | 23.7 s | 10.7 GB | 4.6 GB |
-| gaul1 | 59.4 s | 28.2 s | 10.9 GB | 4.7 GB |
-| gaul2 | 313.7 s | 49.2 s | 13.7 GB | 6.6 GB |
-| **total** | **430.8 s** | **124.3 s** | | |
+| country | 29.8 s | 33.0 s | 10.7 GB | 4.5 GB |
+| gaul0 | 27.9 s | 25.4 s | 10.7 GB | 4.5 GB |
+| gaul1 | 59.4 s | 30.8 s | 10.9 GB | 4.7 GB |
+| gaul2 | 313.7 s | 65.7 s | 13.7 GB | 6.7 GB |
+| **total** | **430.8 s** | **154.9 s** | | |
+
+(An earlier run of the same change, before the review fixes and with 12 GB free rather than
+7 GB, totalled 124.3 s with gaul2 at 49.2 s. The table reports the final run — the code as
+merged — rather than the better number.)
 
 All four levels **byte-identical** over every value, index entry and column, at a
 10-decimal encoding; gaul1 was re-compared at **exact float bits** (`float.hex()`, 45,488,383
@@ -172,6 +176,15 @@ cache — how the box actually serves — both datasets together sit at 4.4 GB, 
 leg's contribution to the build is the difference between the two rows above, ~6 GB. That leg is
 **C-169**, §8 out-of-scope here, and it is now the larger remaining term. It did not have to be
 fixed for the endpoint to come inside budget, so per the plan's own stop condition it was not.
+
+**The historical leg stays on the pandas path.** ADR-030 §1 excludes the historical/scalar leg
+from this migration and requires it to stay float64: the frame leaf accumulates in float32 and
+compounds error across cells. S7's first draft called the array path unconditionally and moved a
+served value on `/{level}/analysis/historical/hdi-map?aggregate=true` by 96.0 — with the full
+suite green, because the guard that states this invariant is pinned to
+`get_subset_dataframe(aggregate=True)`, the sibling method. The leg now dispatches to
+`_aggregate_hdi_map_pandas` (the pre-S7 body, verbatim) and the invariant is pinned to both entry
+points. Register **C-258**; input validation lost the same way is **C-259**.
 
 **Ratchet (§7).** `forecast/` still imports pandas only in `ingestion/`, `serialize/`,
 `geography/` — `aggregate/reduction.py` is pandas-free (`np.unique`, not `pd.factorize`).

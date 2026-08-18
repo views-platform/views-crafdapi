@@ -955,7 +955,7 @@ class _GridDataset:
 
         return result
 
-    def subset_mask(
+    def _subset_mask(
         self,
         time_ids: Optional[Union[int, List[int]]] = None,
         entity_ids: Optional[Union[int, List[int]]] = None,
@@ -1000,7 +1000,7 @@ class _GridDataset:
         if entity_ids == [] or time_ids == []:
             # Return empty DataFrame if no entities or time IDs specified
             return self.dataframe.iloc[0:0]
-        mask = self.subset_mask(time_ids=time_ids, entity_ids=entity_ids)
+        mask = self._subset_mask(time_ids=time_ids, entity_ids=entity_ids)
 
         # Validate + resolve the selected columns
         if features is not None:

@@ -4,7 +4,10 @@ import pandas as pd
 import numpy as np
 from typing import List, Union, Optional
 from views_crafdapi.forecast.aggregate.cross_level import aggregate_via_leaf, elementwise_sum
-from views_crafdapi.forecast.aggregate.reduction import joint_sum_to_level
+from views_crafdapi.forecast.aggregate.reduction import (
+    encode_level_codes,
+    joint_sum_to_level,
+)
 from views_crafdapi.forecast.geography.metadata_table import (
     LEVEL_METADATA_COLUMNS,
     LEVELS,
@@ -461,6 +464,160 @@ class ForecastDataset(_GridDataset):
             if c not in groupby_cols and (c in array_targets or c in scalar_agg_dict)
         ]
         return result[ordered_cols]
+    def _aggregate_hdi_map_pandas(
+        self,
+        alpha: float,
+        features,
+        sample_idx,
+        time_ids,
+        entity_ids,
+        enforce_non_negative: bool,
+        level: str,
+    ) -> pd.DataFrame:
+        """The pre-S7 aggregate reduction, kept verbatim for the historical/scalar leg.
+
+        ADR-030 §1 puts the historical/scalar path outside the frame migration and requires it
+        to stay **float64 byte-identical**: `_aggregate_distributions` routes non-prediction
+        targets to the legacy `elementwise_sum` precisely because "the frame path's float32
+        stack would re-baseline it". The S7 path reads `_sample_array`, which hands back
+        `float32` for feature datasets, so it must not be used here.
+
+        This is not hypothetical. S7's first draft called the array path unconditionally and
+        the full suite stayed green, because the guard that states this invariant
+        (`TestFeatureAggregationStaysFloat64`) is pinned to `get_subset_dataframe(aggregate=
+        True)` — the sibling method — while `/{level}/analysis/historical/hdi-map` reaches
+        `calculate_hdi_map`. On 2000 cells it moved a served value by 98.0. Register **C-258**.
+        """
+        
+        # Step 1: Get raw distributions at cell level
+        raw_df = super().get_subset_dataframe(
+            time_ids=time_ids,
+            features=features,
+            sample_idx=sample_idx,
+            entity_ids=entity_ids,
+        )
+        
+        # Add metadata for grouping
+        raw_df = raw_df.join(self.geo_metadata, how="left")
+        
+        # Step 2: Aggregate distributions element-wise (preserves time dimension)
+        aggregated_df = self._aggregate_distributions(raw_df, level=level)
+        
+        # Step 3: Compute HDI and MAP on aggregated distributions
+        target_level_col = self.levels[level]
+        time_col = self._time_id
+        selected_vars = features if features else self.targets
+        if not isinstance(selected_vars, list):
+            selected_vars = [selected_vars]
+        
+        # Define which metadata columns to include for each level
+        level_metadata_mapping = {
+            "country": [],  # country_iso_a3 is used as index, no separate name column
+            "gaul0": ["country_iso_a3", "admin1_gaul0_name"],
+            "gaul1": ["country_iso_a3", "admin1_gaul1_name", "admin1_gaul0_name"],
+            "gaul2": ["country_iso_a3", "admin2_gaul2_name", "admin1_gaul1_name", "admin1_gaul0_name"],
+        }
+        metadata_cols_to_include = level_metadata_mapping.get(level, [])
+        
+        results = []
+        for var_name in selected_vars:
+            if var_name not in aggregated_df.columns:
+                continue
+
+            # Same ADR-025 reduction as the cell path (#222/S4): MAP + fixed 50/90/95 HDIs +
+            # severe_scenario, via the shared `schema`/`json_contract` builder — so the aggregate
+            # and cell schemas can never diverge. Var-keyed; sb/ns/os rename is a boundary step.
+            value_cols = series_value_column_names(var_name)
+
+            # C-235: reduce the whole variable in ONE `collapse` call, exactly as the cell path
+            # does (`grid_dataset.py`, S6b-1/#208). `collapse` is vectorised over `(N, S)`; the
+            # previous form called it once per `(month, unit)` — 262,656 times for the delivered
+            # run against the cell path's 108 — so `/data/forecast/bulk` took ~500 s and 504'd at
+            # the proxy (#79). Same reduction, same inputs, same order: only the batch width
+            # changes, which is why the goldens must stay byte-identical.
+            column = aggregated_df[var_name]
+            widths = {
+                len(v) for v in column
+                if isinstance(v, np.ndarray) and v.ndim == 1 and len(v) > 0
+            }
+            # A ragged column cannot be stacked. It should not occur (the joint-sum emits one
+            # `(S,)` array per group), but stacking silently on a ragged column would produce an
+            # object array and a wrong reduction, so fall back per row and say so.
+            batchable = len(widths) == 1
+            if not batchable and widths:
+                logger.warning(
+                    "aggregate reduction for %s has ragged sample widths %s — reducing per row "
+                    "(C-235 batching skipped)", var_name, sorted(widths),
+                )
+
+            rows = list(aggregated_df.index)
+            usable = [
+                isinstance(v, np.ndarray) and v.ndim == 1 and len(v) > 0 for v in column
+            ]
+            data = None
+            if batchable and any(usable):
+                block = np.stack([v for v, ok in zip(column, usable) if ok])  # (n_usable, S)
+                cr = collapse(
+                    block,
+                    masses=schema.MASSES,
+                    enforce_non_negative=enforce_non_negative,
+                    thresholds=schema.EXCEEDANCE_THRESHOLDS,
+                )
+                data = series_value_data(
+                    var_name,
+                    cr.map,
+                    cr.severe,
+                    cr.bimodality,
+                    {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
+                    exceedance=cr.exceedance,
+                )
+
+            var_results = []
+            reduced_at = 0  # position within the batched block, advanced only for usable rows
+            for position, idx in enumerate(rows):
+                time_id, geo_unit = idx
+                result_row = {time_col: time_id, target_level_col: geo_unit}
+                if usable[position] and data is not None:
+                    result_row.update(
+                        {name: float(col[reduced_at]) for name, col in data.items()}
+                    )
+                    reduced_at += 1
+                elif usable[position]:
+                    # Ragged fallback: one row, one call — the pre-C-235 behaviour, kept so a
+                    # malformed column degrades in speed rather than in correctness.
+                    cr = collapse(
+                        column.iloc[position],
+                        masses=schema.MASSES,
+                        enforce_non_negative=enforce_non_negative,
+                        thresholds=schema.EXCEEDANCE_THRESHOLDS,
+                    )
+                    row_data = series_value_data(
+                        var_name, cr.map, cr.severe, cr.bimodality,
+                        {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
+                        exceedance=cr.exceedance,
+                    )
+                    result_row.update({name: float(col[0]) for name, col in row_data.items()})
+                else:
+                    result_row.update({name: np.nan for name in value_cols})
+
+                for meta_col in metadata_cols_to_include:
+                    if meta_col in aggregated_df.columns:
+                        result_row[meta_col] = aggregated_df.iloc[position][meta_col]
+
+                var_results.append(result_row)
+
+            var_df = pd.DataFrame(var_results).set_index([time_col, target_level_col])
+            results.append(var_df)
+        
+        if not results:
+            return pd.DataFrame()
+        
+        # Concatenate results and deduplicate metadata columns
+        final_result = pd.concat(results, axis=1)
+        # Remove duplicate columns (metadata cols may appear multiple times)
+        final_result = final_result.loc[:, ~final_result.columns.duplicated()]
+        return final_result
+
     def calculate_hdi_map(
         self,
         alpha: float = 0.9,
@@ -532,26 +689,77 @@ class ForecastDataset(_GridDataset):
         if level is None:
             raise ValueError("Must specify 'level' when aggregate=True")
 
+        # The historical/scalar leg keeps the legacy float64 pandas path (ADR-030 §1, C-258).
+        if not self.is_prediction:
+            return self._aggregate_hdi_map_pandas(
+                alpha=alpha,
+                features=features,
+                sample_idx=sample_idx,
+                time_ids=time_ids,
+                entity_ids=entity_ids,
+                enforce_non_negative=enforce_non_negative,
+                level=level,
+            )
+
         target_level_col = self.levels[level]
         time_col = self._time_id
-        selected_vars = features if features else self.targets
+
+        # `get_subset_dataframe` performed these checks as a side effect of materialising
+        # columns; reading `_sample_array` directly inherits none of them (register C-259).
+        # The messages match the cell path's verbatim so one endpoint cannot answer two
+        # different ways for the same bad input.
+        selected_vars = self.targets if features is None else features
         if not isinstance(selected_vars, list):
             selected_vars = [selected_vars]
-        # Which metadata columns each level carries through aggregation (single source of truth
-        # in forecast.geography.metadata_table).
-        metadata_cols_to_include = LEVEL_METADATA_COLUMNS.get(level, [])
+        invalid = set(selected_vars) - set(self.targets)
+        if invalid:
+            raise ValueError(f"Invalid features specified: {invalid}")
+
+        sample_index = None
+        if sample_idx is not None:
+            sample_index = sample_idx if isinstance(sample_idx, list) else [sample_idx]
+            if self.sample_size is None:
+                raise ValueError("Cannot subset by sample when sample_size is not defined")
+            max_sample = self.sample_size - 1
+            # Without the lower bound a negative index wraps silently and one draw is served
+            # as a whole posterior — a zero-width credible interval (C-259, cf. C-247).
+            if any(i < 0 or i > max_sample for i in sample_index):
+                raise ValueError(f"Sample indices must be between 0 and {max_sample}")
+
+        if time_ids is not None:
+            requested = time_ids if isinstance(time_ids, list) else [time_ids]
+            unknown = [t for t in requested if t not in set(self._time_values)]
+            if unknown:
+                raise KeyError(f"Invalid time IDs: {unknown}")
+
+        # Which metadata columns this level carries (single source of truth in
+        # forecast.geography.metadata_table). Filtered to what `geo_metadata` actually has:
+        # the pre-S7 path skipped missing columns silently and this keeps that behaviour
+        # rather than changing it inside a performance change — the gap is register C-261.
+        metadata_cols_to_include = [
+            c for c in LEVEL_METADATA_COLUMNS.get(level, []) if c in self.geo_metadata.columns
+        ]
 
         # Step 1: the group index and the metadata, from a frame carrying NO sample column.
         # This is the memory story. The path this replaces materialised one ndarray object per
         # (cell, month, target) here — ~7M of them for the delivered run, ~10.9 GB — purely to
         # stack them back into `(N, S)` for the joint-sum two steps later.
-        mask = self.subset_mask(time_ids=time_ids, entity_ids=entity_ids)
+        mask = self._subset_mask(time_ids=time_ids, entity_ids=entity_ids)
         positions = np.flatnonzero(mask)
         keyframe = (
             pd.DataFrame(index=self.dataframe.index[mask])
             .join(self.geo_metadata, how="left")
             .reset_index()
         )
+        # `positions` indexes the sample store while `keyframe` is read positionally beside it.
+        # A left join only preserves that alignment if `geo_metadata`'s index is unique per
+        # entity; `__init__` reindexes for uniqueness but `from_value` does not re-check.
+        if len(keyframe) != len(positions):
+            raise ValueError(
+                f"geo_metadata join changed the row count ({len(positions)} -> "
+                f"{len(keyframe)}): its index must be unique per {self._entity_id}. The sample "
+                f"positions and the joined frame are read positionally against each other."
+            )
 
         # `observed=True` is load-bearing: the country level groups by `country_iso_a3`, which is
         # `category` dtype. With the pandas default a categorical key emits a row for EVERY
@@ -564,8 +772,32 @@ class ForecastDataset(_GridDataset):
             else None
         )
         out_index = group_meta.index if group_meta is not None else grouped.size().index
+
+        # `observed=True` restricts the *rows*, but the resulting index level is still a
+        # CategoricalIndex carrying every category — which would re-export past the serving
+        # boundary the exact fan-out the groupby just prevented (phantom units on a downstream
+        # groupby, changed parquet encoding, `.loc` raising instead of selecting empty). The
+        # pre-S7 path built its index from plain values, so cast back to match it.
+        level_values = out_index.get_level_values(target_level_col)
+        if isinstance(level_values.dtype, pd.CategoricalDtype):
+            out_index = pd.MultiIndex.from_arrays(
+                [out_index.get_level_values(time_col), level_values.astype(object)],
+                names=[time_col, target_level_col],
+            )
+
         if len(out_index) == 0:
-            return pd.DataFrame()
+            # Shaped, not bare: `build_bulk_table` calls `.index.set_names([...])` on this and
+            # a (0, 0) RangeIndex frame fails there with an error naming neither cause.
+            return pd.DataFrame(
+                {
+                    name: np.empty(0, dtype=np.float64)
+                    for var in selected_vars
+                    for name in series_value_column_names(var)
+                },
+                index=pd.MultiIndex.from_arrays(
+                    [[], []], names=[time_col, target_level_col]
+                ),
+            )
 
         row_of_key = {key: i for i, key in enumerate(out_index)}
         stats = {
@@ -582,22 +814,26 @@ class ForecastDataset(_GridDataset):
         # pattern, S6b-1 / #208). Groups are `(time, unit)` and a month is one time value, so no
         # group spans two months: the draws summed, their order, and the reduction are all
         # identical to doing every month at once — which is why the goldens must not move.
-        times = keyframe[time_col].to_numpy()
-        codes = keyframe[target_level_col].to_numpy()
-        sample_index = None
-        if sample_idx is not None:
-            sample_index = sample_idx if isinstance(sample_idx, list) else [sample_idx]
+        #
+        # The code->unit mapping and the store handles are hoisted out of the loops: neither
+        # depends on the month or the target, and computing them inside cost 27% of runtime
+        # (the mapping) and a full-store copy per iteration (the handles).
+        keep, unit_ids, labels = encode_level_codes(keyframe[target_level_col].to_numpy())
+        times = keyframe[time_col].to_numpy()[keep]
+        positions = positions[keep]
+        sample_arrays = {var: self._sample_array(var) for var in selected_vars}
+        label_of = (lambda u: labels[u]) if labels is not None else (lambda u: u)
 
         for month in pd.unique(times):
             in_month = times == month
             month_positions = positions[in_month]
             month_times = times[in_month]
-            month_codes = codes[in_month]
+            month_units = unit_ids[in_month]
             for var_name in selected_vars:
-                values = self._sample_array(var_name)[month_positions]
+                values = sample_arrays[var_name][month_positions]
                 if sample_index is not None:
                     values = values[:, sample_index]
-                keys, block = joint_sum_to_level(values, month_times, month_codes)
+                keys, block = joint_sum_to_level(values, month_times, month_units)
                 if not keys:
                     continue
 
@@ -620,13 +856,16 @@ class ForecastDataset(_GridDataset):
                     exceedance=cr.exceedance,
                 )
                 rows = np.fromiter(
-                    (row_of_key[k] for k in keys), dtype=np.intp, count=len(keys)
+                    (row_of_key[(t, label_of(u))] for t, u in keys),
+                    dtype=np.intp,
+                    count=len(keys),
                 )
+                # Direct assignment, not `setdefault`: `series_value_data` returns exactly the
+                # keys `series_value_column_names` produced above (json_contract.py says so),
+                # so a missing key is a contract break that should raise, not be papered over
+                # with a lazily-created half-filled column.
                 for name, column in data.items():
-                    target = stats[var_name].setdefault(
-                        name, np.full(len(out_index), np.nan, dtype=np.float64)
-                    )
-                    target[rows] = column
+                    stats[var_name][name][rows] = column
 
         # Step 3: build the DataFrame once, from stacked arrays — the serialize seam ADR-030 §1
         # allows. Column order matches the pre-S7 path: each target's value columns, then the
@@ -636,7 +875,7 @@ class ForecastDataset(_GridDataset):
             var_df = pd.DataFrame(stats[var_name], index=out_index)
             if group_meta is not None:
                 for meta_col in metadata_cols_to_include:
-                    var_df[meta_col] = group_meta[meta_col].astype(object)
+                    var_df[meta_col] = group_meta[meta_col].astype(object).to_numpy()
             results.append(var_df)
 
         if not results:

@@ -413,3 +413,137 @@ class TestC146MissingGeographyCode:
         for (t, code), expected in legacy.items():
             got = np.asarray(frame_native.loc[(t, int(code)), "pred_test"])
             np.testing.assert_array_equal(got, np.asarray(expected, np.float32))
+
+
+class TestCalculateHdiMapHistoricalStaysFloat64:
+    """Register C-258 — the gap that let a silent re-baselining through a green suite.
+
+    `TestFeatureAggregationStaysFloat64` above states the invariant and guards
+    `get_subset_dataframe(aggregate=True)`. The live route
+    `/{level}/analysis/historical/hdi-map?aggregate=true` goes through `calculate_hdi_map`
+    instead, which was unguarded — so ADR-030 S7's first draft sent the historical leg through
+    the float32 views-frames leaf, moved a served value by 98.0, and the full suite passed.
+
+    A guard pinned to one of two sibling entry points is not a guard on the invariant.
+    """
+
+    @staticmethod
+    def _many_cell_feature_df(n_repeats=500, seed=7):
+        """One country, many cells — float32 only loses ground once the summands pile up."""
+        base = make_fao_df(n_cells=4, n_months=1, n_samples=1, seed=seed)
+        tid, eid = base.index.names
+        feat = base.drop(columns=[c for c in base.columns if c.startswith("pred_")]).reset_index()
+        big = pd.concat(
+            [feat.assign(**{eid: feat[eid] + 1000 * i}) for i in range(n_repeats)],
+            ignore_index=True,
+        )
+        big["country_iso_a3"] = "AAA"
+        rng = np.random.default_rng(seed)
+        big["lr_ged_sb"] = rng.gamma(2.0, 30000.0, size=len(big)).astype(np.float64)
+        return big.set_index([tid, eid]).sort_index()
+
+    def test_historical_aggregate_sums_in_float64_then_narrows_once(self):
+        """The summation must happen in float64; only the reduction's output narrows.
+
+        Note what this does NOT assert. `calculate_hdi_map` has always emitted float32-width
+        values here — `collapse` narrows — so the served number never equalled the raw float64
+        sum, and asserting that would fail on `main` too. The invariant is about *where* the
+        narrowing happens: sum in float64 and narrow once at the end, versus accumulating in
+        float32 and compounding the error across every cell.
+
+        Measured on this fixture: legacy 115868248.0 == float32(float64 sum). S7's first draft
+        routed this leg through the float32 views-frames leaf and produced 115868152.0 — a
+        silent drift of 96.0 on a live UN-facing endpoint, with a green suite. Register C-258.
+        """
+        df = self._many_cell_feature_df()
+        ds = ForecastDataset(df, targets=["lr_ged_sb"])
+        assert not ds.is_prediction, "fixture must exercise the historical/scalar leg"
+
+        out = ds.calculate_hdi_map(aggregate=True, level="country", with_metadata=False)
+        map_col = next(c for c in out.columns if c.endswith("_map"))
+        served = float(out.iloc[0][map_col])
+
+        summed_in_float64 = float(np.float32(df["lr_ged_sb"].sum()))
+        assert served == summed_in_float64, (
+            f"C-258: the historical aggregate re-baselined. Served {served!r}; summing in "
+            f"float64 and narrowing once gives {summed_in_float64!r} (drift "
+            f"{abs(served - summed_in_float64)}). ADR-030 §1 keeps this leg on the legacy "
+            f"float64 `elementwise_sum` — the float32 frame leaf accumulates error per cell."
+        )
+
+    def test_both_aggregate_entry_points_agree_on_the_historical_leg(self):
+        """The sibling-guard gap itself: `get_subset_dataframe` was guarded, this one was not.
+
+        They must describe the same aggregate. They differ in emitted width (`collapse`
+        narrows, the raw cells do not) — pre-existing and recorded in C-258 — so this compares
+        at float32 width, which is what the endpoint serves.
+        """
+        df = self._many_cell_feature_df()
+        ds = ForecastDataset(df, targets=["lr_ged_sb"])
+
+        via_hdi_map = float(
+            ds.calculate_hdi_map(aggregate=True, level="country", with_metadata=False)
+            .iloc[0]
+            .filter(like="_map")
+            .iloc[0]
+        )
+        via_subset = float(
+            np.asarray(
+                ds.get_subset_dataframe(aggregate=True, level="country").iloc[0]["lr_ged_sb"]
+            ).sum()
+        )
+        assert via_hdi_map == float(np.float32(via_subset)), (
+            f"C-258: the two aggregate entry points disagree — {via_hdi_map!r} via "
+            f"calculate_hdi_map, {via_subset!r} via get_subset_dataframe. Only one of them "
+            f"has a float64 guard, so a divergence here is invisible to CI."
+        )
+
+
+class TestAggregatePathValidatesItsInputs:
+    """Register C-259 — `get_subset_dataframe` validated as a side effect of building columns.
+
+    The S7 aggregate path reads `_sample_array` directly and inherits none of that, so each
+    check below is re-asserted on the path that no longer goes through it. The messages are
+    required to match the cell path's: one endpoint answering two different ways for the same
+    bad input is the failure mode these pin.
+    """
+
+    @staticmethod
+    def _ds():
+        return ForecastDataset(
+            make_fao_df(n_cells=4, n_months=2, n_samples=16, seed=3,
+                        targets=("pred_lr_ged_sb",))
+        )
+
+    def test_negative_sample_index_raises_instead_of_wrapping(self):
+        """Wrapping served draw S-1 alone as a full posterior — a zero-width interval."""
+        with pytest.raises(ValueError, match="Sample indices must be between 0 and 15"):
+            self._ds().calculate_hdi_map(aggregate=True, level="gaul1", sample_idx=-1)
+
+    def test_out_of_range_sample_index_raises_the_same_error_as_the_cell_path(self):
+        with pytest.raises(ValueError, match="Sample indices must be between 0 and 15"):
+            self._ds().calculate_hdi_map(aggregate=True, level="gaul1", sample_idx=999)
+
+    def test_unknown_feature_raises_value_error_not_a_bare_key_error(self):
+        """A bare KeyError reaches the client as HTTP 500 with the body `"'typo'"`."""
+        with pytest.raises(ValueError, match="Invalid features specified"):
+            self._ds().calculate_hdi_map(aggregate=True, level="gaul1", features=["pred_nope"])
+
+    def test_empty_feature_list_selects_nothing_rather_than_everything(self):
+        """`?features=` parses to `[]`; a falsy-empty check turned that into every target."""
+        out = self._ds().calculate_hdi_map(aggregate=True, level="gaul1", features=[])
+        assert out.shape == (0, 0), f"features=[] aggregated {out.shape[1]} columns"
+
+    def test_unknown_time_id_raises_like_the_cell_path(self):
+        with pytest.raises(KeyError, match="Invalid time IDs"):
+            self._ds().calculate_hdi_map(aggregate=True, level="gaul1", time_ids=[9999])
+
+    def test_country_level_index_is_not_a_categorical_carrying_every_category(self):
+        """A CategoricalIndex re-exports the fan-out `observed=True` exists to prevent."""
+        out = self._ds().calculate_hdi_map(aggregate=True, level="country", with_metadata=False)
+        level_values = out.index.get_level_values("country_iso_a3")
+        assert not isinstance(level_values.dtype, pd.CategoricalDtype), (
+            "the country index level is categorical: a downstream groupby on it emits a row "
+            "for every unobserved category, and `.loc` on an absent label raises rather than "
+            "selecting empty."
+        )

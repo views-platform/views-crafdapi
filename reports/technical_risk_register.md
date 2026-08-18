@@ -4,10 +4,10 @@
 |-------------------|------------------------------------------------|
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
-| Last Updated      | 2026-08-15                                     |
-| Total Concerns    | 26                                             |
-| Open Concerns     | 25                                             |
-| Resolved Concerns | 1                                              |
+| Last Updated      | 2026-08-18                                     |
+| Total Concerns    | 30                                             |
+| Open Concerns     | 28                                             |
+| Resolved Concerns | 2                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -567,3 +567,75 @@ Cross-refs **C-33** (views-postprocessing, the first instance), views-models **#
 - **Resolution:** Move to "Resolved Concerns" with resolution date and summary when addressed
 - **Header counts:** Manually maintained — update whenever a concern is added or resolved
 - **Governed by:** [ADR-010](../docs/ADRs/active/010_technical_risk_register.md)
+
+---
+
+### C-258: A float64 invariant guard is pinned to one of two sibling aggregate methods, and the live endpoint uses the other
+
+| Field | Value |
+|-------|-------|
+| ID | C-258 |
+| Tier | 1 |
+| Source | code-review max (2026-08-18, PR #93) |
+| Trigger | Before changing anything reached by `ForecastDataset.calculate_hdi_map(aggregate=True)`, check whether the invariant you rely on is guarded on *that* method or only on `get_subset_dataframe(aggregate=True)`. Concretely: when the historical leg moves to the wire contract (C-169), re-pin every float64 guard to both entry points before touching either. |
+| Location | `tests/test_aggregation.py:284` (`TestFeatureAggregationStaysFloat64`), guarding `src/views_crafdapi/data/handlers/forecast_dataset.py` `get_subset_dataframe` but not `calculate_hdi_map` |
+
+ADR-030 §1 states that the historical/scalar leg must stay **float64 and byte-identical** — "the frame path's float32 stack would re-baseline it" — and `_aggregate_distributions` enforces it with an `is_prediction` dispatch. `TestFeatureAggregationStaysFloat64` exists specifically to hold that line, and its docstring says so.
+
+It guards `get_subset_dataframe(aggregate=True)`. The live route `/{level}/analysis/historical/hdi-map?aggregate=true` (`managers/api.py:812` → `create_hdi_map_endpoint("historical", …)` → `calculate_hdi_map`) goes through the **other** method. PR #93's first draft rewrote `calculate_hdi_map`'s aggregate path to call `_sample_array` unconditionally — which returns `feat[var].astype(np.float32)` for feature datasets — and the full suite stayed green (1047 passed), because the guard was pointed at the sibling.
+
+Reproduced on 2000 cells of the guard's own `rng.gamma(2.0, 30000.0)` distribution: the legacy path serves **115,868,248.0**, the S7 draft served **115,868,152.0** — a silent drift of **96.0** on a UN-facing endpoint. The difference is *where* the narrowing happens: the legacy path sums in float64 and lets `collapse` narrow once at the end; the frame leaf accumulates in float32 and compounds the error across every cell.
+
+Two things this entry does **not** claim, both checked against `8a3a966` before writing: `calculate_hdi_map` never emitted the raw float64 sum on this leg — `collapse` has always narrowed its output — so the served value was float32-*width* before and after. And the initial review report's framing (drift measured against the float64 sum, 98.0) used the wrong baseline; the regression is against the prior served value, 96.0. Separately and pre-existing: `calculate_hdi_map` narrows while `get_subset_dataframe(aggregate=True)` returns float64 cells, so the two aggregate entry points have always disagreed in width on this leg. That is recorded here rather than opened as its own entry because it shares this one's root — two siblings, one guard.
+
+Fixed in PR #93 before merge (the historical leg keeps the pre-S7 pandas path) and pinned with a new guard on `calculate_hdi_map`. **The entry is Tier 1 for the pattern, not the instance**: a stated invariant with a named regression guard was violated on the live path and CI reported success. Cross-refs: **C-169** (historical still on the legacy pandas path), **C-245** (the same historical endpoint serving mislabelled columns).
+
+---
+
+### C-259: Input validation lives inside `get_subset_dataframe`, so any path that reads samples directly inherits none of it
+
+| Field | Value |
+|-------|-------|
+| ID | C-259 |
+| Tier | 2 |
+| Source | code-review max (2026-08-18, PR #93) |
+| Trigger | When adding a third read path that goes to `_sample_array` without calling `get_subset_dataframe` — e.g. the tensor-native subset for the cell path, or any future streaming exporter — copy or extract the four validations rather than assuming the caller supplied clean input. |
+| Location | `src/views_crafdapi/data/handlers/grid_dataset.py:1026` (feature membership), `:1038` (sample bounds + `sample_size is None`), `src/views_crafdapi/data/handlers/forecast_dataset.py` (the S7 aggregate path) |
+
+`get_subset_dataframe` validates four things — feature membership (`ValueError: Invalid features specified`), sample-index bounds, `sample_size is None`, and time/entity ID existence — as a side effect of materialising columns. Nothing else does, and nothing names them as a contract.
+
+PR #93 replaced `super().get_subset_dataframe(...)` with a direct `_sample_array` read on the aggregate path and silently lost all four. Measured consequences before the fix: `sample_idx=-1` wrapped to the last draw and served a **zero-width credible interval** (`hdi90_lower == hdi90_upper == map`) as a real posterior, where the cell path still raised; `features=['typo']` degraded from a descriptive `ValueError` to HTTP 500 with body `"'typo'"`; `features=[]` flipped from an empty result to a full multi-target aggregate.
+
+Fixed in PR #93 by re-adding the validations, which leaves **two copies**. The residual risk is that they drift. Extracting them to a named boundary check is the real fix and is deliberately not done here (scope). Cross-refs: **C-247** (`severe_scenario` degenerating under sample subsetting — the same input, a different failure).
+
+---
+
+### C-260: Two live joint-sum implementations of the same query, already disagreeing on three axes
+
+| Field | Value |
+|-------|-------|
+| ID | C-260 |
+| Tier | 3 |
+| Source | code-review max + review-diff (2026-08-18, PR #93) |
+| Trigger | When the next caller needs a cross-level joint-sum, or when `views-frames` changes `aggregate_distributions_arrays`' grouping or dtype behaviour — check both implementations, not the one your test happens to cover. |
+| Location | `src/views_crafdapi/forecast/aggregate/reduction.py::joint_sum_to_level` and `src/views_crafdapi/data/handlers/forecast_dataset.py::_frame_native_joint_sum` (live behind `get_subset_dataframe(aggregate=True)`, `managers/api.py:668`) |
+
+The same logical operation — joint-sum `(N, S)` cell samples to a geographic level — now has two implementations. ADR-030's S7 addendum calls the duplication deliberate (WET; the two paths return different things and one caller genuinely wants a DataFrame), and that reasoning stands. What is *not* deliberate is that they already differ in three ways: the code→unit mapping (`np.unique`, sorted, vs `pd.factorize`, order-of-appearance), the missing-code predicate (`has_level_code` vs the `-1` sentinel), and — until fixed — float width for historical data.
+
+`tests/forecast/test_cross_level_aggregate.py` proves `elementwise_sum` ≡ `aggregate_via_leaf`. Nothing proves the two joint-sum paths agree. Duplication is acceptable; undetected divergence between duplicates is what this entry tracks.
+
+---
+
+### C-261: `geo_metadata` is never checked against the metadata columns each level is documented to carry
+
+| Field | Value |
+|-------|-------|
+| ID | C-261 |
+| Tier | 3 |
+| Source | code-review max (2026-08-18, PR #93) |
+| Trigger | When loading a dataset via `from_value` from a cache written by an older schema, or when assigning `ds.geo_metadata` directly — verify the frame carries every column in `LEVEL_METADATA_COLUMNS` for the levels you will serve. |
+| Location | `src/views_crafdapi/data/handlers/forecast_dataset.py` (metadata selection), `src/views_crafdapi/forecast/geography/metadata_table.py::LEVEL_METADATA_COLUMNS`, `from_value` (`:270`) |
+
+`LEVEL_METADATA_COLUMNS` declares which metadata columns each served level carries. Nothing validates that `geo_metadata` actually has them. The pre-S7 aggregate path guarded each column with `if meta_col in aggregated_df.columns` and **silently omitted** any that were missing — so a `geo.parquet` written by an older schema yields a response quietly missing `admin1_gaul0_name`, with a 200 and no signal. `__init__` reindexes for uniqueness but does not check the column set; `from_value` assigns `pd.read_parquet(...)` with no check at all.
+
+PR #93 preserves the silent-skip behaviour deliberately, to keep the change behaviour-neutral. The underlying gap is registered rather than fixed inside a performance PR. Cross-refs: **C-244** (schema documented at 36 columns against 45 in code) — both are the served column set drifting from its declaration.

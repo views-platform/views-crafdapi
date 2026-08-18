@@ -1,4 +1,4 @@
-"""Joint-sum a month's cell samples to a geographic level, then collapse them — as arrays.
+"""Joint-sum a month's cell samples to a geographic level — as arrays, not through pandas.
 
 ADR-030 S7. This is the aggregate path's reduction with the DataFrame taken out of the
 middle of it. The path it replaces made a four-step round trip through pandas:
@@ -9,9 +9,11 @@ middle of it. The path it replaces made a four-step round trip through pandas:
     stack    object cells   -> `(n_units, S)`    (for `collapse`)
 
 Every step had an array-native counterpart already present, so the DataFrame was carrying
-only itself. Here the samples never enter pandas: `(N, S)` in, reduced statistics out.
-`calculate_hdi_map` keeps pandas for the group index and the metadata columns — the
-serialize seam ADR-030 §1 allows — and assembles the frame from stacked arrays at the end.
+only itself. Here the samples never enter pandas: `(N, S)` in, summed block out.
+
+**Prediction samples only.** ADR-030 §1 keeps the historical/scalar leg on the legacy float64
+`elementwise_sum`; the views-frames leaf is float32-native and would silently re-baseline it
+(register C-258, which is exactly how that went wrong once). The caller dispatches.
 
 Streamed a month at a time by the caller, mirroring the cell path (S6b-1 / #208). Groups are
 `(time, unit)` and a month is exactly one time value, so no group ever spans two months:
@@ -20,10 +22,25 @@ are summed and in what order they are summed.
 """
 
 import numpy as np
-import views_frames_summarize as vfs
 from views_frames import SpatialLevel
 
-from views_crafdapi.forecast.frames.builder import build_prediction_frame
+from views_crafdapi.forecast.aggregate.cross_level import aggregate_via_leaf
+
+
+def _is_missing(code) -> bool:
+    """True if `code` is any flavour of "no value" — None, NaN, or a pandas NA scalar.
+
+    `code != code` catches float NaN. For `pd.NA` that expression returns `pd.NA`, whose
+    truth value raises rather than being False, so the raise is caught and read as missing —
+    which it is. Written out because the terse `c == c` idiom silently breaks on nullable
+    dtypes, and `geo_metadata` is only cast to `category` when it arrives as `object`.
+    """
+    if code is None:
+        return True
+    try:
+        return bool(code != code)
+    except TypeError:
+        return True
 
 
 def has_level_code(codes: np.ndarray) -> np.ndarray:
@@ -38,44 +55,50 @@ def has_level_code(codes: np.ndarray) -> np.ndarray:
         return np.ones(len(codes), dtype=bool)
     if np.issubdtype(codes.dtype, np.floating):
         return ~np.isnan(codes)
-    # object dtype (ISO3 / GAUL name strings): missing arrives as None or a float NaN.
-    return np.array([c is not None and c == c for c in codes], dtype=bool)
+    return np.array([not _is_missing(c) for c in codes], dtype=bool)
 
 
-def joint_sum_to_level(values: np.ndarray, time: np.ndarray, codes: np.ndarray):
-    """Joint-sum `(N, S)` cell samples per `(time, level code)` group.
+def encode_level_codes(codes: np.ndarray):
+    """Map level codes to the leaf's integer unit space, once for a whole request.
 
-    Returns `(keys, block)`: `keys[i]` is the `(time, code)` of row `i` of the `(n_units, S)`
-    `block`. Joint-sum means sample *j* of a unit is the sum of sample *j* across its cells,
-    which is what preserves cross-cell correlation (register C-70) — it is the same
-    `aggregate_via_leaf` call the pandas path made, just without the round trip around it.
+    Returns `(keep, unit_ids, labels)`: `keep` is the `has_level_code` mask, `unit_ids` are
+    the integer ids for the kept cells, and `labels` maps an id back to its original code
+    (`None` when the codes were already integers and are their own labels).
 
-    Cells with no code for this level are dropped (see `has_level_code`).
+    Called once per request rather than once per (month, target): the codes do not depend on
+    either, and the sort behind the mapping is not free — it measured 27% of runtime when it
+    sat inside the loop.
     """
     keep = has_level_code(codes)
-    if not keep.all():
-        values, time, codes = values[keep], time[keep], codes[keep]
-    if len(values) == 0:
-        return [], np.empty((0, values.shape[1] if values.ndim == 2 else 0), dtype=np.float32)
-
+    kept = codes[keep]
     if np.issubdtype(codes.dtype, np.integer):
-        unit_ids = codes.astype(np.int64)
-        labels = None
-    else:
-        # The leaf's unit space is integer. `np.unique` (not `pd.factorize`) keeps this module
-        # pandas-free per the ADR-030 §7 ratchet; which integer a code maps to is arbitrary —
-        # every unit is mapped straight back to its original label below.
-        labels, inverse = np.unique(codes, return_inverse=True)
-        unit_ids = inverse.astype(np.int64)
+        return keep, kept.astype(np.int64), None
+    # `np.unique` (not `pd.factorize`) keeps this module pandas-free per the ADR-030 §7
+    # ratchet. Which integer a code maps to is arbitrary — every unit is mapped straight back
+    # to its original label by the caller.
+    labels, inverse = np.unique(kept, return_inverse=True)
+    return keep, inverse.astype(np.int64), labels
+
+
+def joint_sum_to_level(values: np.ndarray, time: np.ndarray, unit_ids: np.ndarray):
+    """Joint-sum `(N, S)` cell samples per `(time, unit)` group.
+
+    Returns `(keys, block)`: `keys[i]` is the `(time, unit_id)` of row `i` of the
+    `(n_units, S)` `block`. Joint-sum means sample *j* of a unit is the sum of sample *j*
+    across its cells, which is what preserves cross-cell correlation (register C-70).
+
+    `values`/`time`/`unit_ids` must already be restricted to cells that carry a code for the
+    level — see `encode_level_codes`.
+    """
+    if len(values) == 0:
+        width = values.shape[1] if values.ndim == 2 else 0
+        return [], np.empty((0, width), dtype=np.float32)
 
     times = time.astype(np.int64)
     map_keys = np.column_stack([times, unit_ids])
-    frame = build_prediction_frame(values, times, unit_ids)
-    agg = vfs.aggregate_distributions_arrays(frame, map_keys, unit_ids, SpatialLevel.PGM)
-
-    units = np.asarray(agg.index.unit)
+    agg = aggregate_via_leaf(values, times, unit_ids, map_keys, unit_ids, SpatialLevel.PGM)
     keys = [
-        (int(t), labels[int(u)] if labels is not None else int(u))
-        for t, u in zip(np.asarray(agg.index.time), units)
+        (int(t), int(u))
+        for t, u in zip(np.asarray(agg.index.time), np.asarray(agg.index.unit))
     ]
     return keys, np.asarray(agg.values)
