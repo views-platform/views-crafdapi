@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 31                                             |
-| Open Concerns     | 29                                             |
+| Total Concerns    | 33                                             |
+| Open Concerns     | 31                                             |
 | Resolved Concerns | 2                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -226,7 +226,22 @@ See also `C-241` (both are governance artifacts that lag the code).
 | Trigger | When a contributor follows any inherited `C-xx` citation in a source comment (e.g. `C-155` at `grid_dataset.py:196`, `C-231` at `appwrite/manager.py:408`) to understand *why* a guard exists, they will find no entry — port the referenced upstream entries, or annotate each as inherited. Do this before the next audit adds entries that could be mistaken for the inherited ones. |
 | Location | `docs/ADRs/active/010_technical_risk_register.md:15`, `reports/technical_risk_register.md` (this file, created 2026-08-10), ~40 distinct IDs cited across `src/`, `tests/` and `docs/` |
 
-ADR-010 declares a register at `reports/technical_risk_register.md` as "a first-class governance artifact" and the single sink for all audit output. The file did not exist in this clone until this entry was written; `reports/` contained only `ops/betterstack_monitoring.md`. Meanwhile the source is unusually rich in register cross-references — `C-36`, `C-50`, `C-66`, `C-70`, `C-71`, `C-72`, `C-86`, `C-137`, `C-138`, `C-146`, `C-148`, `C-149`, `C-153`, `C-155`, `C-166`, `C-169`–`C-172`, `C-231`, `D-12`, `D-21`, `D-24` and more — and ADR-033 performs a formal register reconciliation at ratification. Every one of those citations is currently a dangling pointer. Two concrete consequences beyond lost context: the ID namespace had to be defended by hand (see the ID Namespace Note above), and three falsification probes now **xpass** (`test_falsify_priogrid_naming.py::TestP1…`, `test_falsify_shim_diagnosis.py::TestP1…` and `::TestP4_CICDocumentsShimAsContract::test_fao_pgm_cic_does_not_guarantee_priogrid_gid`) — meaning concerns recorded as open in the C-61..C-65 cluster may in fact be closed, with no artifact in which to record that.
+ADR-010 declares a register at `reports/technical_risk_register.md` as "a first-class governance artifact" and the single sink for all audit output. The file did not exist in this clone until this entry was written; `reports/` contained only `ops/betterstack_monitoring.md`. Meanwhile the source is unusually rich in register cross-references — `C-36`, `C-50`, `C-66`, `C-70`, `C-71`, `C-72`, `C-86`, `C-137`, `C-138`, `C-146`, `C-148`, `C-149`, `C-153`, `C-155`, `C-166`, `C-169`–`C-172`, `C-231`, `D-12`, `D-21`, `D-24` and more — and ADR-033 performs a formal register reconciliation at ratification. Every one of those citations is currently a dangling pointer. **Verified and worsened 2026-08-18.** Four of the cited IDs were resolved against views-faoapi's register, and the result is worse than "absent":
+
+| cited in crafdapi as | what it actually is in views-faoapi | verdict |
+|---|---|---|
+| `C-70` joint sampling / cross-cell correlation | "aggregation assumes cross-cell sample-index alignment" — **RESOLVED 2026-06-28** | meaning ok, closed, wrong repo |
+| `C-146` "cells with no GAUL code are excluded, not summed into a phantom unit" | "the pandas-to-edges parity harness is synthetic… ragged-S blind spot" — **RESOLVED 2026-06-28** | **meaning wrong** — we cite a sub-finding of its fix |
+| `C-155` sample/index row alignment | "`_sample_store` decouples samples from their index" — **RESOLVED 2026-06-28** | meaning ok, closed, wrong repo |
+| `C-169` "the 13 GB historical pandas load" | "historical is not shipped on the wire-contract path" | **meaning wrong** — that is delivery, not memory |
+
+So a reader following `C-146` from `reduction.py` finds nothing here, eventually finds faoapi's, and reads a *closed* concern about something else. That is worse than an uncited comment, because it reads as authoritative provenance.
+
+The ADR-030 S7 work (PRs #93/#97) **added six more** rather than reducing them — `C-146` at `forecast/aggregate/reduction.py:49` and `tests/forecast/test_aggregate_path_is_array_native.py:92,117`, `C-70` at `reduction.py:88` and `test_aggregate_path_is_array_native.py:124`, `C-169` at `ADR-030:177,188`. The memory concern that `C-169` was standing in for now has a local entry, **C-263**.
+
+This is the same shape as **#58** (`ADR-017` colliding across three repos, fixed by a `vcr_`/`vmo_`/`vpp_` prefix): identifiers inherited from a parent repo and used unqualified in a clone. Whatever resolves #58 should resolve this. Tracked as **#101**.
+
+Two concrete consequences beyond lost context: the ID namespace had to be defended by hand (see the ID Namespace Note above), and three falsification probes now **xpass** (`test_falsify_priogrid_naming.py::TestP1…`, `test_falsify_shim_diagnosis.py::TestP1…` and `::TestP4_CICDocumentsShimAsContract::test_fao_pgm_cic_does_not_guarantee_priogrid_gid`) — meaning concerns recorded as open in the C-61..C-65 cluster may in fact be closed, with no artifact in which to record that.
 
 See also `C-240` (governance artifacts lagging the code) and `C-243` (the other stale governance document).
 
@@ -610,7 +625,7 @@ Fixed in PR #93 before merge (the historical leg keeps the pre-S7 pandas path) a
 
 PR #93 replaced `super().get_subset_dataframe(...)` with a direct `_sample_array` read on the aggregate path and silently lost all four. Measured consequences before the fix: `sample_idx=-1` wrapped to the last draw and served a **zero-width credible interval** (`hdi90_lower == hdi90_upper == map`) as a real posterior, where the cell path still raised; `features=['typo']` degraded from a descriptive `ValueError` to HTTP 500 with body `"'typo'"`; `features=[]` flipped from an empty result to a full multi-target aggregate.
 
-Fixed in PR #93 by re-adding the validations, which leaves **two copies**. The residual risk is that they drift. Extracting them to a named boundary check is the real fix and is deliberately not done here (scope). Cross-refs: **C-247** (`severe_scenario` degenerating under sample subsetting — the same input, a different failure).
+Fixed in PR #93 by re-adding the validations, which leaves **two copies**. The residual risk is that they drift. Extracting them to a named boundary check is the real fix and is deliberately not done here (scope). Tracked as **#100**. Cross-refs: **C-247** (`severe_scenario` degenerating under sample subsetting — the same input, a different failure).
 
 ---
 
@@ -626,7 +641,7 @@ Fixed in PR #93 by re-adding the validations, which leaves **two copies**. The r
 
 The same logical operation — joint-sum `(N, S)` cell samples to a geographic level — now has two implementations. ADR-030's S7 addendum calls the duplication deliberate (WET; the two paths return different things and one caller genuinely wants a DataFrame), and that reasoning stands. What is *not* deliberate is that they already differ in three ways: the code→unit mapping (`np.unique`, sorted, vs `pd.factorize`, order-of-appearance), the missing-code predicate (`has_level_code` vs the `-1` sentinel), and — until fixed — float width for historical data.
 
-`tests/forecast/test_cross_level_aggregate.py` proves `elementwise_sum` ≡ `aggregate_via_leaf`. Nothing proves the two joint-sum paths agree. Duplication is acceptable; undetected divergence between duplicates is what this entry tracks.
+`tests/forecast/test_cross_level_aggregate.py` proves `elementwise_sum` ≡ `aggregate_via_leaf`. Nothing proves the two joint-sum paths agree. Duplication is acceptable; undetected divergence between duplicates is what this entry tracks. Tracked as **#100**.
 
 ---
 
@@ -642,7 +657,7 @@ The same logical operation — joint-sum `(N, S)` cell samples to a geographic l
 
 `LEVEL_METADATA_COLUMNS` declares which metadata columns each served level carries. Nothing validates that `geo_metadata` actually has them. The pre-S7 aggregate path guarded each column with `if meta_col in aggregated_df.columns` and **silently omitted** any that were missing — so a `geo.parquet` written by an older schema yields a response quietly missing `admin1_gaul0_name`, with a 200 and no signal. `__init__` reindexes for uniqueness but does not check the column set; `from_value` assigns `pd.read_parquet(...)` with no check at all.
 
-PR #93 preserves the silent-skip behaviour deliberately, to keep the change behaviour-neutral. The underlying gap is registered rather than fixed inside a performance PR. Cross-refs: **C-244** (schema documented at 36 columns against 45 in code) — both are the served column set drifting from its declaration.
+PR #93 preserves the silent-skip behaviour deliberately, to keep the change behaviour-neutral. The underlying gap is registered rather than fixed inside a performance PR. Tracked as **#100**. Cross-refs: **C-244** (schema documented at 36 columns against 45 in code) — both are the served column set drifting from its declaration.
 
 ---
 
@@ -669,8 +684,73 @@ crafd's own peak plus faoapi's resident set is **20.7 of 22 GiB**. There is no h
 
 It has already failed. `dmesg` records **three OOM kills of views-faoapi on 2026-08-14** (06:45, 07:10, 07:26) at ~23.3 GB anonymous RSS each — and crucially `constraint=CONSTRAINT_NONE ... global_oom`, meaning the *whole box* exhausted memory rather than a cgroup limit being enforced. The kernel picked faoapi because it was the largest consumer at that moment. On a different request mix it would have picked crafdapi, and a faoapi request would have taken down the CRAF'd API with no crafd-side signal at all. That coupling is the concern; the OOM itself is views-faoapi#418's problem.
 
-Measured again after the v0.4.0 deploy, which changes *which* workload the ceiling must accommodate: the bulk endpoint in isolation now peaks at **6.0 G** (was 14.8 G), but the first request after a restart peaked at **16.8 G** because it included a cold load of both datasets — the historical leg's `pd.read_parquet` of 28.4M rows (**C-169**) is a ~13 GB transient. So a `MemoryMax=` set from the steady state would kill the service on every cold start. It has to be sized for the cold load, and C-169 is what would bring that number down.
+Measured again after the v0.4.0 deploy, which changes *which* workload the ceiling must accommodate: the bulk endpoint in isolation now peaks at **6.0 G** (was 14.8 G), but the first request after a restart peaked at **16.8 G** because it included a cold load of both datasets — the historical leg's `pd.read_parquet` of 28.4M rows is a ~13 GB transient — registered locally as **C-263**. So a `MemoryMax=` set from the steady state would kill the service on every cold start, while one sized for the cold start does not fit beside faoapi's 5.9 G on a 22 GiB box (16.8 + 5.9 = 22.7). **C-263 has to move before this entry is satisfiable at all**; that is a dependency, not a preference.
 
 S7 improves the arithmetic but does not address the coupling. `MemoryMax=` on both units converts "the box falls over and the kernel chooses a victim" into "this request fails, loudly, in the service that caused it" — a bounded local change, and the failure becomes attributable. Deliberately not bundled into the v0.4.0 deploy.
 
-Cross-refs: **C-235**/**C-169** (what drives crafd's peak), **views-faoapi#418** (the neighbouring service's own memory defect).
+Tracked as **#99**, blocked by **#98**. Cross-refs: **C-235** (resolved — what used to drive crafd's peak), **C-263** (what drives it now, and blocks this), **views-faoapi#418** (the neighbouring service's own memory defect).
+
+---
+
+### C-263: The cold-start historical load is a ~13 GB transient, and it — not the aggregate path — is what the box cannot absorb
+
+| Field | Value |
+|-------|-------|
+| ID | C-263 |
+| Tier | 2 |
+| Source | production measurement during the v0.4.0 deploy (2026-08-18) |
+| Trigger | Before setting `MemoryMax=` on either co-hosted unit (C-262), measure the **first request after a restart**, not the steady state — they differ by ~2.8x. Also re-measure this before the historical artifact grows (a longer horizon, a finer grain, or additional targets). |
+| Location | `src/views_crafdapi/managers/dataset_service.py` — the historical leg's `pd.read_parquet` of the 28.4M-row artifact (`:414` reads the parquet, `:520` logs the row count) |
+
+Measured on the deployed service, same endpoint, twice:
+
+| | peak RSS |
+|---|---|
+| first request after `systemctl restart` (cold caches) | **16.8 G** |
+| after a restart with the disk cache warm, bulk endpoint only | **6.0 G** |
+
+The difference is the historical leg being decoded from parquet into pandas. ADR-030 S7 removed the aggregate path's contribution (v0.3.0 ran at `peak: 14.8G`); what is left at 16.8 G is dominated by this load.
+
+**Why it is Tier 2 rather than a performance note.** It is the binding constraint on a shared host, and it makes C-262 unsatisfiable as stated:
+
+| | |
+|---|---|
+| box total | 22 GiB |
+| crafd cold-start peak | 16.8 G |
+| views-faoapi resident | 5.9 G |
+| **sum** | **22.7 G** |
+
+There is no `MemoryMax=` for crafd that both survives a cold start and leaves faoapi its memory. Sized from the 6.0 G steady state, the service dies on every restart; sized for the cold start, it does not fit beside its neighbour. Something has to give on this side first.
+
+**Not to be confused with views-faoapi's C-169**, which this repo's code and ADR-030 both cite for it. That entry is *"historical is not shipped on the wire-contract path — a cutover silently freezes FAO historical / `s_actual`"* — a **delivery** concern, not a memory one, and it lives in a different repo's register (see **C-241**, **#58**). The memory cost recorded here was tracked in neither repo before this entry.
+
+Tracked as **#98** (blocks **#99**). Cross-refs: **C-262** (the ceiling this blocks), **C-241** (why the C-169 citation resolves nowhere here), **C-236** (caches bounded by entry count, not bytes).
+
+---
+
+### C-264: A 401 tells an unauthenticated caller which Appwrite operation failed
+
+| Field | Value |
+|-------|-------|
+| ID | C-264 |
+| Tier | 4 |
+| Source | observed during the v0.4.0 deploy smoke test (2026-08-18) |
+| Trigger | Before the repo goes public (epic #315's crafdapi equivalent, **#38**), or when adding any new auth failure path — return a fixed string to the caller and log the detail server-side. |
+| Location | `src/views_crafdapi/managers/api.py:318` and `:333`; the message originates at `src/views_crafdapi/managers/appwrite/manager.py:965` |
+
+`api.py:318` builds the 401 body by interpolating the validation error:
+
+```python
+detail=f"Invalid API key: {validation_result.error or 'Authentication failed'}"
+```
+
+and that error is composed upstream as `f"List buckets failed: {e.message}"`. A caller presenting *any* wrong key therefore receives:
+
+```
+401  Invalid API key: List buckets failed: The current user is not authorized to
+     perform the requested action.
+```
+
+which discloses that the backend is Appwrite, that the key is validated by attempting a bucket listing, and the provider's own wording. Observed live while a placeholder was pasted as a key. `api.py:333` has the same shape with `{str(e)}`.
+
+No credential or data is exposed and the request is correctly refused, hence Tier 4. The cost is that an unauthenticated probe learns the storage backend and one of its operations for free. The fix is a fixed client-facing string with the detail logged, not returned. Tracked as **#102**.
