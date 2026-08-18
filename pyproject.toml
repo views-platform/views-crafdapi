@@ -1,6 +1,6 @@
 [project]
 name = "views-crafdapi"
-version = "0.3.0"
+version = "0.4.0"
 description = ""
 authors = [
     {name = "Dylan Pinheiro", email = "52908667+smellycloud@users.noreply.github.com"},
