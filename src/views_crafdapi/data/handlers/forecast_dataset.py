@@ -568,35 +568,81 @@ class ForecastDataset(_GridDataset):
             # severe_scenario, via the shared `schema`/`json_contract` builder — so the aggregate
             # and cell schemas can never diverge. Var-keyed; sb/ns/os rename is a boundary step.
             value_cols = series_value_column_names(var_name)
-            var_results = []
-            for idx in aggregated_df.index:
-                time_id, geo_unit = idx
-                samples = aggregated_df.loc[idx, var_name]
 
+            # C-235: reduce the whole variable in ONE `collapse` call, exactly as the cell path
+            # does (`grid_dataset.py`, S6b-1/#208). `collapse` is vectorised over `(N, S)`; the
+            # previous form called it once per `(month, unit)` — 262,656 times for the delivered
+            # run against the cell path's 108 — so `/data/forecast/bulk` took ~500 s and 504'd at
+            # the proxy (#79). Same reduction, same inputs, same order: only the batch width
+            # changes, which is why the goldens must stay byte-identical.
+            column = aggregated_df[var_name]
+            widths = {
+                len(v) for v in column
+                if isinstance(v, np.ndarray) and v.ndim == 1 and len(v) > 0
+            }
+            # A ragged column cannot be stacked. It should not occur (the joint-sum emits one
+            # `(S,)` array per group), but stacking silently on a ragged column would produce an
+            # object array and a wrong reduction, so fall back per row and say so.
+            batchable = len(widths) == 1
+            if not batchable and widths:
+                logger.warning(
+                    "aggregate reduction for %s has ragged sample widths %s — reducing per row "
+                    "(C-235 batching skipped)", var_name, sorted(widths),
+                )
+
+            rows = list(aggregated_df.index)
+            usable = [
+                isinstance(v, np.ndarray) and v.ndim == 1 and len(v) > 0 for v in column
+            ]
+            data = None
+            if batchable and any(usable):
+                block = np.stack([v for v, ok in zip(column, usable) if ok])  # (n_usable, S)
+                cr = collapse(
+                    block,
+                    masses=schema.MASSES,
+                    enforce_non_negative=enforce_non_negative,
+                    thresholds=schema.EXCEEDANCE_THRESHOLDS,
+                )
+                data = series_value_data(
+                    var_name,
+                    cr.map,
+                    cr.severe,
+                    cr.bimodality,
+                    {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
+                    exceedance=cr.exceedance,
+                )
+
+            var_results = []
+            reduced_at = 0  # position within the batched block, advanced only for usable rows
+            for position, idx in enumerate(rows):
+                time_id, geo_unit = idx
                 result_row = {time_col: time_id, target_level_col: geo_unit}
-                if isinstance(samples, np.ndarray) and len(samples) > 0:
+                if usable[position] and data is not None:
+                    result_row.update(
+                        {name: float(col[reduced_at]) for name, col in data.items()}
+                    )
+                    reduced_at += 1
+                elif usable[position]:
+                    # Ragged fallback: one row, one call — the pre-C-235 behaviour, kept so a
+                    # malformed column degrades in speed rather than in correctness.
                     cr = collapse(
-                        samples,
+                        column.iloc[position],
                         masses=schema.MASSES,
                         enforce_non_negative=enforce_non_negative,
                         thresholds=schema.EXCEEDANCE_THRESHOLDS,
                     )
-                    data = series_value_data(
-                        var_name,
-                        cr.map,
-                        cr.severe,
-                        cr.bimodality,
+                    row_data = series_value_data(
+                        var_name, cr.map, cr.severe, cr.bimodality,
                         {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
                         exceedance=cr.exceedance,
                     )
-                    result_row.update({name: float(col[0]) for name, col in data.items()})
+                    result_row.update({name: float(col[0]) for name, col in row_data.items()})
                 else:
                     result_row.update({name: np.nan for name in value_cols})
 
-                # Add metadata columns from the aggregated dataframe
                 for meta_col in metadata_cols_to_include:
                     if meta_col in aggregated_df.columns:
-                        result_row[meta_col] = aggregated_df.loc[idx, meta_col]
+                        result_row[meta_col] = aggregated_df.iloc[position][meta_col]
 
                 var_results.append(result_row)
 
