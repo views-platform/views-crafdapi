@@ -23,19 +23,10 @@ REPO = Path(__file__).resolve().parent.parent
 # downloaded at all. Tracked as #79.
 
 
-@pytest.mark.integration
-def test_bulk_forecast_download_completes():
-    """#79. Measured 2026-08-17 against v0.3.0: 504 after 300.2s, warm dataset.
-
-    The other eleven documented endpoints returned 200 in the same sweep, so this is
-    specifically the bulk product, not the serving path.
-    """
-    pytest.fail(
-        "#79: GET /data/forecast/bulk returns 504 after 300s. Unfix this test by making the "
-        "endpoint return a readable parquet within a normal HTTP timeout — see the issue for "
-        "the three candidate approaches (cache per run / precompute at delivery / raise the "
-        "proxy timeout)."
-    )
+# The #79 finding was FIXED and verified in production on 2026-08-18: `/data/forecast/bulk`
+# returns 200 in 25.8 s at 6.0 G peak on the deployed v0.4.0, against 501 s / 504 / 14.8 G on
+# v0.3.0. Its test is deleted rather than left passing — a falsification test whose finding is
+# fixed has no subject. Cause: C-235 (per-row `collapse`) plus ADR-030 S7 never landing.
 
 
 # ── HARD 2 — "nothing is half done" ──────────────────────────────────────────────────

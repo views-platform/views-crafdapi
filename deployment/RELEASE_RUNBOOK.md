@@ -195,11 +195,27 @@ faoapi (`views-faoapi` on :8000) is untouched throughout. Then tell the agent wh
 ## Every future release, forever after
 
 ```bash
+# --- as your own user ---
 TAG=v0.4.0   # <-- the ONLY line to change. Set it to the tag you are deploying.
 echo $TAG | sudo -u views-crafdapi-deploy tee /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
 sudo systemctl restart views-crafdapi
-APPWRITE_DATASTORE_API_KEY=<CRAF'd caller key> .venv/bin/python scripts/smoke.py --expect-tag $TAG  # verify + warm
+curl -s https://crafdapi.viewsforecasting.org/version     # expect version AND deployed_tag = $TAG
+
+# --- then as the deploy user: the checkout is 0750, so `cd` into it fails for you ---
+sudo -iu views-crafdapi-deploy
+cd views-crafdapi
+read -rsp "caller key: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
+.venv/bin/python scripts/smoke.py --expect-tag v0.4.0   # verify + warm
+exit
 ```
+
+Three things that have each cost a release: the deploy checkout is **not readable by your own
+user**, so `cd` into it fails and `sudo cd` cannot work (`cd` is a shell builtin) — use
+`sudo -iu`. `read -rs` prints **no prompt**, so it looks like a hang; `-rsp` gives it one. And
+paste those two lines **separately** — pasted together, `read` swallows the next line as the key.
+
+Inside that shell `sudo` prompts for *the service account's* password, which does not exist.
+`exit` first for anything needing sudo.
 
 Rollback: the same four lines with the previous tag.
 
@@ -213,6 +229,26 @@ otherwise. `git push origin <tag>` first.
 
 `--expect-tag` reads `/version`, so it fails until the restart has actually taken. That is the
 check working, not a problem; re-run it a few seconds later.
+
+### Which key, and where it lives
+
+One secret, filed under several names — this is register **C-256**, and it has cost real time
+twice. For the smoke test and any `x-api-key` call you want the **caller** key:
+
+| filed as | env var | used by |
+|---|---|---|
+| `Appwrite caller key — CRAF'd` (password manager) | `APPWRITE_DATASTORE_API_KEY` | `smoke.py`, notebooks, any consumer call — sent as the `X-API-Key` header |
+
+The password manager entry is the source of truth. Verify it before pasting it anywhere, without
+printing it:
+
+```bash
+read -rsp "paste the key: " K; echo
+curl -s -o /dev/null -w 'HTTP %{http_code}\n' -H "x-api-key: $K" https://crafdapi.viewsforecasting.org/health
+unset K   # 200 = right key, 401 = wrong entry
+```
+
+Both keys expire **2026-11-17** (C-84). Update every home in one change.
 
 Deployed so far: **v0.1.0** (2026-08-02, first stand-up — bucket empty by design, honest 503s),
 **v0.2.0** (the first CRAF'd delivery is live and `/provenance/forecast` reports it), **v0.3.0**
