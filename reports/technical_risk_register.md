@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 33                                             |
-| Open Concerns     | 31                                             |
+| Total Concerns    | 35                                             |
+| Open Concerns     | 33                                             |
 | Resolved Concerns | 2                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -754,3 +754,51 @@ and that error is composed upstream as `f"List buckets failed: {e.message}"`. A 
 which discloses that the backend is Appwrite, that the key is validated by attempting a bucket listing, and the provider's own wording. Observed live while a placeholder was pasted as a key. `api.py:333` has the same shape with `{str(e)}`.
 
 No credential or data is exposed and the request is correctly refused, hence Tier 4. The cost is that an unauthenticated probe learns the storage backend and one of its operations for free. The fix is a fixed client-facing string with the detail logged, not returned. Tracked as **#102**.
+
+---
+
+### C-265: Runbook Step 7 states the pre-delivery failure state as the current expectation
+
+| Field | Value |
+|-------|-------|
+| ID | C-265 |
+| Tier | 3 |
+| Source | falsify (2026-08-18, "it is now safe to shutdown this session") |
+| Trigger | Before the next deploy verification, or the first time anyone other than the author follows the release procedure — read Step 7 against what the service actually does today, not against what it did at stand-up. |
+| Location | `deployment/RELEASE_RUNBOOK.md:158-168` |
+
+Step 7 instructs the reader:
+
+> *"because the CRAF'd bucket is empty, the forecast/historical coverage checks will report **503 (fail-visible)** — that is **expected and correct** until the producer's first delivery, *not* a broken deploy. What must pass now is `ping` and `version = 0.1.0`."*
+
+The first delivery landed **2026-07-27**. The service serves **0.4.0** and `smoke.py` returns **ALL PASS**. A reader following Step 7 to verify a deploy today is told to expect a failure state that would now indicate a real outage — and told to accept it as correct. The document does not lie about a past event; it states a stale expectation in the present tense, inside a procedure meant to be followed.
+
+The staleness was identified during the v0.4.0 deploy and explicitly promised as a follow-up ("I'll fix that stale text in the runbook separately"). It was not done, and nothing outside that conversation recorded the promise. **That is the part that makes this a register entry rather than a typo**: the loss mode was an undone commitment held only in a chat log, not a missing measurement — every measurement from that session did survive.
+
+Fix: mark Step 7 explicitly as the historical first stand-up, or restate its expectations for a service that has data. Enforced by `tests/test_falsify_shutdown_safety.py::test_runbook_does_not_tell_the_reader_to_expect_the_pre_delivery_failure_state`.
+
+---
+
+### C-266: The release block still hardcodes a real-looking tag — the trap it was rewritten to remove
+
+| Field | Value |
+|-------|-------|
+| ID | C-266 |
+| Tier | 3 |
+| Source | falsify (2026-08-18, "it is now safe to shutdown this session") |
+| Trigger | At the next release, **before** pasting the "Every future release" block onto the box — confirm the tag in it is the one you intend to deploy, not the one the last release left behind. |
+| Location | `deployment/RELEASE_RUNBOOK.md:199` |
+
+Before v0.4.0 this block named `v0.2.0` **twice**, two releases after that stopped being current. Pasting it unedited would have written `v0.2.0` to the deploy-tag file and passed `--expect-tag v0.2.0` to `smoke.py` — silently rolling production back while reporting success, because both copies agreed with each other.
+
+It was rewritten to a single `TAG=` variable, and the runbook now asserts *"One variable, changed once, is why it is written this way."* That claim overstates the fix. The block reads:
+
+```bash
+TAG=v0.4.0   # <-- the ONLY line to change. Set it to the tag you are deploying.
+```
+
+The duplication is gone; **the trap is not**. `v0.4.0` is a real, plausible tag that pastes cleanly and will be stale at the next release exactly as `v0.2.0` was. The comment mitigates but does not prevent — and the original failure happened precisely because someone was moving fast enough not to read.
+
+A placeholder (`TAG=vX.Y.Z`) fails at the deploy gate on an unedited paste, which is the correct direction: a stale placeholder fails loudly, a stale real tag succeeds wrongly. Enforced by `tests/test_falsify_shutdown_safety.py::test_runbook_release_block_does_not_hardcode_a_real_looking_tag`.
+
+Cross-refs: **C-167** shape (tag/version dual source of truth) and the 2026-08-15 deploy-gate outage, which is what taught this repo that a tag naming the wrong thing is an outage, not a nit.
