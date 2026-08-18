@@ -516,6 +516,10 @@ The consequence is not theoretical: an absent key fails as `401 … User (role: 
 
 Mitigated in this change: `README.md` now carries a table distinguishing all three, and `01`/`02` fail at their first cell with the remedy. What is **not** mitigated is that nothing enforces the table against `RELEASE_RUNBOOK.md` — they can drift again, and `tests/test_doc_accuracy.py`'s checks do not cover it.
 
+**Recurred 2026-08-18**, during the v0.4.0 deploy, costing four exchanges mid-release. Three distinct failures in one sitting: a placeholder pasted verbatim as the key (`401 … not authorized`); `APPWRITE_DATASTORE_API_KEY not set` after `read` swallowed the following line; and the operator asking, correctly, why the name in their password manager matched none of the names used in the docs or by the agent guiding them. One secret had been referred to as `APPWRITE_DATASTORE_API_KEY`, "CRAF'd caller key", "CRAF'd caller/read-scoped key" and "Appwrite caller key — CRAF'd" within a single session.
+
+Mitigated further in this change: `RELEASE_RUNBOOK.md` now carries a table mapping **password-manager entry name → env var → what uses it**, names the password manager as the source of truth, and gives a `curl /health` check that verifies a key returns 200 before it is pasted anywhere. What is still not enforced is agreement between that table and `README.md`.
+
 Cross-refs **C-84** (both keys expire 2026-11-17 — the named trigger), **#28**.
 
 ---
@@ -665,6 +669,8 @@ crafd's own peak plus faoapi's resident set is **20.7 of 22 GiB**. There is no h
 
 It has already failed. `dmesg` records **three OOM kills of views-faoapi on 2026-08-14** (06:45, 07:10, 07:26) at ~23.3 GB anonymous RSS each — and crucially `constraint=CONSTRAINT_NONE ... global_oom`, meaning the *whole box* exhausted memory rather than a cgroup limit being enforced. The kernel picked faoapi because it was the largest consumer at that moment. On a different request mix it would have picked crafdapi, and a faoapi request would have taken down the CRAF'd API with no crafd-side signal at all. That coupling is the concern; the OOM itself is views-faoapi#418's problem.
 
-S7 improves the arithmetic (crafd's bulk peak measured 10.5 GB against v0.3.0's ~14.8 G) but does not address the coupling. `MemoryMax=` on both units converts "the box falls over and the kernel chooses a victim" into "this request fails, loudly, in the service that caused it" — a bounded local change, and the failure becomes attributable. Deliberately not bundled into the v0.4.0 deploy.
+Measured again after the v0.4.0 deploy, which changes *which* workload the ceiling must accommodate: the bulk endpoint in isolation now peaks at **6.0 G** (was 14.8 G), but the first request after a restart peaked at **16.8 G** because it included a cold load of both datasets — the historical leg's `pd.read_parquet` of 28.4M rows (**C-169**) is a ~13 GB transient. So a `MemoryMax=` set from the steady state would kill the service on every cold start. It has to be sized for the cold load, and C-169 is what would bring that number down.
+
+S7 improves the arithmetic but does not address the coupling. `MemoryMax=` on both units converts "the box falls over and the kernel chooses a victim" into "this request fails, loudly, in the service that caused it" — a bounded local change, and the failure becomes attributable. Deliberately not bundled into the v0.4.0 deploy.
 
 Cross-refs: **C-235**/**C-169** (what drives crafd's peak), **views-faoapi#418** (the neighbouring service's own memory defect).

@@ -166,6 +166,17 @@ bytes) to confirm the encoding was not hiding a sub-ulp difference. C-146 (cells
 the level are excluded, not summed into a phantom unit) survives as a named predicate,
 `has_level_code`, rather than `pd.factorize`'s `-1` sentinel.
 
+**Verified in production, 2026-08-18 (v0.4.0).** `/data/forecast/bulk` on the deployed service:
+**HTTP 200, 461,991 bytes, 25.8 s, peak 6.0 G** — measured after a restart so the peak covers
+that request alone. It was 501 s, 504 at the proxy, on a service reporting `peak: 14.8G`.
+`smoke.py --expect-tag v0.4.0`: ALL PASS. The byte count matches the local build (461,664), i.e.
+the same table.
+
+Worth separating, because the first reading looked like a regression: the peak immediately after
+restart was **16.8 G**, which covered a **cold** load of both datasets — the historical leg's
+`pd.read_parquet` of 28.4M rows (**C-169**) is a ~13 GB transient. Isolated, the bulk build is
+6.0 G. The aggregate path is no longer what threatens this box; the cold historical load is.
+
 **The endpoint (#79).** `/data/forecast/bulk` builds the full 45-column table in **31.2 s at
 10.5 GB peak** with historical included (23.4 s / 4.5 GB without) — against the 300 s nginx
 `proxy_read_timeout` that made it return 504. It was 501 s before C-235 and 109 s after.
