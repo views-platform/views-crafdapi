@@ -4,6 +4,10 @@ import pandas as pd
 import numpy as np
 from typing import List, Union, Optional
 from views_crafdapi.forecast.aggregate.cross_level import aggregate_via_leaf, elementwise_sum
+from views_crafdapi.forecast.aggregate.reduction import (
+    encode_level_codes,
+    joint_sum_to_level,
+)
 from views_crafdapi.forecast.geography.metadata_table import (
     LEVEL_METADATA_COLUMNS,
     LEVELS,
@@ -460,74 +464,30 @@ class ForecastDataset(_GridDataset):
             if c not in groupby_cols and (c in array_targets or c in scalar_agg_dict)
         ]
         return result[ordered_cols]
-    def calculate_hdi_map(
+    def _aggregate_hdi_map_pandas(
         self,
-        alpha: float = 0.9,
-        features: Optional[Union[str, List[str]]] = None,
-        sample_idx: Optional[Union[int, List[int]]] = None,
-        time_ids: Optional[Union[int, List[int]]] = None,
-        entity_ids: Optional[Union[str, List[str]]] = None,
-        enforce_non_negative: bool = False,
-        with_metadata: bool = True,
-        level: Optional[str] = None,
-        aggregate: bool = False,
+        alpha: float,
+        features,
+        sample_idx,
+        time_ids,
+        entity_ids,
+        enforce_non_negative: bool,
+        level: str,
     ) -> pd.DataFrame:
+        """The pre-S7 aggregate reduction, kept verbatim for the historical/scalar leg.
+
+        ADR-030 §1 puts the historical/scalar path outside the frame migration and requires it
+        to stay **float64 byte-identical**: `_aggregate_distributions` routes non-prediction
+        targets to the legacy `elementwise_sum` precisely because "the frame path's float32
+        stack would re-baseline it". The S7 path reads `_sample_array`, which hands back
+        `float32` for feature datasets, so it must not be used here.
+
+        This is not hypothetical. S7's first draft called the array path unconditionally and
+        the full suite stayed green, because the guard that states this invariant
+        (`TestFeatureAggregationStaysFloat64`) is pinned to `get_subset_dataframe(aggregate=
+        True)` — the sibling method — while `/{level}/analysis/historical/hdi-map` reaches
+        `calculate_hdi_map`. On 2000 cells it moved a served value by 98.0. Register **C-258**.
         """
-        Calculate HDI and MAP estimates, with optional geographic aggregation.
-        
-        When `aggregate=True`, this method performs aggregation:
-        1. Retrieves raw sample distributions for each PRIO-GRID cell
-        2. Sums distributions element-wise across cells within each geographic unit
-        3. Computes HDI and MAP on the aggregated distributions
-        
-        This ensures proper uncertainty quantification at aggregated levels.
-        HDI([sum of samples]) ≠ sum of HDI bounds.
-        
-        Args:
-            alpha: Credibility level for HDI (default 0.9 = 90% interval)
-            features: Target features to analyze (None for all)
-            sample_idx: Sample indices to include (None for all)
-            time_ids: Time periods to include (None for all)
-            entity_ids: Entity codes (ISO3 for country, GAUL codes for admin levels)
-            enforce_non_negative: Clip MAP estimates to >= 0
-            with_metadata: Include geographic metadata columns in output
-            level: Geographic level ('country', 'gaul0', 'gaul1', 'gaul2')
-            aggregate: If True, aggregate to the specified level
-            
-        Returns:
-            DataFrame with MultiIndex (time_id, geo_unit) and columns for each target variable:
-            - {var}_lower: Lower bound of the HDI
-            - {var}_upper: Upper bound of the HDI  
-            - {var}_map: Maximum A Posteriori estimate
-            - {var}_min: Minimum sample value (when aggregate=True)
-            - {var}_max: Maximum sample value (when aggregate=True)
-        """
-        # Resolve entity_ids to PRIO-GRID cells if a level is specified
-        if level is not None and entity_ids is not None:
-            if isinstance(entity_ids, (str, int)):
-                entity_ids = [entity_ids]
-            pg_cells = []
-            for id in entity_ids:
-                pg_cells.extend(self._get_pg_cells(level=level, code=id))
-            entity_ids = pg_cells
-        
-        if not aggregate:
-            # Standard path: compute HDI at cell level
-            result = super().calculate_hdi_map(
-                alpha=alpha,
-                features=features,
-                sample_idx=sample_idx,
-                time_ids=time_ids,
-                entity_ids=entity_ids,
-                enforce_non_negative=enforce_non_negative,
-            )
-            if with_metadata:
-                result = result.join(self.geo_metadata, how="left")
-            return result
-        
-        # Aggregation path: aggregate distributions FIRST, then compute HDI
-        if level is None:
-            raise ValueError("Must specify 'level' when aggregate=True")
         
         # Step 1: Get raw distributions at cell level
         raw_df = super().get_subset_dataframe(
@@ -655,6 +615,273 @@ class ForecastDataset(_GridDataset):
         # Concatenate results and deduplicate metadata columns
         final_result = pd.concat(results, axis=1)
         # Remove duplicate columns (metadata cols may appear multiple times)
+        final_result = final_result.loc[:, ~final_result.columns.duplicated()]
+        return final_result
+
+    def calculate_hdi_map(
+        self,
+        alpha: float = 0.9,
+        features: Optional[Union[str, List[str]]] = None,
+        sample_idx: Optional[Union[int, List[int]]] = None,
+        time_ids: Optional[Union[int, List[int]]] = None,
+        entity_ids: Optional[Union[str, List[str]]] = None,
+        enforce_non_negative: bool = False,
+        with_metadata: bool = True,
+        level: Optional[str] = None,
+        aggregate: bool = False,
+    ) -> pd.DataFrame:
+        """
+        Calculate HDI and MAP estimates, with optional geographic aggregation.
+        
+        When `aggregate=True`, this method performs aggregation:
+        1. Retrieves raw sample distributions for each PRIO-GRID cell
+        2. Sums distributions element-wise across cells within each geographic unit
+        3. Computes HDI and MAP on the aggregated distributions
+        
+        This ensures proper uncertainty quantification at aggregated levels.
+        HDI([sum of samples]) ≠ sum of HDI bounds.
+        
+        Args:
+            alpha: Credibility level for HDI (default 0.9 = 90% interval)
+            features: Target features to analyze (None for all)
+            sample_idx: Sample indices to include (None for all)
+            time_ids: Time periods to include (None for all)
+            entity_ids: Entity codes (ISO3 for country, GAUL codes for admin levels)
+            enforce_non_negative: Clip MAP estimates to >= 0
+            with_metadata: Include geographic metadata columns in output
+            level: Geographic level ('country', 'gaul0', 'gaul1', 'gaul2')
+            aggregate: If True, aggregate to the specified level
+            
+        Returns:
+            DataFrame with MultiIndex (time_id, geo_unit) and columns for each target variable:
+            - {var}_lower: Lower bound of the HDI
+            - {var}_upper: Upper bound of the HDI  
+            - {var}_map: Maximum A Posteriori estimate
+            - {var}_min: Minimum sample value (when aggregate=True)
+            - {var}_max: Maximum sample value (when aggregate=True)
+        """
+        # Resolve entity_ids to PRIO-GRID cells if a level is specified
+        if level is not None and entity_ids is not None:
+            if isinstance(entity_ids, (str, int)):
+                entity_ids = [entity_ids]
+            pg_cells = []
+            for id in entity_ids:
+                pg_cells.extend(self._get_pg_cells(level=level, code=id))
+            entity_ids = pg_cells
+        
+        if not aggregate:
+            # Standard path: compute HDI at cell level
+            result = super().calculate_hdi_map(
+                alpha=alpha,
+                features=features,
+                sample_idx=sample_idx,
+                time_ids=time_ids,
+                entity_ids=entity_ids,
+                enforce_non_negative=enforce_non_negative,
+            )
+            if with_metadata:
+                result = result.join(self.geo_metadata, how="left")
+            return result
+        
+        # Aggregation path (ADR-030 S7): joint-sum the cell samples to `level` as arrays, then
+        # reduce. Pandas is asked only for the group index and the metadata columns; the samples
+        # are read straight from the contiguous `(N, S)` store and never enter a DataFrame.
+        if level is None:
+            raise ValueError("Must specify 'level' when aggregate=True")
+
+        # The historical/scalar leg keeps the legacy float64 pandas path (ADR-030 §1, C-258).
+        if not self.is_prediction:
+            return self._aggregate_hdi_map_pandas(
+                alpha=alpha,
+                features=features,
+                sample_idx=sample_idx,
+                time_ids=time_ids,
+                entity_ids=entity_ids,
+                enforce_non_negative=enforce_non_negative,
+                level=level,
+            )
+
+        target_level_col = self.levels[level]
+        time_col = self._time_id
+
+        # `get_subset_dataframe` performed these checks as a side effect of materialising
+        # columns; reading `_sample_array` directly inherits none of them (register C-259).
+        # The messages match the cell path's verbatim so one endpoint cannot answer two
+        # different ways for the same bad input.
+        selected_vars = self.targets if features is None else features
+        if not isinstance(selected_vars, list):
+            selected_vars = [selected_vars]
+        invalid = set(selected_vars) - set(self.targets)
+        if invalid:
+            raise ValueError(f"Invalid features specified: {invalid}")
+
+        sample_index = None
+        if sample_idx is not None:
+            sample_index = sample_idx if isinstance(sample_idx, list) else [sample_idx]
+            if self.sample_size is None:
+                raise ValueError("Cannot subset by sample when sample_size is not defined")
+            max_sample = self.sample_size - 1
+            # Without the lower bound a negative index wraps silently and one draw is served
+            # as a whole posterior — a zero-width credible interval (C-259, cf. C-247).
+            if any(i < 0 or i > max_sample for i in sample_index):
+                raise ValueError(f"Sample indices must be between 0 and {max_sample}")
+
+        if time_ids is not None:
+            requested = time_ids if isinstance(time_ids, list) else [time_ids]
+            unknown = [t for t in requested if t not in set(self._time_values)]
+            if unknown:
+                raise KeyError(f"Invalid time IDs: {unknown}")
+
+        # Which metadata columns this level carries (single source of truth in
+        # forecast.geography.metadata_table). Filtered to what `geo_metadata` actually has:
+        # the pre-S7 path skipped missing columns silently and this keeps that behaviour
+        # rather than changing it inside a performance change — the gap is register C-261.
+        metadata_cols_to_include = [
+            c for c in LEVEL_METADATA_COLUMNS.get(level, []) if c in self.geo_metadata.columns
+        ]
+
+        # Step 1: the group index and the metadata, from a frame carrying NO sample column.
+        # This is the memory story. The path this replaces materialised one ndarray object per
+        # (cell, month, target) here — ~7M of them for the delivered run, ~10.9 GB — purely to
+        # stack them back into `(N, S)` for the joint-sum two steps later.
+        mask = self._subset_mask(time_ids=time_ids, entity_ids=entity_ids)
+        positions = np.flatnonzero(mask)
+        keyframe = (
+            pd.DataFrame(index=self.dataframe.index[mask])
+            .join(self.geo_metadata, how="left")
+            .reset_index()
+        )
+        # `positions` indexes the sample store while `keyframe` is read positionally beside it.
+        # A left join only preserves that alignment if `geo_metadata`'s index is unique per
+        # entity; `__init__` reindexes for uniqueness but `from_value` does not re-check.
+        if len(keyframe) != len(positions):
+            raise ValueError(
+                f"geo_metadata join changed the row count ({len(positions)} -> "
+                f"{len(keyframe)}): its index must be unique per {self._entity_id}. The sample "
+                f"positions and the joined frame are read positionally against each other."
+            )
+
+        # `observed=True` is load-bearing: the country level groups by `country_iso_a3`, which is
+        # `category` dtype. With the pandas default a categorical key emits a row for EVERY
+        # category — all ~250 countries — even for a single-country request. This groupby fixes
+        # the output index and its order, exactly as the pre-S7 `_aggregate_distributions` did.
+        grouped = keyframe.groupby([time_col, target_level_col], observed=True)
+        group_meta = (
+            grouped.agg({c: "first" for c in metadata_cols_to_include})
+            if metadata_cols_to_include
+            else None
+        )
+        out_index = group_meta.index if group_meta is not None else grouped.size().index
+
+        # `observed=True` restricts the *rows*, but the resulting index level is still a
+        # CategoricalIndex carrying every category — which would re-export past the serving
+        # boundary the exact fan-out the groupby just prevented (phantom units on a downstream
+        # groupby, changed parquet encoding, `.loc` raising instead of selecting empty). The
+        # pre-S7 path built its index from plain values, so cast back to match it.
+        level_values = out_index.get_level_values(target_level_col)
+        if isinstance(level_values.dtype, pd.CategoricalDtype):
+            out_index = pd.MultiIndex.from_arrays(
+                [out_index.get_level_values(time_col), level_values.astype(object)],
+                names=[time_col, target_level_col],
+            )
+
+        if len(out_index) == 0:
+            # Shaped, not bare: `build_bulk_table` calls `.index.set_names([...])` on this and
+            # a (0, 0) RangeIndex frame fails there with an error naming neither cause.
+            return pd.DataFrame(
+                {
+                    name: np.empty(0, dtype=np.float64)
+                    for var in selected_vars
+                    for name in series_value_column_names(var)
+                },
+                index=pd.MultiIndex.from_arrays(
+                    [[], []], names=[time_col, target_level_col]
+                ),
+            )
+
+        row_of_key = {key: i for i, key in enumerate(out_index)}
+        stats = {
+            var: {
+                name: np.full(len(out_index), np.nan, dtype=np.float64)
+                for name in series_value_column_names(var)
+            }
+            for var in selected_vars
+        }
+
+        # Step 2: per month, per target — take that month's rows as a contiguous `(N, S)` block,
+        # joint-sum it to the level, and `collapse` the result in ONE call. Streaming per month
+        # holds one month of cells resident instead of the whole request (the cell path's
+        # pattern, S6b-1 / #208). Groups are `(time, unit)` and a month is one time value, so no
+        # group spans two months: the draws summed, their order, and the reduction are all
+        # identical to doing every month at once — which is why the goldens must not move.
+        #
+        # The code->unit mapping and the store handles are hoisted out of the loops: neither
+        # depends on the month or the target, and computing them inside cost 27% of runtime
+        # (the mapping) and a full-store copy per iteration (the handles).
+        keep, unit_ids, labels = encode_level_codes(keyframe[target_level_col].to_numpy())
+        times = keyframe[time_col].to_numpy()[keep]
+        positions = positions[keep]
+        sample_arrays = {var: self._sample_array(var) for var in selected_vars}
+        label_of = (lambda u: labels[u]) if labels is not None else (lambda u: u)
+
+        for month in pd.unique(times):
+            in_month = times == month
+            month_positions = positions[in_month]
+            month_times = times[in_month]
+            month_units = unit_ids[in_month]
+            for var_name in selected_vars:
+                values = sample_arrays[var_name][month_positions]
+                if sample_index is not None:
+                    values = values[:, sample_index]
+                keys, block = joint_sum_to_level(values, month_times, month_units)
+                if not keys:
+                    continue
+
+                # Same ADR-025 reduction as the cell path (#222/S4): MAP + fixed 50/90/95 HDIs +
+                # severe_scenario, through the shared `schema`/`json_contract` builder — so the
+                # aggregate and cell schemas can never diverge. One `collapse` call per (month,
+                # target), matching the cell path's call count (C-235).
+                cr = collapse(
+                    block,
+                    masses=schema.MASSES,
+                    enforce_non_negative=enforce_non_negative,
+                    thresholds=schema.EXCEEDANCE_THRESHOLDS,
+                )
+                data = series_value_data(
+                    var_name,
+                    cr.map,
+                    cr.severe,
+                    cr.bimodality,
+                    {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
+                    exceedance=cr.exceedance,
+                )
+                rows = np.fromiter(
+                    (row_of_key[(t, label_of(u))] for t, u in keys),
+                    dtype=np.intp,
+                    count=len(keys),
+                )
+                # Direct assignment, not `setdefault`: `series_value_data` returns exactly the
+                # keys `series_value_column_names` produced above (json_contract.py says so),
+                # so a missing key is a contract break that should raise, not be papered over
+                # with a lazily-created half-filled column.
+                for name, column in data.items():
+                    stats[var_name][name][rows] = column
+
+        # Step 3: build the DataFrame once, from stacked arrays — the serialize seam ADR-030 §1
+        # allows. Column order matches the pre-S7 path: each target's value columns, then the
+        # level's metadata columns once (duplicates across targets dropped, as before).
+        results = []
+        for var_name in selected_vars:
+            var_df = pd.DataFrame(stats[var_name], index=out_index)
+            if group_meta is not None:
+                for meta_col in metadata_cols_to_include:
+                    var_df[meta_col] = group_meta[meta_col].astype(object).to_numpy()
+            results.append(var_df)
+
+        if not results:
+            return pd.DataFrame()
+
+        final_result = pd.concat(results, axis=1)
         final_result = final_result.loc[:, ~final_result.columns.duplicated()]
         return final_result
 
