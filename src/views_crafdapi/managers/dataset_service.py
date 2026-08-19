@@ -21,11 +21,12 @@ from collections import defaultdict
 from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
+import pyarrow.parquet as pq
 from fastapi import HTTPException
 
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.forecast import contract
-from views_crafdapi.forecast.ingestion import wire_reader
+from views_crafdapi.forecast.ingestion import historical_stream, wire_reader
 from views_crafdapi.managers import freshness, selection
 from views_crafdapi.managers.prediction import (
     SHARD_ARTIFACT_TYPE,
@@ -404,6 +405,19 @@ class DatasetService:
         # implementation of the file-cache check + download + empty guard.
         file_bytes = self._download_file_bytes(manager, file_id, current_time)
 
+        # C-263 (#98): for historical, try the streaming ingest first. It writes the value-dir
+        # a row group at a time instead of decoding the 28.4M-row artifact into one pandas frame
+        # and copying out of it — measured on the real artifact, 3.9 GB peak against ~9.8 GB, and
+        # flat rather than linear in the row count. It returns None when the artifact does not
+        # satisfy the already-dense-and-sorted precondition, and the unchanged in-memory path
+        # below then runs exactly as before.
+        if category == "historical":
+            streamed = self._try_stream_historical(
+                api_key_hash, category, file_bytes, file_id, provenance, cache, current_time
+            )
+            if streamed is not None:
+                return streamed
+
         # Try to read with different formats and encodings
         df = None
         errors = []
@@ -457,17 +471,29 @@ class DatasetService:
                 detail=f"Failed to parse file. Attempted formats:\n{error_details}"
             )
 
-        # Memory: downcast the low-cardinality geography name/ISO3 columns to `category` and
-        # release the raw file bytes BEFORE building the dataset. Placement is load-bearing for
-        # peak RAM on the global historical (~28M rows): held as object strings these four
-        # columns cost ~6-7 GB, and ForecastDataset then builds ~10 GB of per-cell target
-        # arrays — casting here frees the string block so the two large transients never
-        # co-exist. That is the difference between fitting the 24 GB box and OOM-killing the
-        # worker on a cold historical load. (ForecastDataset.__init__ repeats the cast as an
-        # idempotent safety net; here it is a no-op.) The `*_code` columns stay numeric.
+        # Memory: downcast the low-cardinality geography name/ISO3 columns to `category` before
+        # building the dataset, and drop the raw bytes.
+        #
+        # **Corrected 2026-08-18 (C-263).** This comment previously claimed the four columns
+        # "cost ~6-7 GB" held as object strings. That figure came from `memory_usage(deep=True)`,
+        # which sums `sys.getsizeof` per element and therefore counts each shared string object
+        # once per row. Arrow's `to_pandas` interns repeated values, so an object column of a few
+        # hundred distinct labels costs one pointer per row (~8 bytes), not a string per row.
+        # Measured on the real 28.4M-row artifact, reading these four columns dictionary-encoded
+        # rather than as objects moves peak RSS by ~0.7 GB, not ~6 GB. The cast is kept — it is
+        # cheap, it makes the dtype explicit rather than incidental, and `groupby(observed=True)`
+        # downstream depends on it — but it is not what makes the cold load fit.
+        # The `*_code` columns stay numeric.
         for _col in ForecastDataset._CATEGORICAL_METADATA_COLS:
             if _col in df.columns and df[_col].dtype == object:
                 df[_col] = df[_col].astype("category")
+
+        # `del file_bytes` alone was a no-op: `_download_file_bytes` stored the same object in
+        # `self._file_cache`, so the local name was not the last reference and nothing was freed.
+        # Drop the cache entry too — the wire path already does exactly this for each shard, for
+        # exactly this reason. The artifact is about to be persisted to the disk cache, so the
+        # bytes have no second reader.
+        self._file_cache.pop(file_id, None)
         del file_bytes
 
         # Create a ViewsDataset from the dataframe
@@ -485,6 +511,13 @@ class DatasetService:
             # C-72: reject schema-valid-but-implausible values before they are cached and
             # served to FAO — prediction values (non-finite / negative) and geographic
             # metadata (out-of-range coordinates, malformed ISO3, negative GAUL codes).
+            # C-263: release the source frame before validation and the disk-cache write.
+            # `ForecastDataset` copies what it keeps (`to_array_columns` copies, `sort_index`
+            # copies, the geo table is taken with `.copy()`), so after construction nothing in
+            # the dataset points at `df` — but the local name did, which kept the full decoded
+            # artifact resident through `to_value()`. On the 28.4M-row historical that is the
+            # single largest avoidable term in the cold-start peak.
+            del df
             dataset.validate_value_plausibility()
             dataset.validate_metadata_plausibility()
         except Exception as e:
@@ -523,6 +556,97 @@ class DatasetService:
         # served from a manifested run or fails visible above), so no forecast serving-state is set.
 
         return cache["data"].copy()
+
+    def _try_stream_historical(
+        self,
+        api_key_hash: str,
+        category: str,
+        file_bytes: bytes,
+        file_id: str,
+        provenance,
+        cache: Dict[str, Any],
+        current_time: float,
+    ) -> Optional[pd.DataFrame]:
+        """C-263 (#98): assemble the historical value-dir without decoding the artifact whole.
+
+        Returns the served dataframe on success, or ``None`` to fall through to the in-memory
+        path — which is what happens for any artifact that is not already dense and in
+        ``sort_index()`` order, and for any failure at all. This is a memory optimisation, so
+        it is never allowed to be the reason a request fails: everything it can raise is caught
+        and degrades to the path that was already there.
+
+        The staged dir is adopted with the same ``write_value_dir`` the wire path uses, then read
+        back memory-mapped, so the served dataset is the one ``from_value`` produces either way.
+        """
+        staging = None
+        try:
+            targets = self._configs_getter().get("historical_targets")
+            staging = self._disk_cache.staging_dir(api_key_hash, category)
+            artifact = staging / "_artifact.parquet"
+            artifact.write_bytes(file_bytes)
+            # The bytes are on disk now; drop the in-memory copy AND the cache entry that
+            # otherwise keeps it alive for the rest of the process's life.
+            self._file_cache.pop(file_id, None)
+
+            names = list(pq.ParquetFile(artifact).schema_arrow.names)
+            if not targets:
+                index_cols = {"month_id", "priogrid_id", "priogrid_gid"}
+                meta_cols = set(ForecastDataset._METADATA_COLS)
+                targets = [c for c in names if c not in index_cols | meta_cols]
+                logger.info(f"Auto-detected historical targets: {targets}")
+
+            rows = historical_stream.stream_to_value(
+                artifact,
+                staging,
+                targets,
+                ForecastDataset._METADATA_COLS,
+                ForecastDataset._CATEGORICAL_METADATA_COLS,
+            )
+            artifact.unlink(missing_ok=True)  # not part of the value-dir contract
+
+            if not self._disk_cache.write_value_dir(
+                api_key_hash, category, staging, file_id,
+                rows=rows, columns=[], source_kind="legacy",
+                provenance=provenance.to_dict(),
+            ):
+                raise RuntimeError("failed to adopt the streamed historical value-dir")
+            staging = None  # adopted; the finally below must not remove it
+            disk = self._disk_cache.read(api_key_hash, category)
+            if disk is None:
+                raise RuntimeError("streamed historical value-dir not readable after adopt")
+            dataset = disk["dataset"]
+
+            # C-72 still applies. The value plausibility check is a no-op for a non-prediction
+            # dataset (it guards `pred_vars`); the geo check is the one that matters here and it
+            # runs against the reconstructed table, exactly as on the in-memory path.
+            dataset.validate_value_plausibility()
+            dataset.validate_metadata_plausibility()
+
+            cache["data"] = dataset.dataframe
+            cache["file_id"] = file_id
+            cache["timestamp"] = disk["timestamp"]
+            cache["dataset"] = dataset
+            cache["source_kind"] = "legacy"
+            cache["provenance"] = provenance.to_dict()
+            logger.info(
+                f"Streamed {category} value-dir: {rows} rows, targets={targets} "
+                f"(C-263 low-memory path)"
+            )
+            return cache["data"].copy()
+        except historical_stream.NotStreamable as e:
+            logger.info(
+                "Historical artifact is not streamable (%s); using the in-memory path", e
+            )
+            return None
+        except Exception as e:  # noqa: BLE001 — an optimisation must never fail the request
+            logger.warning(
+                "Streamed historical ingest failed (%s); falling back to the in-memory path",
+                e, exc_info=True,
+            )
+            return None
+        finally:
+            if staging is not None:
+                self._disk_cache.discard_staging(staging)
 
     def _serve_last_good_within_sla(
         self, api_key_hash: str, category: str, reason: str

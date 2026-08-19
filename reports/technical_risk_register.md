@@ -728,6 +728,42 @@ There is no `MemoryMax=` for crafd that both survives a cold start and leaves fa
 
 Tracked as **#98** (blocks **#99**). Cross-refs: **C-262** (the ceiling this blocks), **C-241** (why the C-169 citation resolves nowhere here), **C-236** (caches bounded by entry count, not bytes).
 
+**Addressed in code 2026-08-18 (branch `perf/c263-cold-start-historical`, not yet deployed).**
+The cause was not the parquet decode on its own: it is that the decoded frame and the
+constructor's copies of it are resident **simultaneously**, so the peak is their sum. Freeing
+afterwards cannot lower a peak that has already occurred — measured, and it does not.
+
+`forecast/ingestion/historical_stream.py` now assembles the value-dir a row group at a time
+(float64 blocks straight into `open_memmap`, geography appended to an open `ParquetWriter`),
+adopted with the same `write_value_dir` the wire path uses and read back mmap'd. Measured on the
+real artifact, both figures on the same host in the same state: **3.940 GB peak above baseline
+against 12.205 GB** for the in-memory path — a 3.1x reduction, 8.27 GB saved — and near-flat
+rather than linear in row count (0.354 GB at 60 months, 0.274 GB at 120). It is *slower*: 36.5 s
+against 26.5 s, because the loader makes two passes; that trade is deliberate on a memory-bound
+box. Byte-identical — manifest, index and every float64 feature block byte-for-byte, geo table
+including category order, and the served outputs on 1.55M real rows (the C-258 `country`
+aggregate, the gaul1 subset, the bulk `s_actual`, a cell-level subset).
+
+*Two numbers in the first version of this note were corrected on 2026-08-21.* The in-memory peak
+was given as "~9.4 GB extrapolated" — linear from the 120-month row, taken because the dev host
+had 9.6 GB free. Measured with 19 GB free it is **12.205 GB**: the path grows superlinearly and
+the extrapolation understated it by 30%, in the direction that flattered the change. And the
+"~15-20% wall time" credited to the copy elisions was a blended, confounded figure; measured
+separately they are worth ~9%, while the fourth change — validating `country_iso_a3` against
+`.cat.categories` instead of `.astype(str)` over every row — is **135x** on that call (2.384 s to
+0.018 s at 3.9M rows, ~17 s at full scale) and is the real wall-time win.
+
+Three plausible causes were measured and rejected first, and are worth keeping because each
+would otherwise be re-proposed: the "~6-7 GB of object-dtype geography strings" named in this
+repo's own source comment is a `memory_usage(deep=True)` artifact (shared strings counted once
+per row) and is really ~0.7 GB; releasing the retained file bytes and the source frame fixes two
+genuine defects and moves the peak by **zero**; eliding three redundant frame copies buys
+~15-20% wall time and also moves the peak by zero. The comment has been corrected in place.
+
+**The entry stays open, and C-262 stays blocked**, because the number that closes it —
+cold-start peak on the box, `systemctl restart` then one `/data/forecast/bulk` — has not been
+taken. The local measurement predicts ~16.8 G → ~11 G; that is a prediction, not a result.
+
 ---
 
 ### C-264: A 401 tells an unauthenticated caller which Appwrite operation failed

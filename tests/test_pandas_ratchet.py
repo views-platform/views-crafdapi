@@ -32,6 +32,13 @@ _ALLOWED = frozenset({
     # forecast INGEST seam (decode the wire)
     "forecast/ingestion/parquet_reader.py",
     "forecast/ingestion/wire_reader.py",  # S2 (#204): decode a manifested wire-contract run
+    # C-263 (#98): decode a dense historical artifact a row group at a time. Pandas appears
+    # here for one reason — building each chunk's geo rows so `pa.Table.from_pandas` writes the
+    # index metadata `from_value`'s `read_parquet` needs to restore the MultiIndex. No sample or
+    # target value passes through pandas on this path; the float64 blocks are written straight
+    # from arrow to `np.lib.format.open_memmap`. Added to the allowlist deliberately, in the
+    # INGEST seam ADR-030 §7 permits, rather than routed around the gate.
+    "forecast/ingestion/historical_stream.py",
     "forecast/ingestion/dense_grid.py",
     "forecast/ingestion/plausibility.py",
     # forecast SERIALIZE seam (emit JSON)
