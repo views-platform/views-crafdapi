@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 35                                             |
-| Open Concerns     | 33                                             |
+| Total Concerns    | 45                                             |
+| Open Concerns     | 43                                             |
 | Resolved Concerns | 2                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -394,9 +394,11 @@ The dtype is, however, an **in-band discriminator**: a real join yields `float32
 | Tier | 4 |
 | Source | /code-review max on S1 (seam-contract D2, epic views-faoapi#383) (2026-08-12) |
 | Trigger | The next reader follows `README.md:17`'s pinned URL / believes `platform-001-v1.2.0` is the current seam-contract edition when repointing or onboarding. |
-| Location | `README.md:17-19` |
+| Location | `README.md:17-19`, `docs/ADRs/active/035_deploy_time_coordinate_provisioning.md:25-26,138-141` |
 
 The README pins the Appwrite Seam Contract at `platform-001-v1.2.0` and describes a "v1.3.0 rename untagged" — stale: views-appwrite now publishes `appwrite-seam-v1.5.x` tags (current `v1.5.2`) and the contract file was renamed `PLATFORM-001` → "The Appwrite Seam Contract". S1 added a D2 binding note directly below (correctly citing `v1.5.2`), so the two now visibly disagree. **Doc-drift, no runtime effect** — the D2 binding pins `v1.5.2` in code (`seam_contract.REGISTRY_PIN_TAG`), not the README. crafd's equivalent of views-faoapi#340; deliberately out of S1 scope (contract-version tracking is its own concern). Named fix: a crafd doc-hygiene pass refreshing the README seam pin to the current published tag + renamed contract, mirroring faoapi#340.
+
+**Extended 2026-08-18 (graphify): the pin is stated in three places at three different editions, and one of them is an ADR.** The graph's citation extraction put `README.md`, `seam_contract.py` and ADR-035 on the same `appwrite-seam` node and they disagree: the README says `platform-001-v1.2.0`, **ADR-035 says `appwrite-seam-v1.4.4`** (four pinned URLs — `:25-26` in Context, `:138-141` in the evidence block), and the code says `appwrite-seam-v1.5.2`. The original entry framed this as README-vs-code doc drift with "no runtime effect", which held while the README was the only stale copy. ADR-035 is different in kind: under ADR-000 an ADR is the source of truth when code and ADRs disagree, so a reader resolving the contradiction *by the rules* lands on `v1.4.4` — an edition that predates the `UNCRAFD_CONSUMER_DOCUMENT_NAME` row the binding test requires (that row exists only from `v1.5.2`, per `seam_contract.py:34` and the resolved C-249). Still no runtime effect today, because `REGISTRY_PIN_TAG` is what CI reads. Tier stays 4 on that basis; the fix now has to cover ADR-035, not just the README.
 
 ---
 
@@ -802,3 +804,199 @@ The duplication is gone; **the trap is not**. `v0.4.0` is a real, plausible tag 
 A placeholder (`TAG=vX.Y.Z`) fails at the deploy gate on an unedited paste, which is the correct direction: a stale placeholder fails loudly, a stale real tag succeeds wrongly. Enforced by `tests/test_falsify_shutdown_safety.py::test_runbook_release_block_does_not_hardcode_a_real_looking_tag`.
 
 Cross-refs: **C-167** shape (tag/version dual source of truth) and the 2026-08-15 deploy-gate outage, which is what taught this repo that a tag naming the wrong thing is an outage, not a nit.
+
+---
+
+### C-267: An unknown entity id is answered with an empty 200, not a rejection — at every level, on every path
+
+| Field | Value |
+|-------|-------|
+| ID | C-267 |
+| Tier | 2 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When a consumer reports "the API returns nothing for country X", check the id against `geo_metadata` before concluding the forecast is empty. And when adding a new served level or a new entity vocabulary (M49 codes, a GAUL edition bump), add the existence check — there is none to copy. |
+| Location | `src/views_crafdapi/data/handlers/forecast_dataset.py:665-670` and `:927-932` (code→cell resolution), `src/views_crafdapi/forecast/geography/metadata_table.py:28` (`resolve_level_cells`), `src/views_crafdapi/data/handlers/grid_dataset.py:958-982` (`_subset_mask`), `:1292` (the guard that never fires), `src/views_crafdapi/managers/api.py:641-700` |
+
+Both `calculate_hdi_map` and `get_subset_dataframe` resolve a caller's entity codes to PRIO-GRID cells **before** any validation runs. `resolve_level_cells` returns `[]` for a code no cell carries, `entity_ids` becomes `[]`, and `_subset_mask`'s `.isin([])` selects nothing — so the base class's `KeyError: Invalid entity IDs` (`grid_dataset.py:1292`) is handed an empty set and never fires. The check exists; the resolution step upstream of it guarantees it has nothing to reject.
+
+Verified on the repo's own fixture (`make_fao_df`, ISO3s `AAA`/`BBB`): `calculate_hdi_map(entity_ids=['ZZZ'], level='country')` returns `(0, 33)` un-aggregated and `(0, 24)` aggregated; `get_subset_dataframe(entity_ids=['ZZZ'], level='country', aggregate=True)` returns `(0, 2)`; `calculate_hdi_map(entity_ids=[999999], level='gaul1', aggregate=True)` returns `(0, 24)`. All surface as HTTP 200, `success: true`, `shape: [0, N]`.
+
+What makes this a concern rather than a documented policy is the **inconsistency**: the same endpoint answers a bad `time_ids` with `KeyError` → HTTP 500 and a bad `features` with `ValueError` → HTTP 500. Three parameters, three behaviours, one of them silent. A consumer who writes `GRB` for `GBR` — or holds a GAUL code retired by a boundary revision — receives a well-formed "no fatalities predicted" where they should receive a rejection, and nothing in the response, the logs, or `/health` distinguishes that from a genuine zero. The same class as **C-232** (a healthy-looking empty answer), reached by a different mechanism, and adjacent to but not covered by **C-259**, which concerns validations *lost* on the direct `_sample_array` path — this one is bypassed on **every** path, including the ones C-259 restored, because the resolution step runs first.
+
+Cross-refs: **C-232**, **C-259**, **C-261** (the other unchecked assumption about `geo_metadata`'s contents).
+
+---
+
+### C-268: Revoking an API key does not stop it being served — the fail-soft cache paths keep answering for weeks
+
+| Field | Value |
+|-------|-------|
+| ID | C-268 |
+| Tier | 2 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When revoking or narrowing an Appwrite key in response to a suspected compromise, **restart the service** (or evict `_manager_cache`) — ADR-027 §4's promise that faoapi "inherits the change on the next authenticated call" does not hold. Equally, when adding a TTL or revalidation to `_manager_cache`, decide explicitly what the fail-soft metadata degradations should do on a *permanent* authorization failure rather than a transient one. |
+| Location | `src/views_crafdapi/managers/api.py:337-352` and `:354-378` (the two FastAPI dependencies), `:304-330` (`_validate_api_key`), `src/views_crafdapi/managers/dataset_service.py:196-206` (the manifest lookup), `:527-592` (`_serve_last_good_within_sla`), `docs/ADRs/active/027_authentication_and_per_key_isolation.md:41` |
+
+`_validate_api_key`'s docstring states it "validates the API key on every call", but both dependencies that reach it are guarded by `if api_key_hash not in self._manager_cache` — an `LRUCache(maxsize=100)` with **no TTL**, a choice ADR-011 §3 made deliberately ("no TTL for `_manager_cache` since client objects are stateless"). A key validated once therefore skips revalidation until 100 distinct other keys evict it or the process restarts.
+
+The revoked key then does not fail loudly downstream, because every metadata call on the forecast path is fail-soft by design. `get_latest_manifest()` → `search_files_by_metadata` catches the `AppwriteException` and returns `success=False` → `get_predictions_by_metadata` logs and returns `[]` → the manifest resolves to a genuine `None`. That is `NoRun`, which routes to `_serve_last_good_within_sla("no_manifest")`, and the last-good **manifested** run in that key's own disk partition is served — degraded, logged, but served — for as long as it stays inside the 45-day freshness SLA and the 3.5-week disk TTL. The revoked key keeps reading real forecast numbers through `/{level}/analysis/forecast/hdi-map` and `/data/forecast/bulk` for up to ~24 days. `/historical` degrades to 404 once the 4-hour warm TTL lapses, so the exposure is forecast-specific.
+
+No cross-key leakage is involved — the data served is that key's own partition. The failure is that **revocation, the operator's only response to a leaked key, has no effect on the serving path**, and the ADR asserts the opposite. Tier 2 rather than 1: the answer served is correct data, not corrupt data; what fails is the access-control lifecycle. Every mechanism involved was individually justified (no-TTL manager cache, ADR-011; never drop a good entry on a metadata blip, C-233; bounded grace fallback, ADR-033 §6) — the concern is their composition, which nothing states or tests.
+
+Cross-refs: **C-233** (the same fail-soft-on-metadata-error root, a different consequence), **C-269** (the other ADR-027 claim that does not hold), ADR-011 §3, ADR-027 §4.
+
+---
+
+### C-269: The downloaded-file cache is shared across API keys, and `/files/{id}/cached` serves from it with no authorization check
+
+| Field | Value |
+|-------|-------|
+| ID | C-269 |
+| Tier | 2 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | **Before issuing a second API key with a narrower Appwrite scope than the first** — either partition `CacheManager`'s directory per caller or remove the `/files/{bucket_id}/{file_id}/cached` route. Also when reading ADR-027 §3's isolation list as a completeness claim: it enumerates three cache layers and this is a fourth. |
+| Location | `src/views_crafdapi/managers/appwrite/manager.py:90-108` (`_setup_cache`), `src/views_crafdapi/managers/appwrite/file_cache.py:65-66` (`_get_cache_key`), `:146-165` (`get_cached_file_path`), `:57-63` (`_save_cache_metadata`), `src/views_crafdapi/managers/api.py:966-999` (the `/cached` route), `:1004-1032` (`/cache/stats`, `DELETE /cache`), `docs/ADRs/active/027_authentication_and_per_key_isolation.md:31-37` |
+
+ADR-027 §3 states that "all cached state is keyed by `api_key_hash`, so callers are isolated by construction" and that a request authenticated with key *A* "can never be served *B*'s cached dataset". Each per-key `AppWriteFileManager` does construct its own `CacheManager` — but every one of them resolves the same directory, `self.config.path_manager.cache / "appwrite_cache"`, because `path_manager` is the single shared `self._model_path` handed to every `AppwriteConfig`. The cache key is `f"{bucket_id}_{file_id}"` with no caller component.
+
+The `/files/{bucket_id}/{file_id}/cached` route reads `manager.cache_manager.get_cached_file_path(...)` **first** and returns those bytes as a `FileResponse`. The only Appwrite call it makes afterwards is `get_file`, for a display filename — and its failure is handled by falling back to `filename = file_id` and returning the file anyway. So any caller whose key passes the one-time `list_buckets` probe can retrieve any file another key has cached, including from buckets their own key cannot read. The sibling `/download` route does 404 first on a failed `get_file`, which is what makes this route's ordering the defect rather than a general design.
+
+Two lesser consequences of the same sharing: `DELETE /cache` purges every caller's cached bytes, and `/cache/stats` enumerates the whole box's cache broken down by bucket. One more, independent of authorization: each `CacheManager` loads the metadata JSON once at construction and rewrites the entire dict on every `add_to_cache`, so two long-lived per-key managers silently drop each other's entries — a lost-update race on a file no lock protects.
+
+Masked today by an effectively single-key deployment, which is the same condition that masks **C-236** and **C-272**. The trigger is the day that stops being true.
+
+Cross-refs: **C-236** (the same `_file_cache`/`CacheManager` layers, bounded-by-count rather than isolation), **C-268** (the other ADR-027 claim that does not hold), ADR-027 §3.
+
+---
+
+### C-270: The documented `search` parameter on `/files/{bucket_id}` builds a query syntax the pinned SDK does not speak
+
+| Field | Value |
+|-------|-------|
+| ID | C-270 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When a caller reports that `?search=` on the file listing 404s or ignores the term. And before documenting any new Appwrite query parameter — build it with `appwrite.query.Query`, never by string formatting. |
+| Location | `src/views_crafdapi/managers/api.py:838-841`, `src/views_crafdapi/managers/appwrite/manager.py:851-885` (`list_files`), `:945-955` (`list_buckets`, the correct sibling), `README.md:160,220`, `docs/api/README.md:94` |
+
+The route appends `f"search('name','{search}')"` to the query list. That is Appwrite's pre-0.15 query syntax; the pinned SDK (`appwrite==19.2.0`) emits JSON — verified locally: `Query.search('name','forecast')` returns `'{"method":"search","attribute":"name","values":["forecast"]}'`. The hand-built string passes through `list_files` unchanged to `storage.list_files`, the server rejects it, and the route returns HTTP 404 `"Error listing files"` for what is a malformed request, not a missing bucket.
+
+`list_buckets` fifteen lines further down uses `Query.search` correctly, so this is one missed call site rather than a systemic pattern — and the reason it survived the SDK-19 migration (ADR-018/ADR-019) is that no test constructs a real query for this parameter; the file-management surface is mocked at the manager boundary throughout. Both `README.md` and `docs/api/README.md` document `search` as a working listing filter.
+
+Secondary, and worth naming even though it is currently inert: the caller's raw input is interpolated into a query string with no escaping. It is inert only because the query is rejected wholesale — the construction, not the rejection, is what would have to change if the syntax were ever corrected by making the string valid rather than by switching to `Query`.
+
+Cross-refs: **C-243** (the same shape — a documented behaviour with no test that would notice it breaking), ADR-018/ADR-019 (SDK normalization and pinning).
+
+---
+
+### C-271: Three runtime dependencies are imported by `src/` but never declared; two more are declared dev-only
+
+| Field | Value |
+|-------|-------|
+| ID | C-271 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When a transitive dependency stops requiring one of these — e.g. `wandb` dropping `PyYAML`, or `appwrite`/`fastapi` dropping `pydantic` — or when trimming the declared dependency set under ADR-015. Note that ADR-015 audits only the *declared-but-unused* direction and would not catch any of these. |
+| Location | `src/views_crafdapi/managers/log.py:4` (`yaml`), `src/views_crafdapi/client.py:9` + `src/views_crafdapi/__init__.py:7` (`requests`), `src/views_crafdapi/managers/appwrite/sdk_compat.py:7` (`pydantic`), `src/views_crafdapi/plotting.py:11,14-17` (`geopandas`, `matplotlib`), `pyproject.toml:13-41` (runtime), `:73-81` (dev) |
+
+`PyYAML` sits on the **production boot path** — `CrafdApiManager.__init__` → `ModelManager.__init__` → `LoggingModule._setup_logging` → `yaml.safe_load` of `configs/logging.yaml` — and reaches the environment only through `wandb`. `requests` is imported by the package's own `__init__` (via `client.py`), so a bare `import views_crafdapi` fails without it; it too arrives transitively. `pydantic` is imported by `sdk_compat`, which normalizes **every** Appwrite SDK response on the serving path. None of the three appears in `[project] dependencies`.
+
+Separately, `geopandas` and `matplotlib` are declared under `[dependency-groups] dev` yet imported at module scope by `src/views_crafdapi/plotting.py`, so `import views_crafdapi.plotting` raises `ModuleNotFoundError` in a production install — a `src/` module that only works in a dev environment.
+
+`uv.lock` currently pins all five, so the failure mode is a future resolution rather than today's deployment: the boot path breaking on an upstream's dependency trim, in an environment built from `pyproject.toml` rather than the lock. ADR-015 §1 mandates that "every runtime dependency in `pyproject.toml` must have at least one corresponding import in `src/`" — and stops there; nothing states or checks the converse, and its own Alternative A (`deptry` in CI) was deferred as not yet worth the overhead. This entry is the evidence for revisiting that.
+
+Cross-refs: ADR-015 (whose audit direction leaves this uncovered), **C-239** (the other place a `src/` asset's real requirements diverge from what the package declares).
+
+---
+
+### C-272: The forecast serving-state and served-provenance are process-global, so one caller's refusal rewrites `/health` and `/provenance` for everyone
+
+| Field | Value |
+|-------|-------|
+| ID | C-272 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | Before issuing a second API key — or when diagnosing a `degraded` `/health` that no operator action and no log line for *your* key explains. Also when acting on `/provenance/forecast`'s `artifact_id`: it names the last run **any** caller was served, not yours. |
+| Location | `src/views_crafdapi/managers/dataset_service.py:131,135` (the two fields), `:137-152` (their accessors), `:236-241`, `:317-341` (where they are set), `src/views_crafdapi/managers/api.py:1037-1100` (`/health`), `:394-435` (`_forecast_lineage`) |
+
+Every cache layer in the service is keyed by `api_key_hash` — but `_forecast_serving_state` and `_last_forecast_provenance` are plain instance attributes on the single process-wide `DatasetService`. A request from key *B* that ends in `Refused` or `NoRun` sets `{"degraded": True, "reason": …}`, which flips `/health`'s `status` to `degraded` and attaches `refusal_reason` to `/provenance/forecast` for key *A*, whose own serve is healthy. The inverse holds too: *B*'s next successful serve clears the state *A*'s refusal set, so a genuinely degraded caller can be shown green.
+
+**C-233** already records the not-keyed-by-API-key property, but in a specific and now-historical context — as one of two reasons a since-removed `is_served` field reported wrongly in both directions. The surface that remains after that removal — the `degraded` flag that drives external monitoring (ADR-032) and the `artifact_id` an operator uses to identify what is live — is not covered there. Registering separately rather than extending C-233 because the fix differs: C-233 wants a signal that exists on the manifest-only path, this wants the existing signals keyed per caller.
+
+Masked today by the effectively single-key deployment, as with **C-236** and **C-269**.
+
+Cross-refs: **C-233** (same root, different surface), **C-254**, **C-269**, ADR-032 (which pages on the `/health` body this contaminates).
+
+---
+
+### C-273: `wandb_alert` redacts the literal string `"None"` when no path is supplied
+
+| Field | Value |
+|-------|-------|
+| ID | C-273 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When re-enabling W&B notifications — `wandb_notifications` is `False` on every current construction path, so this is dormant until someone turns it on. |
+| Location | `src/views_crafdapi/wandb/utils.py:13,34`, `tests/test_wandb_redaction.py:59` |
+
+The redaction is `str(text).replace(str(models_path), "[REDACTED]")`. With the parameter's default `models_path=None`, `str(None)` is `"None"`, so every occurrence of that substring in the alert body is replaced — garbling exactly the messages ("value is None", "returned None") an alert is most likely to carry. The suite characterizes this as a footgun and **pins** the behaviour (`test_models_path_none_redacts_literal_none_substring`) rather than correcting it, which is the right call for a characterization test and the reason it needs a register entry instead: the test records the defect, it does not schedule it. Unreachable today — `CrafdApiManager` is constructed with `wandb_notifications=False` and no serving path calls `wandb_alert` — hence Tier 4. Named fix: skip the replacement entirely when `models_path` is falsy.
+
+---
+
+### C-274: Three `xfail` tests documenting open priogrid concerns now pass, and nothing reports it
+
+| Field | Value |
+|-------|-------|
+| ID | C-274 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When next reading `C-61`–`C-65` as open concerns, or when considering `xfail_strict = true` in `pyproject.toml` — these three are the cases that would flip the suite red, and each needs a decision (gap closed → delete the xfail; assertion gone vacuous → fix it) before that switch. |
+| Location | `tests/test_falsify_priogrid_naming.py::TestP1_DatafactoryAlsoEmitsPriogridGid::test_datafactory_grid_to_dataframe_uses_priogrid_id`, `tests/test_falsify_shim_diagnosis.py::TestP1_MigrationTestCoverageGap::test_api_py_also_references_priogrid_gid`, `tests/test_falsify_shim_diagnosis.py::TestP4_CICDocumentsShimAsContract::test_fao_pgm_cic_does_not_guarantee_priogrid_gid`, `TESTING.md:75` |
+
+All three are marked `xfail` with the reason "documents open priogrid concerns C-61..C-65" and currently **XPASS** — verified 2026-08-18 via `uv run pytest -m "not integration" -rX` (1056 passed, 25 xfailed, **3 xpassed**). Under pytest's default non-strict setting an xpass neither fails the run nor appears in the default summary line's detail, so a documenting test that has started passing is indistinguishable, to anyone reading CI, from one still failing as designed. The gap it records may have closed upstream, or the assertion may have gone vacuous against changed source — the suite reports the same thing either way, and the register still lists C-61..C-65 as open on the strength of these tests.
+
+TESTING.md documents the xfail-vs-skip convention (skip for absent siblings, xfail for known gaps) but says nothing about what an xpass means or who acts on it. Same family as **C-243**: the suite's own claims drifting from what it measures.
+
+Cross-refs: **C-243**, inherited **C-61**–**C-65** (bodies not in this register — see **C-241**).
+
+---
+
+### C-275: A CIC in an ADR-006-governed directory declares "Related ADRs: None"
+
+| Field | Value |
+|-------|-------|
+| ID | C-275 |
+| Tier | 4 |
+| Source | graphify (2026-08-18) |
+| Trigger | When changing `PredictionStoreManager`'s selection, quarantine, or manifest-resolution behaviour and using its CIC to find which ADRs constrain the change — the header says none constrain it. Also when auditing CIC coverage under ADR-006, since this row reads as "checked, nothing applies" rather than "not filled in". |
+| Location | `docs/CICs/PredictionStoreManager.md:6` |
+
+Every other class contract in `docs/CICs/` names its governing ADRs, and seven of the nine name **ADR-006 ("this contract")** explicitly — the ADR that mandates the CIC's own existence. `PredictionStoreManager.md` alone declares `**Related ADRs:** None`.
+
+The claim is false on the file's own subject matter. `PredictionStoreManager` is where the ADR-013 §11.4 legacy-type transition guard lives (`manager.py:118-122`), where the C-71 quarantine blocklist and approval allowlist are applied, where `get_latest_manifest` implements the ADR-033 §2 manifest-first selection, and where `_provenance_from` builds the C-86 lineage record. ADR-006, ADR-013, ADR-033 and ADR-023 all bear on it directly.
+
+Registered rather than silently fixed because the interesting part is the failure mode, not the omission: an explicit **"None"** is a *declaration* under ADR-003, not a blank. A reader who trusts declarations — which this repository instructs them to do — concludes that no ADR governs the store manager and changes it without consulting one. A blank field would have prompted a check. Named fix: replace with the four ADRs above, or with `<to be filled>` if the audit has genuinely not been done.
+
+Cross-refs: **C-243** (docs asserting things about the code that are no longer true), **C-276** (the sibling CIC defect found in the same pass), ADR-006, ADR-003.
+
+---
+
+### C-276: `ForecastDataset.md`'s rename record was flattened by a global search-and-replace and now says nothing
+
+| Field | Value |
+|-------|-------|
+| ID | C-276 |
+| Tier | 4 |
+| Source | graphify (2026-08-18) |
+| Trigger | When tracing why `ForecastDataset` has a back-compat alias, or what the class was called before Phase 4a of #87 — this line is the only record and it no longer carries the old name. Also before running any future repo-wide identifier rename across `docs/`. |
+| Location | `docs/CICs/ForecastDataset.md:7` |
+
+The line reads:
+
+> **Supersedes (as the public leaf):** `ForecastDataset.md` (the class was renamed `ForecastDataset → ForecastDataset` in Phase 4a of #87; `ForecastDataset` is retained as a back-compat alias).
+
+A file that supersedes itself, and a rename from a name to the same name. The sentence was written to record a real event — the `_FAOPGMDataset`/`FAOForecastDataset`-era class becoming `ForecastDataset` during the un_fao → un_crafd clone — and a repo-wide rename pass then rewrote **both** sides of the arrow, destroying the only thing the sentence existed to preserve. The graph surfaced it as a self-edge: the extraction produced a `supersedes` relation whose source and target were the same node.
+
+Harmless to running code and to the served contract; it costs a reader the one recorded answer to "what was this called before, and why is there an alias". The same rename pass is the mechanism behind **C-257** (the `un_fao` → `un_crafd` launcher clone) — a class of change this repository has now been bitten by twice. Named fix: recover the pre-rename name from `git log --follow docs/CICs/ForecastDataset.md` and restate it, or delete the line and say plainly that the pre-clone name was lost.
+
+Cross-refs: **C-275** (found in the same pass), **C-257** (same rename-pass mechanism), **C-243**.
