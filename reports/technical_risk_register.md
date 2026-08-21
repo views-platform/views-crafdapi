@@ -6,8 +6,8 @@
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
 | Total Concerns    | 52                                             |
-| Open Concerns     | 48                                             |
-| Resolved Concerns | 4                                              |
+| Open Concerns     | 47                                             |
+| Resolved Concerns | 5                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -726,13 +726,29 @@ It has already failed. `dmesg` records **three OOM kills of views-faoapi on 2026
 
 Measured again after the v0.4.0 deploy, which changes *which* workload the ceiling must accommodate: the bulk endpoint in isolation now peaks at **6.0 G** (was 14.8 G), but the first request after a restart peaked at **16.8 G** because it included a cold load of both datasets — the historical leg's `pd.read_parquet` of 28.4M rows is a ~13 GB transient — registered locally as **C-263**. So a `MemoryMax=` set from the steady state would kill the service on every cold start, while one sized for the cold start does not fit beside faoapi's 5.9 G on a 22 GiB box (16.8 + 5.9 = 22.7). **C-263 has to move before this entry is satisfiable at all**; that is a dependency, not a preference.
 
+**Unblocked 2026-08-21 (C-263 resolved).** Measured on the box after v0.5.1, with the historical
+cache cleared so the streamed ingest ran: crafd **cold-start peak 7.3 G**, steady 3.7 G.
+
+| | crafd | + faoapi 5.9 G | of 22 GiB | headroom |
+|---|---|---|---|---|
+| v0.4.0 cold | 16.8 G | 22.7 G | | **−0.7 GiB — no ceiling fits** |
+| v0.5.1 cold | **7.3 G** | **13.2 G** | | **8.8 GiB** |
+
+So a ceiling is now settable from a measured cold start rather than a guess, which is exactly
+what this entry said had to happen first. Sizing is still a judgement — the cold start is the
+binding case, not the steady state, and both units need one.
+
+A temporary `MemoryMax=14G` was set on crafd via `systemctl set-property --runtime` as a seatbelt
+during the measurement. It is **runtime-only** — it disappears on reboot, applies to one unit,
+and is not this entry's answer. Treat it as scaffolding to remove or replace deliberately.
+
 S7 improves the arithmetic but does not address the coupling. `MemoryMax=` on both units converts "the box falls over and the kernel chooses a victim" into "this request fails, loudly, in the service that caused it" — a bounded local change, and the failure becomes attributable. Deliberately not bundled into the v0.4.0 deploy.
 
 Tracked as **#99**, blocked by **#98**. Cross-refs: **C-235** (resolved — what used to drive crafd's peak), **C-263** (what drives it now, and blocks this), **views-faoapi#418** (the neighbouring service's own memory defect).
 
 ---
 
-### C-263: The cold-start historical load is a ~13 GB transient, and it — not the aggregate path — is what the box cannot absorb
+### C-263 (RESOLVED): The cold-start historical load is a ~13 GB transient, and it — not the aggregate path — is what the box cannot absorb
 
 | Field | Value |
 |-------|-------|
@@ -798,9 +814,23 @@ per row) and is really ~0.7 GB; releasing the retained file bytes and the source
 genuine defects and moves the peak by **zero**; eliding three redundant frame copies buys
 ~15-20% wall time and also moves the peak by zero. The comment has been corrected in place.
 
-**The entry stays open, and C-262 stays blocked**, because the number that closes it —
-cold-start peak on the box, `systemctl restart` then one `/data/forecast/bulk` — has not been
-taken. The local measurement predicts ~16.8 G → ~11 G; that is a prediction, not a result.
+**RESOLVED (2026-08-21, v0.5.1 in production).** The number was taken on the box, with the
+historical value-dirs cleared first so the streamed ingest actually ran:
+
+| | v0.4.0 | v0.5.1 |
+|---|---|---|
+| cold-start peak RSS | **16.8 G** | **7.3 G** |
+| steady after the request | 6.0 G | 3.7 G |
+| `/data/forecast/bulk` | 200, 461,991 B, 25.8 s (warm) | 200, **461,991 B**, 62.1 s (cold) |
+
+**9.5 GB down, 2.3x**, and better than the ~11 G predicted — the prediction extrapolated a local
+baseline rather than the deployed one. The streamed path is confirmed to have executed
+(`Streamed historical value-dir: 28421738 rows, 439 months x 64742 cells`), not inferred. The
+byte count is identical to the v0.4.0 production run, so served output is unchanged end to end.
+
+**C-262 is unblocked.** 7.3 + 5.9 = 13.2 G of 22 GiB leaves 8.8 GiB of headroom, where the same
+arithmetic at 16.8 G gave −0.7 GiB and no satisfiable ceiling. The dependency this entry recorded
+is discharged.
 
 ---
 
@@ -1328,9 +1358,19 @@ Named options, none taken here: bump `_VALUE_SCHEMA_VERSION` when the ingest pat
 record the producing code version in the value-dir meta and refuse a mismatch (precise, but a new
 invariant on the hot path); or leave it manual and documented, which is the current position.
 
-Cross-refs: **C-263** (the change this currently masks), **C-138** (the decoupling that causes it,
-and was right), **C-278** (the other way the streamed path can silently not run), **C-236**,
-ADR-011.
+**The specific instance is discharged (2026-08-21); the mechanism is not.** The two historical
+value-dirs were cleared by hand, the service restarted, and the streamed ingest ran — confirmed
+in the journal, and the cold-start peak came in at 7.3 G against 16.8 G. So v0.5.1 is now both
+deployed *and* in effect.
+
+That took a manual step nothing enforces. The entry stays open because the next ingest change
+lands in exactly the same position: valid value-dirs, a green `/version`, and no surface
+reporting which path last ran. The measurement is the only thing that distinguished them, and it
+is not something anyone runs routinely.
+
+Cross-refs: **C-263** (RESOLVED — the change this masked until the cache was cleared), **C-138**
+(the decoupling that causes it, and was right), **C-278** (the other way the streamed path can
+silently not run), **C-236**, ADR-011.
 
 ---
 
