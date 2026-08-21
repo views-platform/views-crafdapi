@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 49                                             |
-| Open Concerns     | 45                                             |
+| Total Concerns    | 50                                             |
+| Open Concerns     | 46                                             |
 | Resolved Concerns | 4                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -1208,3 +1208,42 @@ being open-ended. An alert on unit state would be a monitoring change (ADR-032),
 
 Cross-refs: **C-262** (the same box, the other unbounded resource), **C-266** (a stale tag is one
 of the four refusals this used to loop on), **C-256**, ADR-022, ADR-032.
+
+---
+
+### C-281: The runbook labels which *user* to be and never which *host* — the third defect of this shape
+
+| Field | Value |
+|-------|-------|
+| ID | C-281 |
+| Tier | 4 |
+| Source | operator, 2026-08-21 (a pasted release block failed on the laptop) |
+| Trigger | When adding any command block to a runbook, state the host as well as the user — and when a third instance of a defect shape appears, treat the shape as the finding rather than fixing instance three and moving on. |
+| Location | `deployment/RELEASE_RUNBOOK.md` (the "Every future release" block and the measurement section), `tests/test_falsify_shutdown_safety.py::test_runbook_blocks_naming_the_deploy_user_say_they_run_on_the_box` |
+
+The recurring release block was labelled `# --- as your own user ---` and
+`# --- then as the deploy user ---`. Both name the *account*; neither names the *machine*. The
+first-stand-up section does say "From your **laptop**" and "Then SSH in", but that framing does
+not carry into the block an operator actually reuses every release.
+
+Pasted on a laptop it fails at the first line with `sudo: unknown user views-crafdapi-deploy`.
+The failure is **safe** — nothing is changed, and the account exists only on the box — but the
+reader has already been told to run it, and the block gives no cue that it was wrong.
+
+Fixed: explicit `=== ON THE BOX ===` markers on every block that invokes the deploy account, a
+sentence naming the exact error a laptop paste produces, and a guard asserting that any line
+invoking `sudo -u`/`sudo -iu views-crafdapi-deploy` has a host marker within the preceding 25
+lines. The guard's first version flagged prose that merely *mentions* the account and had to be
+narrowed to lines that *invoke* it — recorded because an over-broad guard that fires on correct
+text is how guards get disabled.
+
+**The entry exists for the shape, not the instance.** This is the third runbook-text defect in
+eight days: **C-265** (Step 7 stating the pre-delivery failure state as current), **C-266** (a
+real-looking `TAG=v0.4.0` that pastes cleanly and deploys the wrong version), and now a block
+that pastes cleanly on the wrong machine. All three read correctly and mislead in use, and all
+three were found by someone following the document rather than reviewing it. Rule of Three: the
+next runbook change should assume the reader is pasting without context, and say host, user, and
+expected output for every block.
+
+Cross-refs: **C-265**, **C-266** (both RESOLVED, same shape), **C-256** (one secret, several
+names — the same "reads fine, misleads in use" family).
