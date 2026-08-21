@@ -1,7 +1,6 @@
-# Declared done, not in effect — seven instances, one shape
+# Declared done, not in effect — eight instances, one shape
 
-*First draft, written 2026-08-21 after a day that produced three fresh instances in about six
-hours. Every fact below is read from a journal, a `systemctl` output, an HTTP response, a commit
+*Written 2026-08-21 after a day that produced four fresh instances in about six hours. Every fact below is read from a journal, a `systemctl` output, an HTTP response, a commit
 or an issue — not from memory. Governed by ADR-010; the live entry is **C-282**, which records
 one instance; this report is the argument that the shape is worth more than the instance.*
 
@@ -27,24 +26,55 @@ between the record and the running system.
 | **E** | `StartLimitIntervalSec`/`StartLimitBurst` present in the unit file | systemd ≥229 **silently ignores** them under `[Service]` | caught pre-merge | re-reading my own diff, then a test that parses sections rather than text |
 | **F** | C-266: "One variable, changed once, is why it is written this way" | The trap was reduced, not removed — `TAG=v0.4.0` still pasted cleanly | 2 releases | a falsification audit |
 | **G** | Byte-identity on the real 28.4M-row artifact, served-output equality on 1.55M rows, **8 mutation tests all green** | The row-ordering guard had a hole; the real artifact's global sortedness made it unreachable | through review | `/code-review medium`, constructing an input that violated the precondition across a row-group boundary |
+| **H** | views-faoapi#368: a "**24 GB** Hetzner box", and both services' ceilings sized from it (`11 GB each`) | `free -g`: **22 GiB, zero swap**. `11 + 11` is the entire machine | **12 days**, and it set both ceilings | `free -g`, one line |
+
+## Four ways it happens
+
+The eight are not one mechanism. Sorting them is what makes the remedies different.
+
+**1. An action recorded as done was not done.** (A, B) A tag exists and the deploy-tag file was
+never written; a unit file carries a cap and the box was never reloaded. In both cases the *code*
+half completed and the *activation* half did not, and the record covers only the first.
+
+**2. A fact recorded as established was never checked against the system.** (D, H) C-238 asserted
+a cause from reading code; the journal said otherwise. #368 asserted a box size; `free` said
+otherwise. **H is the costliest**, because the wrong fact was load-bearing: both services' ceilings
+were derived from it, and the pair it produced would have caused precisely the OOM the ceilings
+exist to prevent.
+
+H also has a name worth using: **GB versus GiB**. The plan is sold as 24 GB, the hostname says
+`ubuntu-24gb-…`, and 24 × 10⁹ bytes is 22.35 GiB, of which ~22 is usable. systemd's `11G` means
+11 **GiB**. Nobody was careless; two units were silently mixed, in a place where the arithmetic
+had to be exact.
+
+**3. A property assumed to follow from another.** (C, E) *Deployed* was taken to imply *running* —
+it did not, because the disk cache was still valid. *Present in the unit file* was taken to imply
+*in effect* — it would not have been, under `[Service]`. Nobody declared these; they were
+inferred, which is why nothing was written down to be wrong.
+
+**4. A verification believed to cover what it did not.** (F, G) A runbook fix that reduced a trap
+and claimed to have removed it. A test suite green on inputs that could not reach the defect.
 
 ## What actually caught them
 
 Two families, and neither is "read the artifact".
 
-**Read runtime state** — A, B, C, D. `/version`, `systemctl status`, the journal. In every case
-the system was willing to say what was true; nobody had asked.
+**Read runtime state** — A, B, C, D, H. `/version`, `systemctl status`, the journal, `free -g`. In
+every case the system was willing to say what was true; nobody had asked. Four of the five took a
+single command.
 
 **Attack the claim** — E, F, G. A test that parses a file the way its consumer does; a
 falsification audit; an adversarial input. Not "does this look right" but "construct the case
 where it isn't".
 
-**Reading the artifact caught nothing.** Not once in seven.
+**Reading the artifact caught nothing.** Not once in eight.
 
 ## The part that should be uncomfortable
 
-Three of the seven — B, C, D — were found **while investigating something else.** That is not a
-detection method; it is luck, and B ran 12 days on it.
+Four of the eight — B, C, D, H — were found **while investigating something else.** That is not a
+detection method; it is luck, and B and H each ran 12 days on it. H is the one that should worry
+us most: it was found because a merged ceiling looked suspicious, not because anything checks the
+number a ceiling is derived from.
 
 Worse for B: this repository had **already written the fact down.** C-262, dated 2026-08-18,
 records the installed faoapi unit as having no `MemoryMax=` — nine days after the repo acquired
@@ -93,6 +123,24 @@ Concrete, cheap, and in rough order of value.
    input that violates them. That is C-279.
 5. **When a fix reduces a trap without removing it, say so.** C-266's runbook text claimed the
    problem solved. The honest form is "reduced, and here is what remains".
+6. **Check the number a derived value is derived from.** H is the whole argument for this: two
+   ceilings, on two production services, computed from a box size nobody had run `free` against.
+   When a value is arithmetic on a constant, the constant is the thing to verify — and where the
+   constant carries a unit, verify the unit too.
+
+## A neighbouring family, not counted here
+
+C-281 tracks a different shape that showed up four times in the same twelve days: **a document
+that reads correctly and misleads in use** — a runbook step stating a pre-delivery failure state
+as current, a copy-paste block naming a real-but-stale tag, a block naming which user and not
+which host, and a pasted block corrupting its own input. A fifth arrived while this report was
+being written: a `free -g` in a code block, sent to an operator, that failed as
+`Command ' free' not found` because the block carried a non-breaking space.
+
+Related but distinct. C-281's instances are wrong *at the point of use*; these eight are wrong
+about *the state of the system*. Both are the record disagreeing with reality; only these eight
+are invisible until someone looks at the running system. Kept separate so neither remedy is
+diluted into the other.
 
 ## What this report does not claim
 
@@ -102,7 +150,9 @@ Concrete, cheap, and in rough order of value.
 - It does not claim the defences should be replaced. They should be *joined*.
 - Instance E was caught before merge and is included because it is the same shape, not because it
   escaped.
-- Seven instances from one repository over twelve days is not a base rate. It is enough to justify
+- Instance H spans two repositories, and this report is written from one of them. views-faoapi may
+  have context that changes it.
+- Eight instances from one repository over twelve days is not a base rate. It is enough to justify
   the habit changes above and not enough to justify machinery.
 
 ## Cross-references
