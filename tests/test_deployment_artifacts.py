@@ -169,3 +169,44 @@ class = "policy"
         assert "APPWRITE_DATASTORE_API_KEY" not in blob
         # eligibility exclusions are governed elsewhere and are not coordinates.
         assert "APPWRITE_CRAFD_APPROVED_FILE_IDS" not in blob
+
+
+class TestRestartLoopIsBounded:
+    """The deploy gate's refusals are deterministic, so an unbounded retry retries forever.
+
+    `Restart=always` + `RestartSec=5` against a tag that does not exist on origin, or a
+    tag/version mismatch, means the service 502s indefinitely while `systemctl status` reports
+    `activating` rather than `failed` — the shape of the 47-minute incident on 2026-08-15.
+    """
+
+    def _unit(self):
+        import configparser
+        cfg = configparser.ConfigParser(strict=False)
+        cfg.optionxform = str
+        cfg.read_string(_UNIT)
+        return cfg
+
+    def test_start_limit_directives_are_in_the_unit_section_not_service(self):
+        """systemd >= 229 reads these from [Unit]. Under [Service] they are IGNORED — the
+        hardening would be present in the file and absent in effect, which is worse than
+        missing. Ubuntu 24.04 ships systemd 255."""
+        cfg = self._unit()
+        for key in ("StartLimitIntervalSec", "StartLimitBurst"):
+            assert cfg.has_option("Unit", key), f"{key} must be under [Unit]"
+            assert not cfg.has_option("Service", key), (
+                f"{key} is under [Service], where systemd >= 229 ignores it silently"
+            )
+
+    def test_the_retry_budget_is_finite(self):
+        cfg = self._unit()
+        assert int(cfg.get("Unit", "StartLimitBurst")) > 0
+        assert int(cfg.get("Unit", "StartLimitIntervalSec")) > 0
+
+    def test_start_has_a_timeout(self):
+        """Without this a hung `uv sync`/`git fetch` in ExecStartPre blocks forever, and the
+        burst limit never trips because no attempt ever completes."""
+        cfg = self._unit()
+        assert cfg.has_option("Service", "TimeoutStartSec"), (
+            "ExecStartPre does network I/O; an untimed start can hang indefinitely"
+        )
+        assert int(cfg.get("Service", "TimeoutStartSec")) > 0

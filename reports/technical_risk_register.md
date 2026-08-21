@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 48                                             |
-| Open Concerns     | 44                                             |
+| Total Concerns    | 49                                             |
+| Open Concerns     | 45                                             |
 | Resolved Concerns | 4                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -166,6 +166,22 @@ Causal residual of inherited `C-07` (unbounded in-memory caches — body not in 
 
 `CrafdApiManager.__init__` calls `signal.signal(SIGINT/SIGTERM, self._signal_handler)` during app-factory construction, replacing the handlers uvicorn installs for graceful shutdown. `_signal_handler` runs `self._shutdown()` and then `sys.exit(0)` directly, so in-flight requests are not drained and the FastAPI `lifespan` shutdown block at `:169-177` does not run. Two concrete consequences: the `BackgroundTask(shutil.rmtree, tmpdir)` cleanup registered by `/data/forecast/bulk` (`:533-538`) can leak a per-request temp directory holding a full bulk parquet, and any future shutdown work placed in `lifespan` will be silently skipped. Under the production `Restart=always` systemd unit this path executes on every deploy and every restart. It is also a latent multi-worker blocker, since `signal.signal` raises `ValueError` when called off the main thread. Partially mitigated in that `_shutdown` is deliberately correct about *not* deleting the durable disk cache (inherited `C-66`), so a restart is cheap rather than a cold rebuild.
 
+**Confirmed in production 2026-08-21.** The predicted traceback, from the journal on an ordinary
+`systemctl restart`:
+
+```
+api.py:1116, in _signal_handler / sys.exit(0)
+SystemExit: 0
+During handling of the above exception, another exception occurred:
+  starlette/routing.py:645, in lifespan / await receive()
+asyncio.exceptions.CancelledError
+```
+
+`SystemExit` raised inside the running event loop, then `CancelledError` from starlette's
+lifespan receive — the `lifespan` shutdown block never completes. The unit still reports
+`Deactivated successfully`, so this is invisible unless the journal is read. Predicted from the
+code on 2026-08-10; observed 11 days later, on a restart nobody was investigating it for.
+
 See also `C-236` (both surface on the multi-worker trigger) and inherited `C-66` (body not in this register).
 
 ---
@@ -181,6 +197,28 @@ See also `C-236` (both surface on the multi-worker trigger) and inherited `C-66`
 | Location | `src/views_crafdapi/managers/model.py:594-654,557-592`, `src/views_crafdapi/managers/api.py:187-192,1225,1234,1265-1273`, `src/views_crafdapi/managers/dataset_service.py:462-469` |
 
 `create_app` constructs `APIPathManager("un_crafd", validate=False)` precisely because the `apis/un_crafd/` model-training tree is gitignored and absent from a clean deploy checkout (documented at `api.py:1265-1273`). All three config scripts therefore fail to load and `ModelManager.configs` is permanently `{}` in production. Where `_validate_appwrite_env` fails loud on a missing environment variable, the config layer fails silently: `historical_targets` falls back to auto-detecting "every column that is not an index or metadata column" (`dataset_service.py:465-468`), and `clear_cache` / `clear_manager_cache` are permanently false so `_maintenance`'s deliberate purge path is unreachable. Compounding this, `__load_config` returns `None` both when the file is missing and when `_validate_config_ast` refuses it as unsafe (`model.py:611-616`), so an operator cannot distinguish an absent config from a rejected one. The `host`/`port`/`workers` defaults are harmless in practice because the systemd unit invokes uvicorn directly.
+
+**Corrected 2026-08-21 from the production journal — the conclusion holds, the stated cause does
+not.** This entry says the scripts "fail to load" because the `apis/un_crafd/` tree is absent
+from a clean deploy checkout. The box says otherwise; every boot logs three ERRORs:
+
+```
+ERROR - Config config_deployment.py failed AST safety check — refusing to execute
+ERROR - Config config_hyperparameters.py failed AST safety check — refusing to execute
+ERROR - Config config_meta.py failed AST safety check — refusing to execute
+```
+
+`__load_config` only reaches that message when `self._script_paths.get(script_name)` is truthy —
+so the files **are** found, and `_validate_config_ast` is **rejecting** them (`_BLOCKED_MODULES`
+includes `os`, which an ordinary config script imports). `configs == {}` in production either
+way, so everything this entry concludes downstream is unaffected. What changes is the fix: the
+scripts are present and refused, not missing, so "make the tree available to the deploy" would
+not help.
+
+One thing the entry got exactly right, now observable: it warned that `__load_config` returns
+`None` for both an absent file and a rejected one, so "an operator cannot distinguish an absent
+config from a rejected one". Only the log line distinguishes them, and it took reading the
+journal for an unrelated reason to notice.
 
 ---
 
@@ -1116,3 +1154,57 @@ What makes it worth an entry is what did **not** catch it. The change shipped wi
 The lesson generalises past this module: a guard tested only against inputs that satisfy the precondition tests the happy path of the guard, not the guard. Fixed by carrying the last cell across the boundary, with a test that builds the three-row-group artifact directly.
 
 Cross-refs: **C-258** (Tier 1 for the pattern rather than the instance — a stated invariant violated while CI reported success), **C-243** (shape-only assertions), **C-263**.
+
+---
+
+### C-280: The deploy gate's refusals are deterministic, and nothing bounded the retry
+
+| Field | Value |
+|-------|-------|
+| ID | C-280 |
+| Tier | 2 |
+| Source | production journal + Better Stack incident history (2026-08-21) |
+| Trigger | When a deploy leaves the service 502ing for more than a minute or two, read the journal for `FATAL deploy-gate:` before assuming a slow start — and when adding any new refusal to `checkout-deploy-tag.sh`, check that it is one an operator can act on from `systemctl status` alone. |
+| Location | `deployment/views-crafdapi.service` (`Restart=always`, `RestartSec=5`), `scripts/checkout-deploy-tag.sh:19-65` (four `exit 1` paths) |
+
+`checkout-deploy-tag.sh` runs as `ExecStartPre` and refuses on four conditions: a missing or
+blank deploy-tag file, a tag absent from origin, a `uv sync --frozen` failure, and a
+tag-vs-package-version mismatch. Every one is **deterministic** — retrying changes nothing. The
+unit paired that with `Restart=always` and `RestartSec=5` and no start-limit, so a refused
+release retried every five seconds indefinitely: the socket never bound, nginx returned 502 for
+as long as it took a human to notice, and `systemctl status` reported `activating` rather than
+`failed`, because from systemd's point of view a start was always in progress.
+
+Measured, which is what separates this from the theory it replaced. A *successful* restart is
+**~3 seconds** (2026-08-21: stop 10:06:21, `deploy-gate: serving tag v0.4.0` 10:06:23, listening
+10:06:24), so the gate is not slow and the deploy path does not need restructuring. The Better
+Stack history is the other half: `crafdapi/ping` incidents of **47 min and 20 min on 2026-08-15**
+(the tag/version drift that produced `v0.2.1`) and **11 min on 2026-08-17**, all `Status 502`,
+all auto-resolved once someone fixed the underlying refusal. Those are failing gates, not slow
+starts.
+
+Fixed on this branch: `StartLimitIntervalSec=600` / `StartLimitBurst=30` under `[Unit]`, and
+`TimeoutStartSec=180` under `[Service]`. A failing attempt cycles in ~7 s, so the unit enters
+`failed` after ~3.5 minutes of refusals.
+
+The sizing is a trade and was got wrong first time. A tighter bound (5 attempts / 120 s, ~35 s)
+is right for the deterministic refusals, which never recover — but it converts a *transient*
+failure, a DNS blip on `git fetch --tags`, from "self-heals unattended" into "down until someone
+runs `systemctl start`". ~3.5 minutes is long enough for a real blip to clear and short enough
+that a broken release stops thrashing. The service is down either way — the change is that it is *visibly* down,
+stops thrashing git and uv against the network, and names the state in `systemctl status`.
+
+**The placement is the part worth remembering.** `StartLimitIntervalSec`/`StartLimitBurst` moved
+from `[Service]` to `[Unit]` in systemd 229 and are **silently ignored** under `[Service]`;
+Ubuntu 24.04 ships systemd 255. The first draft of the fix put them in `[Service]`, where the
+hardening would have been present in the file, absent in effect, and untested — a guard that
+reads as protection and is not. Now pinned by
+`tests/test_deployment_artifacts.py::TestRestartLoopIsBounded`, mutation-checked in both
+directions.
+
+Residual, deliberately not addressed here: a `failed` unit produces no alert of its own. Better
+Stack notices via `/ping`, which is the same 3-minute signal as before — the incident just stops
+being open-ended. An alert on unit state would be a monitoring change (ADR-032), not a unit one.
+
+Cross-refs: **C-262** (the same box, the other unbounded resource), **C-266** (a stale tag is one
+of the four refusals this used to loop on), **C-256**, ADR-022, ADR-032.
