@@ -16,6 +16,21 @@ Description=VIEWS CRAF'd Conflict Forecast API
 After=network-online.target
 Wants=network-online.target
 
+# Bound the restart loop. These are [Unit] directives, NOT [Service] — they moved in systemd 229
+# and are silently ignored if placed under [Service], which would make this hardening a no-op
+# that looks present. Ubuntu 24.04 ships systemd 255. Guarded by
+# tests/test_deployment_artifacts.py so a future edit cannot quietly move them back.
+#
+# Sizing is a trade, not a maximum. The gate's refusals are deterministic and will never
+# succeed on retry, so stopping early costs nothing there. But a *transient* failure — a DNS
+# blip on `git fetch --tags` — does recover, and an unbounded loop recovers from it unattended
+# while a bound turns it into "down until someone runs `systemctl start`". A failing attempt
+# cycles in ~7 s (≈2 s to fail + RestartSec=5), so 30 attempts is ≈3.5 minutes of retrying:
+# long enough that a real blip self-heals, short enough that a broken release stops thrashing
+# and shows `failed` instead of `activating` forever.
+StartLimitIntervalSec=600
+StartLimitBurst=30
+
 [Service]
 Type=exec
 User=views-crafdapi-deploy
@@ -25,8 +40,25 @@ ExecStartPre=/usr/bin/env bash /home/views-crafdapi-deploy/views-crafdapi/script
 ExecStart=/home/views-crafdapi-deploy/views-crafdapi/.venv/bin/uvicorn \
     views_crafdapi.managers.api:create_app \
     --factory --host 127.0.0.1 --port 8001
+# A *successful* start is ~3 s (measured 2026-08-21: stop 10:06:21, gate 10:06:23, listening
+# 10:06:24), so Restart=always costs nothing on the happy path. What it used to cost was the
+# unhappy one: the deploy gate's refusals are DETERMINISTIC — a tag absent from origin, a
+# tag/version mismatch, a lockfile `uv sync --frozen` rejects — so retrying them every 5 s
+# retries forever. The service 502s indefinitely and `systemctl status` reports `activating`,
+# never `failed`, which is how the 2026-08-15 tag-drift incident ran 47 minutes.
+#
+# Bounded now (see [Unit] above): the unit enters `failed` after ~3.5 minutes of refusals.
+# It is still down either way — the difference is that it is *visibly* down, stops thrashing
+# git/uv against the network, and `systemctl status` names the state. A transient failure
+# (a blip fetching tags) still recovers inside the burst.
 Restart=always
 RestartSec=5
+
+# Without this a hung `uv sync` or `git fetch` inside ExecStartPre blocks the start forever, and
+# the burst limit above never trips because no attempt ever *finishes*. 180 s is ~60x the
+# measured 3 s start — generous enough never to fire on a healthy deploy, and the only thing
+# that converts a hang into a countable failure.
+TimeoutStartSec=180
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=views-crafdapi

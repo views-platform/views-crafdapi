@@ -272,22 +272,98 @@ locally, served output byte-identical. **The production cold-start peak is the n
 release exists to obtain — take it during the deploy, per the section below.**).
 
 
-## Taking the v0.5.0 cold-start measurement
+## Taking a cold-start memory measurement
 
-v0.5.0 exists to move the cold-start peak, and that number does not exist until it is taken on
-the box. #99 (memory ceilings, C-262) is blocked on it — not on a code change. Take it in the
-same shape as the "before", or the two are not comparable:
+`#98`/C-263 needs the peak RSS of a **cold historical load** on the box. Two things make that
+harder than "restart and curl", and the first version of this section got both wrong — it is
+written out here so the next person does not repeat it.
+
+### It is not enough to restart
+
+A restart does **not** deploy a new version, and it does **not** clear the dataset cache.
+
+**Deploy first.** The service serves whatever tag the deploy-tag file names. Restarting without
+writing the file re-deploys the version already running — which is what happened on 2026-08-21,
+producing a normal restart window that was briefly mistaken for an outage. Use the `TAG=` block
+above, then confirm before going further:
 
 ```bash
-sudo systemctl restart views-crafdapi          # cold caches
+curl -s https://crafdapi.viewsforecasting.org/version    # version AND deployed_tag must be the new one
+```
+
+**Then clear the historical disk cache.** `CrafdDiskCacheManager` persists the historical dataset
+as a value-dir with a **3.5-week TTL**, deliberately surviving restarts (C-66). Its validity key
+is `CACHE_SCHEMA_VERSION`, derived from the meta layout and `value_format._VALUE_SCHEMA_VERSION`
+— so a release that changes neither leaves the existing entry valid, and the ingest path being
+measured never runs. `from_value(mmap=True)` returns the cached dataset in about a second, the
+process peaks near the steady state, and the number looks wonderful while measuring nothing.
+
+```bash
+# as the deploy user. These are caches — removing them costs one cold rebuild, which is the
+# thing being measured. There is one partition per API key (a salted HMAC of the key hash),
+# so clear all of them rather than guessing which key the request will use.
+sudo -u views-crafdapi-deploy bash -c \
+  'rm -rf /home/views-crafdapi-deploy/views-crafdapi/apis/un_crafd/cache/datasets/*_historical_value \
+          /home/views-crafdapi-deploy/views-crafdapi/apis/un_crafd/cache/datasets/*_historical_meta.json'
+```
+
+Leave `.partition_salt` alone — deleting it under running workers splits the partition namespace
+until they restart (#341).
+
+### The measurement
+
+```bash
+sudo systemctl restart views-crafdapi
 curl -s -o /dev/null -w '%{http_code} %{size_download} %{time_total}\n' \
      -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
      https://crafdapi.viewsforecasting.org/data/forecast/bulk
-systemctl status views-crafdapi | grep Memory   # the peak covers that one request
+systemctl status views-crafdapi | grep Memory     # the peak covers that one request
 ```
 
-Reference points, all measured before this release: cold start **16.8 G**, steady state **6.0 G**,
-`views-faoapi` resident **5.9 G**, box total **22 GiB**. The local prediction for v0.5.0 is
-~11 G cold; the criterion in #98 is "comfortably under ~14 G". Record what you actually see on
-**C-263** and in the ADR-030 addendum, whichever way it goes — a disappointing number is the
-useful one, because the fix is then not yet done.
+Expect `200`, a few hundred KB, and tens of seconds. A `502` means the restart has not finished
+binding the socket — wait and retry rather than concluding anything; see *"A restart is not an
+outage"* below.
+
+### Reference points
+
+All measured before v0.5.0: cold start **16.8 G**, steady state **6.0 G**, `views-faoapi`
+resident **5.9 G**, box total **22 GiB**. Local prediction for the streamed path is ~**11 G**
+cold; #98's criterion is "comfortably under ~14 G". Record what you actually see on **C-263** and
+in the ADR-030 addendum either way — a disappointing number is the useful one, because it means
+the fix is not done.
+
+## A restart is not an outage — and a long 502 is not a slow restart
+
+**A successful restart is about three seconds.** Measured on the box, 2026-08-21:
+
+```
+10:06:21  Stopping views-crafdapi.service...
+10:06:23  deploy-gate: serving tag v0.4.0 (v0.4.0, 1fb30b6)
+10:06:24  Uvicorn running on http://127.0.0.1:8001
+```
+
+`ExecStartPre` — `git fetch`, `git checkout`, `uv sync --frozen`, the version probe — took ~2 s,
+because `uv sync` is a genuine no-op when the tag's lockfile is already installed. During that
+window nginx has no upstream and returns **502 Bad Gateway**. If you curl immediately after
+`systemctl restart`, that is what you will see, and it means nothing.
+
+**So a 502 lasting minutes is not a slow start — it is a gate that is failing and retrying.**
+`Restart=always` with `RestartSec=5` retries a *deterministic* failure forever: a tag that does
+not exist on origin, a tag/version mismatch, a lockfile `uv sync --frozen` rejects. The gate is
+right to refuse, but nothing bounds the retry, so the service 502s indefinitely and
+`systemctl status` reports `activating`, never `failed`. That is the shape of the 47- and
+20-minute incidents on 2026-08-15 (the tag/version drift that produced `v0.2.1`) and the
+11-minute one on 2026-08-17.
+
+Diagnosis, in order:
+
+```bash
+systemctl status views-crafdapi --no-pager -l      # active(running) + ExecStartPre status=0/SUCCESS?
+sudo journalctl -u views-crafdapi -n 60 --no-pager  # `deploy-gate: serving tag ...` or a FATAL line
+```
+
+`journalctl` without `sudo` prints "No entries" unless your user is in `adm`/`systemd-journal` —
+that is a permissions artefact, not a silent service. The gate prints exactly one line on
+success and a `FATAL deploy-gate:` naming the cause on failure; that line is the whole diagnosis.
+
+Rollback is the `TAG=` block with the previous tag.
