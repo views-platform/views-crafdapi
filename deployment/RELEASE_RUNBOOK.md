@@ -199,14 +199,19 @@ faoapi (`views-faoapi` on :8000) is untouched throughout. Then tell the agent wh
 
 ## Every future release, forever after
 
+**Every command in this section runs ON THE BOX.** SSH in first. None of it works from a
+laptop — `views-crafdapi-deploy` does not exist there, so the first line fails with
+`sudo: unknown user views-crafdapi-deploy`. That failure is safe (nothing is changed) and it
+has happened, because the block below labels *which user* and never labelled *which host*.
+
 ```bash
-# --- as your own user ---
+# === ON THE BOX (ssh first) — as your own user ===
 TAG=vX.Y.Z   # <-- the ONLY line to change. Set it to the tag you are deploying.
 echo $TAG | sudo -u views-crafdapi-deploy tee /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
 sudo systemctl restart views-crafdapi
 curl -s https://crafdapi.viewsforecasting.org/version     # expect version AND deployed_tag = $TAG
 
-# --- then as the deploy user: the checkout is 0750, so `cd` into it fails for you ---
+# === still ON THE BOX — now as the deploy user: the checkout is 0750, so `cd` fails for you ===
 sudo -iu views-crafdapi-deploy
 cd views-crafdapi
 read -rsp "caller key: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
@@ -302,8 +307,8 @@ measured never runs. `from_value(mmap=True)` returns the cached dataset in about
 process peaks near the steady state, and the number looks wonderful while measuring nothing.
 
 ```bash
-# as the deploy user. These are caches — removing them costs one cold rebuild, which is the
-# thing being measured. There is one partition per API key (a salted HMAC of the key hash),
+# ON THE BOX, as the deploy user. These are caches — removing them costs one cold rebuild,
+# which is the thing being measured. There is one partition per API key (a salted HMAC of the key hash),
 # so clear all of them rather than guessing which key the request will use.
 sudo -u views-crafdapi-deploy bash -c \
   'rm -rf /home/views-crafdapi-deploy/views-crafdapi/apis/un_crafd/cache/datasets/*_historical_value \
@@ -316,6 +321,7 @@ until they restart (#341).
 ### The measurement
 
 ```bash
+# === ON THE BOX ===
 sudo systemctl restart views-crafdapi
 curl -s -o /dev/null -w '%{http_code} %{size_download} %{time_total}\n' \
      -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
@@ -361,6 +367,7 @@ right to refuse, but nothing bounds the retry, so the service 502s indefinitely 
 Diagnosis, in order:
 
 ```bash
+# === ON THE BOX ===
 systemctl status views-crafdapi --no-pager -l      # active(running) + ExecStartPre status=0/SUCCESS?
 sudo journalctl -u views-crafdapi -n 60 --no-pager  # `deploy-gate: serving tag ...` or a FATAL line
 ```
