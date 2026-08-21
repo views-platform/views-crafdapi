@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 50                                             |
-| Open Concerns     | 46                                             |
+| Total Concerns    | 52                                             |
+| Open Concerns     | 48                                             |
 | Resolved Concerns | 4                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -1283,3 +1283,90 @@ observability worked; the procedure did not.
 Cross-refs: **C-265**, **C-266** (both RESOLVED, same shape — and C-266's failure mode is the one
 this could reach quietly), **C-256** (one secret, several names — the same "reads fine, misleads
 in use" family), **C-167** (the dual source of truth `/version` exists to expose).
+
+---
+
+### C-282: A released ingest change can lie dormant behind a valid disk-cache entry — including, right now, the one v0.5.1 exists for
+
+| Field | Value |
+|-------|-------|
+| ID | C-282 |
+| Tier | 2 |
+| Source | deploy of v0.5.1 (2026-08-21) |
+| Trigger | When releasing any change to how an artifact is *ingested* — the parquet decode, `ForecastDataset` construction, the value-dir layout — decide before deploying whether it must take effect immediately. If it must, bump `_VALUE_SCHEMA_VERSION` (which invalidates the cache) or clear the affected entries; a deploy alone does not run it. Also whenever "is the fix live?" is asked about anything on the ingest path. |
+| Location | `src/views_crafdapi/managers/disk_cache.py::_derive_cache_schema_version` + `CACHE_SCHEMA_VERSION`, `src/views_crafdapi/data/value_format.py::_VALUE_SCHEMA_VERSION`, the disk gate at `src/views_crafdapi/managers/dataset_service.py:283-306` |
+
+`CACHE_SCHEMA_VERSION` is derived from the meta sidecar layout and `_VALUE_SCHEMA_VERSION`, and
+**deliberately not** from the code that produces the value — that decoupling is the C-138 fix, so
+a class rename no longer invalidates a 3.5-week cache. The consequence is the mirror image: a
+release that changes the *ingest path* but neither of those two inputs leaves every existing
+value-dir valid, and the new code does not run until the entry is superseded by a newer upstream
+artifact, expires at its 3.5-week TTL, or is cleared by hand.
+
+**This is live today.** v0.5.1 ships the streamed historical ingest (C-263), and the box holds two
+valid historical value-dirs (`063ff140…` written 2026-08-14, `a4efa5de…` written 2026-08-18) whose
+TTLs run to roughly 2026-09-07 and 2026-09-11. `/version` reports `0.5.1`, every check is green,
+and `historical_stream.stream_to_value` has not executed once. The service is running the new code
+and the old path.
+
+Nothing is wrong — the served numbers are byte-identical either way, which is the whole point of
+that gate — but two things follow that are easy to get wrong:
+
+- **"Deployed" and "in effect" are different questions on this path**, and only the first is
+  answerable from `/version`. There is no surface that reports which ingest path last ran.
+- **A measurement taken now measures the old path.** This is what makes #98's acceptance criterion
+  subtle: restart-and-curl reproduces the *warm-disk* number (~6 G), not the cold start, and it
+  looks like a spectacular result rather than a null one.
+
+Tier 2 rather than 3 because the failure is silent and self-congratulatory: the natural way to
+verify the fix confirms it, at the moment it is provably not running. Mitigated in
+`RELEASE_RUNBOOK.md` (the measurement section now clears the entries first and says why), not in
+code.
+
+Named options, none taken here: bump `_VALUE_SCHEMA_VERSION` when the ingest path changes
+(blunt — invalidates every partition, forcing a cold rebuild for every key on the next request);
+record the producing code version in the value-dir meta and refuse a mismatch (precise, but a new
+invariant on the hot path); or leave it manual and documented, which is the current position.
+
+Cross-refs: **C-263** (the change this currently masks), **C-138** (the decoupling that causes it,
+and was right), **C-278** (the other way the streamed path can silently not run), **C-236**,
+ADR-011.
+
+---
+
+### C-283: The release ritual has an undocumented step, and skipping it turns `check-branch` red for a reason unrelated to the change
+
+| Field | Value |
+|-------|-------|
+| ID | C-283 |
+| Tier | 3 |
+| Source | release of v0.5.1 (2026-08-21) |
+| Trigger | Immediately after merging any `development` → `main` release PR — merge `main` back into `development` before opening the next PR of any kind. Also when `check-branch` fails: read whether it is objecting to *your* branch or to the release topology before merging past it. |
+| Location | `.github/workflows/prevent_merge_when_branch_behind.yml:16-43`, `deployment/RELEASE_RUNBOOK.md` (which does not mention the step) |
+
+Merging `development` → `main` creates a merge commit **on `main` only**. `development` is then
+behind `main` by that commit, and `check-branch` — which asserts
+`git merge-base --is-ancestor origin/$branch HEAD` — correctly fails the *next* release PR. The
+remedy is to merge `main` back into `development` after each release, which the history shows has
+been done before (`1fb30b6`, PR #95's merge commit, appears in `development`'s history between
+PRs #94 and #96) but which **is written down nowhere**: not in the runbook, not in the workflow,
+not in the contributor protocols.
+
+On 2026-08-21 the step was skipped, PR #112 (`development` → `main`, v0.5.1) went red on
+`check-branch`, and it was merged anyway. The content was unaffected — `git diff main development`
+was empty, the trees were identical, and the failure was purely topological — but that was
+established *after* the merge, not before.
+
+The concern is not the red check; it is what the red check teaches. This repository has no branch
+protection and no required status checks — `gh api …/branches/main/protection` returns
+`404 Branch not protected` — so **every gate here is enforced socially**, and ADR-023 says so
+explicitly ("the gate is enforced at PR review"). A check that fails predictably for a reason
+unrelated to the change under review is precisely how a socially-enforced gate stops being
+enforced. C-74 and C-76 already record what red-by-default costs this project.
+
+Fixed for now by syncing (`3471b07`), so the next release PR starts green. The durable fix is one
+line in the runbook's release section — write it down, since the convention exists and has simply
+never been recorded — and it is deliberately not bundled into this entry's own branch.
+
+Cross-refs: **C-74**, **C-76** (red-by-default signal loss), **C-266** (the other release-ritual
+step that was documented but wrong), ADR-023 §"the gate is enforced at PR review".
