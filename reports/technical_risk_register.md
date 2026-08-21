@@ -5,9 +5,9 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 30                                             |
-| Open Concerns     | 28                                             |
-| Resolved Concerns | 2                                              |
+| Total Concerns    | 48                                             |
+| Open Concerns     | 44                                             |
+| Resolved Concerns | 4                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -226,7 +226,22 @@ See also `C-241` (both are governance artifacts that lag the code).
 | Trigger | When a contributor follows any inherited `C-xx` citation in a source comment (e.g. `C-155` at `grid_dataset.py:196`, `C-231` at `appwrite/manager.py:408`) to understand *why* a guard exists, they will find no entry — port the referenced upstream entries, or annotate each as inherited. Do this before the next audit adds entries that could be mistaken for the inherited ones. |
 | Location | `docs/ADRs/active/010_technical_risk_register.md:15`, `reports/technical_risk_register.md` (this file, created 2026-08-10), ~40 distinct IDs cited across `src/`, `tests/` and `docs/` |
 
-ADR-010 declares a register at `reports/technical_risk_register.md` as "a first-class governance artifact" and the single sink for all audit output. The file did not exist in this clone until this entry was written; `reports/` contained only `ops/betterstack_monitoring.md`. Meanwhile the source is unusually rich in register cross-references — `C-36`, `C-50`, `C-66`, `C-70`, `C-71`, `C-72`, `C-86`, `C-137`, `C-138`, `C-146`, `C-148`, `C-149`, `C-153`, `C-155`, `C-166`, `C-169`–`C-172`, `C-231`, `D-12`, `D-21`, `D-24` and more — and ADR-033 performs a formal register reconciliation at ratification. Every one of those citations is currently a dangling pointer. Two concrete consequences beyond lost context: the ID namespace had to be defended by hand (see the ID Namespace Note above), and three falsification probes now **xpass** (`test_falsify_priogrid_naming.py::TestP1…`, `test_falsify_shim_diagnosis.py::TestP1…` and `::TestP4_CICDocumentsShimAsContract::test_fao_pgm_cic_does_not_guarantee_priogrid_gid`) — meaning concerns recorded as open in the C-61..C-65 cluster may in fact be closed, with no artifact in which to record that.
+ADR-010 declares a register at `reports/technical_risk_register.md` as "a first-class governance artifact" and the single sink for all audit output. The file did not exist in this clone until this entry was written; `reports/` contained only `ops/betterstack_monitoring.md`. Meanwhile the source is unusually rich in register cross-references — `C-36`, `C-50`, `C-66`, `C-70`, `C-71`, `C-72`, `C-86`, `C-137`, `C-138`, `C-146`, `C-148`, `C-149`, `C-153`, `C-155`, `C-166`, `C-169`–`C-172`, `C-231`, `D-12`, `D-21`, `D-24` and more — and ADR-033 performs a formal register reconciliation at ratification. Every one of those citations is currently a dangling pointer. **Verified and worsened 2026-08-18.** Four of the cited IDs were resolved against views-faoapi's register, and the result is worse than "absent":
+
+| cited in crafdapi as | what it actually is in views-faoapi | verdict |
+|---|---|---|
+| `C-70` joint sampling / cross-cell correlation | "aggregation assumes cross-cell sample-index alignment" — **RESOLVED 2026-06-28** | meaning ok, closed, wrong repo |
+| `C-146` "cells with no GAUL code are excluded, not summed into a phantom unit" | "the pandas-to-edges parity harness is synthetic… ragged-S blind spot" — **RESOLVED 2026-06-28** | **meaning wrong** — we cite a sub-finding of its fix |
+| `C-155` sample/index row alignment | "`_sample_store` decouples samples from their index" — **RESOLVED 2026-06-28** | meaning ok, closed, wrong repo |
+| `C-169` "the 13 GB historical pandas load" | "historical is not shipped on the wire-contract path" | **meaning wrong** — that is delivery, not memory |
+
+So a reader following `C-146` from `reduction.py` finds nothing here, eventually finds faoapi's, and reads a *closed* concern about something else. That is worse than an uncited comment, because it reads as authoritative provenance.
+
+The ADR-030 S7 work (PRs #93/#97) **added six more** rather than reducing them — `C-146` at `forecast/aggregate/reduction.py:49` and `tests/forecast/test_aggregate_path_is_array_native.py:92,117`, `C-70` at `reduction.py:88` and `test_aggregate_path_is_array_native.py:124`, `C-169` at `ADR-030:177,188`. The memory concern that `C-169` was standing in for now has a local entry, **C-263**.
+
+This is the same shape as **#58** (`ADR-017` colliding across three repos, fixed by a `vcr_`/`vmo_`/`vpp_` prefix): identifiers inherited from a parent repo and used unqualified in a clone. Whatever resolves #58 should resolve this. Tracked as **#101**.
+
+Two concrete consequences beyond lost context: the ID namespace had to be defended by hand (see the ID Namespace Note above), and three falsification probes now **xpass** (`test_falsify_priogrid_naming.py::TestP1…`, `test_falsify_shim_diagnosis.py::TestP1…` and `::TestP4_CICDocumentsShimAsContract::test_fao_pgm_cic_does_not_guarantee_priogrid_gid`) — meaning concerns recorded as open in the C-61..C-65 cluster may in fact be closed, with no artifact in which to record that.
 
 See also `C-240` (governance artifacts lagging the code) and `C-243` (the other stale governance document).
 
@@ -379,9 +394,11 @@ The dtype is, however, an **in-band discriminator**: a real join yields `float32
 | Tier | 4 |
 | Source | /code-review max on S1 (seam-contract D2, epic views-faoapi#383) (2026-08-12) |
 | Trigger | The next reader follows `README.md:17`'s pinned URL / believes `platform-001-v1.2.0` is the current seam-contract edition when repointing or onboarding. |
-| Location | `README.md:17-19` |
+| Location | `README.md:17-19`, `docs/ADRs/active/035_deploy_time_coordinate_provisioning.md:25-26,138-141` |
 
 The README pins the Appwrite Seam Contract at `platform-001-v1.2.0` and describes a "v1.3.0 rename untagged" — stale: views-appwrite now publishes `appwrite-seam-v1.5.x` tags (current `v1.5.2`) and the contract file was renamed `PLATFORM-001` → "The Appwrite Seam Contract". S1 added a D2 binding note directly below (correctly citing `v1.5.2`), so the two now visibly disagree. **Doc-drift, no runtime effect** — the D2 binding pins `v1.5.2` in code (`seam_contract.REGISTRY_PIN_TAG`), not the README. crafd's equivalent of views-faoapi#340; deliberately out of S1 scope (contract-version tracking is its own concern). Named fix: a crafd doc-hygiene pass refreshing the README seam pin to the current published tag + renamed contract, mirroring faoapi#340.
+
+**Extended 2026-08-18 (graphify): the pin is stated in three places at three different editions, and one of them is an ADR.** The graph's citation extraction put `README.md`, `seam_contract.py` and ADR-035 on the same `appwrite-seam` node and they disagree: the README says `platform-001-v1.2.0`, **ADR-035 says `appwrite-seam-v1.4.4`** (four pinned URLs — `:25-26` in Context, `:138-141` in the evidence block), and the code says `appwrite-seam-v1.5.2`. The original entry framed this as README-vs-code doc drift with "no runtime effect", which held while the README was the only stale copy. ADR-035 is different in kind: under ADR-000 an ADR is the source of truth when code and ADRs disagree, so a reader resolving the contradiction *by the rules* lands on `v1.4.4` — an edition that predates the `UNCRAFD_CONSUMER_DOCUMENT_NAME` row the binding test requires (that row exists only from `v1.5.2`, per `seam_contract.py:34` and the resolved C-249). Still no runtime effect today, because `REGISTRY_PIN_TAG` is what CI reads. Tier stays 4 on that basis; the fix now has to cover ADR-035, not just the README.
 
 ---
 
@@ -516,6 +533,10 @@ The consequence is not theoretical: an absent key fails as `401 … User (role: 
 
 Mitigated in this change: `README.md` now carries a table distinguishing all three, and `01`/`02` fail at their first cell with the remedy. What is **not** mitigated is that nothing enforces the table against `RELEASE_RUNBOOK.md` — they can drift again, and `tests/test_doc_accuracy.py`'s checks do not cover it.
 
+**Recurred 2026-08-18**, during the v0.4.0 deploy, costing four exchanges mid-release. Three distinct failures in one sitting: a placeholder pasted verbatim as the key (`401 … not authorized`); `APPWRITE_DATASTORE_API_KEY not set` after `read` swallowed the following line; and the operator asking, correctly, why the name in their password manager matched none of the names used in the docs or by the agent guiding them. One secret had been referred to as `APPWRITE_DATASTORE_API_KEY`, "CRAF'd caller key", "CRAF'd caller/read-scoped key" and "Appwrite caller key — CRAF'd" within a single session.
+
+Mitigated further in this change: `RELEASE_RUNBOOK.md` now carries a table mapping **password-manager entry name → env var → what uses it**, names the password manager as the source of truth, and gives a `curl /health` check that verifies a key returns 200 before it is pasted anywhere. What is still not enforced is agreement between that table and `README.md`.
+
 Cross-refs **C-84** (both keys expire 2026-11-17 — the named trigger), **#28**.
 
 ---
@@ -606,7 +627,7 @@ Fixed in PR #93 before merge (the historical leg keeps the pre-S7 pandas path) a
 
 PR #93 replaced `super().get_subset_dataframe(...)` with a direct `_sample_array` read on the aggregate path and silently lost all four. Measured consequences before the fix: `sample_idx=-1` wrapped to the last draw and served a **zero-width credible interval** (`hdi90_lower == hdi90_upper == map`) as a real posterior, where the cell path still raised; `features=['typo']` degraded from a descriptive `ValueError` to HTTP 500 with body `"'typo'"`; `features=[]` flipped from an empty result to a full multi-target aggregate.
 
-Fixed in PR #93 by re-adding the validations, which leaves **two copies**. The residual risk is that they drift. Extracting them to a named boundary check is the real fix and is deliberately not done here (scope). Cross-refs: **C-247** (`severe_scenario` degenerating under sample subsetting — the same input, a different failure).
+Fixed in PR #93 by re-adding the validations, which leaves **two copies**. The residual risk is that they drift. Extracting them to a named boundary check is the real fix and is deliberately not done here (scope). Tracked as **#100**. Cross-refs: **C-247** (`severe_scenario` degenerating under sample subsetting — the same input, a different failure).
 
 ---
 
@@ -622,7 +643,7 @@ Fixed in PR #93 by re-adding the validations, which leaves **two copies**. The r
 
 The same logical operation — joint-sum `(N, S)` cell samples to a geographic level — now has two implementations. ADR-030's S7 addendum calls the duplication deliberate (WET; the two paths return different things and one caller genuinely wants a DataFrame), and that reasoning stands. What is *not* deliberate is that they already differ in three ways: the code→unit mapping (`np.unique`, sorted, vs `pd.factorize`, order-of-appearance), the missing-code predicate (`has_level_code` vs the `-1` sentinel), and — until fixed — float width for historical data.
 
-`tests/forecast/test_cross_level_aggregate.py` proves `elementwise_sum` ≡ `aggregate_via_leaf`. Nothing proves the two joint-sum paths agree. Duplication is acceptable; undetected divergence between duplicates is what this entry tracks.
+`tests/forecast/test_cross_level_aggregate.py` proves `elementwise_sum` ≡ `aggregate_via_leaf`. Nothing proves the two joint-sum paths agree. Duplication is acceptable; undetected divergence between duplicates is what this entry tracks. Tracked as **#100**.
 
 ---
 
@@ -638,4 +659,460 @@ The same logical operation — joint-sum `(N, S)` cell samples to a geographic l
 
 `LEVEL_METADATA_COLUMNS` declares which metadata columns each served level carries. Nothing validates that `geo_metadata` actually has them. The pre-S7 aggregate path guarded each column with `if meta_col in aggregated_df.columns` and **silently omitted** any that were missing — so a `geo.parquet` written by an older schema yields a response quietly missing `admin1_gaul0_name`, with a 200 and no signal. `__init__` reindexes for uniqueness but does not check the column set; `from_value` assigns `pd.read_parquet(...)` with no check at all.
 
-PR #93 preserves the silent-skip behaviour deliberately, to keep the change behaviour-neutral. The underlying gap is registered rather than fixed inside a performance PR. Cross-refs: **C-244** (schema documented at 36 columns against 45 in code) — both are the served column set drifting from its declaration.
+PR #93 preserves the silent-skip behaviour deliberately, to keep the change behaviour-neutral. The underlying gap is registered rather than fixed inside a performance PR. Tracked as **#100**. Cross-refs: **C-244** (schema documented at 36 columns against 45 in code) — both are the served column set drifting from its declaration.
+
+---
+
+### C-262: Neither service on the shared box has a memory ceiling, and the box has already run out three times
+
+| Field | Value |
+|-------|-------|
+| ID | C-262 |
+| Tier | 2 |
+| Source | production `dmesg` + `systemctl status`, taken during the v0.4.0 deploy (2026-08-18) |
+| Trigger | Before the next dataset grows — a longer month horizon, the ADR-034 `ADDITIONAL_TARGETS` list, or a finer grain — check the peak of BOTH units against the box total, not just the one you changed. Also check this before adding any endpoint that materialises a full-history frame. |
+| Location | `/etc/systemd/system/views-crafdapi.service`, `/etc/systemd/system/views-faoapi.service` (neither declares `MemoryMax=`); `deployment/RELEASE_RUNBOOK.md` |
+
+`views-crafdapi` and `views-faoapi` share one 22 GiB host. Measured on 2026-08-18, before the S7 deploy:
+
+| | |
+|---|---|
+| box total | 22 GiB |
+| `views-faoapi` `MemoryCurrent` | 5.9 G |
+| `views-crafdapi` (v0.3.0, 21 h uptime) | 7.8 G, **peak 14.8 G** |
+| available | 13 GiB |
+
+crafd's own peak plus faoapi's resident set is **20.7 of 22 GiB**. There is no headroom left over, and nothing enforces a share.
+
+It has already failed. `dmesg` records **three OOM kills of views-faoapi on 2026-08-14** (06:45, 07:10, 07:26) at ~23.3 GB anonymous RSS each — and crucially `constraint=CONSTRAINT_NONE ... global_oom`, meaning the *whole box* exhausted memory rather than a cgroup limit being enforced. The kernel picked faoapi because it was the largest consumer at that moment. On a different request mix it would have picked crafdapi, and a faoapi request would have taken down the CRAF'd API with no crafd-side signal at all. That coupling is the concern; the OOM itself is views-faoapi#418's problem.
+
+Measured again after the v0.4.0 deploy, which changes *which* workload the ceiling must accommodate: the bulk endpoint in isolation now peaks at **6.0 G** (was 14.8 G), but the first request after a restart peaked at **16.8 G** because it included a cold load of both datasets — the historical leg's `pd.read_parquet` of 28.4M rows is a ~13 GB transient — registered locally as **C-263**. So a `MemoryMax=` set from the steady state would kill the service on every cold start, while one sized for the cold start does not fit beside faoapi's 5.9 G on a 22 GiB box (16.8 + 5.9 = 22.7). **C-263 has to move before this entry is satisfiable at all**; that is a dependency, not a preference.
+
+S7 improves the arithmetic but does not address the coupling. `MemoryMax=` on both units converts "the box falls over and the kernel chooses a victim" into "this request fails, loudly, in the service that caused it" — a bounded local change, and the failure becomes attributable. Deliberately not bundled into the v0.4.0 deploy.
+
+Tracked as **#99**, blocked by **#98**. Cross-refs: **C-235** (resolved — what used to drive crafd's peak), **C-263** (what drives it now, and blocks this), **views-faoapi#418** (the neighbouring service's own memory defect).
+
+---
+
+### C-263: The cold-start historical load is a ~13 GB transient, and it — not the aggregate path — is what the box cannot absorb
+
+| Field | Value |
+|-------|-------|
+| ID | C-263 |
+| Tier | 2 |
+| Source | production measurement during the v0.4.0 deploy (2026-08-18) |
+| Trigger | Before setting `MemoryMax=` on either co-hosted unit (C-262), measure the **first request after a restart**, not the steady state — they differ by ~2.8x. Also re-measure this before the historical artifact grows (a longer horizon, a finer grain, or additional targets). |
+| Location | `src/views_crafdapi/managers/dataset_service.py` — the historical leg's `pd.read_parquet` of the 28.4M-row artifact (`:414` reads the parquet, `:520` logs the row count) |
+
+Measured on the deployed service, same endpoint, twice:
+
+| | peak RSS |
+|---|---|
+| first request after `systemctl restart` (cold caches) | **16.8 G** |
+| after a restart with the disk cache warm, bulk endpoint only | **6.0 G** |
+
+The difference is the historical leg being decoded from parquet into pandas. ADR-030 S7 removed the aggregate path's contribution (v0.3.0 ran at `peak: 14.8G`); what is left at 16.8 G is dominated by this load.
+
+**Why it is Tier 2 rather than a performance note.** It is the binding constraint on a shared host, and it makes C-262 unsatisfiable as stated:
+
+| | |
+|---|---|
+| box total | 22 GiB |
+| crafd cold-start peak | 16.8 G |
+| views-faoapi resident | 5.9 G |
+| **sum** | **22.7 G** |
+
+There is no `MemoryMax=` for crafd that both survives a cold start and leaves faoapi its memory. Sized from the 6.0 G steady state, the service dies on every restart; sized for the cold start, it does not fit beside its neighbour. Something has to give on this side first.
+
+**Not to be confused with views-faoapi's C-169**, which this repo's code and ADR-030 both cite for it. That entry is *"historical is not shipped on the wire-contract path — a cutover silently freezes FAO historical / `s_actual`"* — a **delivery** concern, not a memory one, and it lives in a different repo's register (see **C-241**, **#58**). The memory cost recorded here was tracked in neither repo before this entry.
+
+Tracked as **#98** (blocks **#99**). Cross-refs: **C-262** (the ceiling this blocks), **C-241** (why the C-169 citation resolves nowhere here), **C-236** (caches bounded by entry count, not bytes).
+
+**Addressed in code 2026-08-18 (branch `perf/c263-cold-start-historical`, not yet deployed).**
+The cause was not the parquet decode on its own: it is that the decoded frame and the
+constructor's copies of it are resident **simultaneously**, so the peak is their sum. Freeing
+afterwards cannot lower a peak that has already occurred — measured, and it does not.
+
+`forecast/ingestion/historical_stream.py` now assembles the value-dir a row group at a time
+(float64 blocks straight into `open_memmap`, geography appended to an open `ParquetWriter`),
+adopted with the same `write_value_dir` the wire path uses and read back mmap'd. Measured on the
+real artifact, both figures on the same host in the same state: **3.940 GB peak above baseline
+against 12.205 GB** for the in-memory path — a 3.1x reduction, 8.27 GB saved — and near-flat
+rather than linear in row count (0.354 GB at 60 months, 0.274 GB at 120). It is *slower*: 36.5 s
+against 26.5 s, because the loader makes two passes; that trade is deliberate on a memory-bound
+box. Byte-identical — manifest, index and every float64 feature block byte-for-byte, geo table
+including category order, and the served outputs on 1.55M real rows (the C-258 `country`
+aggregate, the gaul1 subset, the bulk `s_actual`, a cell-level subset).
+
+*Two numbers in the first version of this note were corrected on 2026-08-21.* The in-memory peak
+was given as "~9.4 GB extrapolated" — linear from the 120-month row, taken because the dev host
+had 9.6 GB free. Measured with 19 GB free it is **12.205 GB**: the path grows superlinearly and
+the extrapolation understated it by 30%, in the direction that flattered the change. And the
+"~15-20% wall time" credited to the copy elisions was a blended, confounded figure; measured
+separately they are worth ~9%, while the fourth change — validating `country_iso_a3` against
+`.cat.categories` instead of `.astype(str)` over every row — is **135x** on that call (2.384 s to
+0.018 s at 3.9M rows, ~17 s at full scale) and is the real wall-time win.
+
+Three plausible causes were measured and rejected first, and are worth keeping because each
+would otherwise be re-proposed: the "~6-7 GB of object-dtype geography strings" named in this
+repo's own source comment is a `memory_usage(deep=True)` artifact (shared strings counted once
+per row) and is really ~0.7 GB; releasing the retained file bytes and the source frame fixes two
+genuine defects and moves the peak by **zero**; eliding three redundant frame copies buys
+~15-20% wall time and also moves the peak by zero. The comment has been corrected in place.
+
+**The entry stays open, and C-262 stays blocked**, because the number that closes it —
+cold-start peak on the box, `systemctl restart` then one `/data/forecast/bulk` — has not been
+taken. The local measurement predicts ~16.8 G → ~11 G; that is a prediction, not a result.
+
+---
+
+### C-264: A 401 tells an unauthenticated caller which Appwrite operation failed
+
+| Field | Value |
+|-------|-------|
+| ID | C-264 |
+| Tier | 4 |
+| Source | observed during the v0.4.0 deploy smoke test (2026-08-18) |
+| Trigger | Before the repo goes public (epic #315's crafdapi equivalent, **#38**), or when adding any new auth failure path — return a fixed string to the caller and log the detail server-side. |
+| Location | `src/views_crafdapi/managers/api.py:318` and `:333`; the message originates at `src/views_crafdapi/managers/appwrite/manager.py:965` |
+
+`api.py:318` builds the 401 body by interpolating the validation error:
+
+```python
+detail=f"Invalid API key: {validation_result.error or 'Authentication failed'}"
+```
+
+and that error is composed upstream as `f"List buckets failed: {e.message}"`. A caller presenting *any* wrong key therefore receives:
+
+```
+401  Invalid API key: List buckets failed: The current user is not authorized to
+     perform the requested action.
+```
+
+which discloses that the backend is Appwrite, that the key is validated by attempting a bucket listing, and the provider's own wording. Observed live while a placeholder was pasted as a key. `api.py:333` has the same shape with `{str(e)}`.
+
+No credential or data is exposed and the request is correctly refused, hence Tier 4. The cost is that an unauthenticated probe learns the storage backend and one of its operations for free. The fix is a fixed client-facing string with the detail logged, not returned. Tracked as **#102**.
+
+---
+
+### C-265 (RESOLVED): Runbook Step 7 states the pre-delivery failure state as the current expectation
+
+| Field | Value |
+|-------|-------|
+| ID | C-265 |
+| Tier | 3 |
+| Source | falsify (2026-08-18, "it is now safe to shutdown this session") |
+| Trigger | Before the next deploy verification, or the first time anyone other than the author follows the release procedure — read Step 7 against what the service actually does today, not against what it did at stand-up. |
+| Location | `deployment/RELEASE_RUNBOOK.md:158-168` |
+
+Step 7 instructs the reader:
+
+> *"because the CRAF'd bucket is empty, the forecast/historical coverage checks will report **503 (fail-visible)** — that is **expected and correct** until the producer's first delivery, *not* a broken deploy. What must pass now is `ping` and `version = 0.1.0`."*
+
+The first delivery landed **2026-07-27**. The service serves **0.4.0** and `smoke.py` returns **ALL PASS**. A reader following Step 7 to verify a deploy today is told to expect a failure state that would now indicate a real outage — and told to accept it as correct. The document does not lie about a past event; it states a stale expectation in the present tense, inside a procedure meant to be followed.
+
+The staleness was identified during the v0.4.0 deploy and explicitly promised as a follow-up ("I'll fix that stale text in the runbook separately"). It was not done, and nothing outside that conversation recorded the promise. **That is the part that makes this a register entry rather than a typo**: the loss mode was an undone commitment held only in a chat log, not a missing measurement — every measurement from that session did survive.
+
+Fix: mark Step 7 explicitly as the historical first stand-up, or restate its expectations for a service that has data. Enforced by `tests/test_falsify_shutdown_safety.py::test_runbook_does_not_tell_the_reader_to_expect_the_pre_delivery_failure_state`.
+
+
+**RESOLVED (2026-08-21, release/v0.5.0).** Step 7 is now explicitly framed as the record of the
+2026-08-02 first stand-up, with a block quote stating the current expectation directly: the first
+delivery landed 2026-07-27, `smoke.py` returns ALL PASS, and a 503 from the coverage checks is a
+real outage rather than an expected state. Readers are pointed at the recurring "Every future
+release" block for any deploy after the first. Enforced by
+`tests/test_falsify_shutdown_safety.py::test_runbook_does_not_tell_the_reader_to_expect_the_pre_delivery_failure_state`,
+which had been `xfail(strict=True)` and is now an ordinary passing guard.
+---
+
+### C-266 (RESOLVED): The release block still hardcodes a real-looking tag — the trap it was rewritten to remove
+
+| Field | Value |
+|-------|-------|
+| ID | C-266 |
+| Tier | 3 |
+| Source | falsify (2026-08-18, "it is now safe to shutdown this session") |
+| Trigger | At the next release, **before** pasting the "Every future release" block onto the box — confirm the tag in it is the one you intend to deploy, not the one the last release left behind. |
+| Location | `deployment/RELEASE_RUNBOOK.md:199` |
+
+Before v0.4.0 this block named `v0.2.0` **twice**, two releases after that stopped being current. Pasting it unedited would have written `v0.2.0` to the deploy-tag file and passed `--expect-tag v0.2.0` to `smoke.py` — silently rolling production back while reporting success, because both copies agreed with each other.
+
+It was rewritten to a single `TAG=` variable, and the runbook now asserts *"One variable, changed once, is why it is written this way."* That claim overstates the fix. The block reads:
+
+```bash
+TAG=v0.4.0   # <-- the ONLY line to change. Set it to the tag you are deploying.
+```
+
+The duplication is gone; **the trap is not**. `v0.4.0` is a real, plausible tag that pastes cleanly and will be stale at the next release exactly as `v0.2.0` was. The comment mitigates but does not prevent — and the original failure happened precisely because someone was moving fast enough not to read.
+
+A placeholder (`TAG=vX.Y.Z`) fails at the deploy gate on an unedited paste, which is the correct direction: a stale placeholder fails loudly, a stale real tag succeeds wrongly. Enforced by `tests/test_falsify_shutdown_safety.py::test_runbook_release_block_does_not_hardcode_a_real_looking_tag`.
+
+Cross-refs: **C-167** shape (tag/version dual source of truth) and the 2026-08-15 deploy-gate outage, which is what taught this repo that a tag naming the wrong thing is an outage, not a nit.
+
+
+**RESOLVED (2026-08-21, release/v0.5.0).** The block reads `TAG=vX.Y.Z`, and the smoke line now
+uses `--expect-tag "$TAG"` rather than a second written-out tag. An unedited paste fails at the
+deploy gate — `checkout-deploy-tag.sh` cannot resolve `refs/tags/vX.Y.Z` and refuses — which is
+the direction the entry asked for: a stale placeholder fails loudly, a stale real tag succeeds at
+deploying the wrong version. Enforced by
+`tests/test_falsify_shutdown_safety.py::test_runbook_release_block_does_not_hardcode_a_real_looking_tag`,
+previously `xfail(strict=True)`, now an ordinary passing guard.
+
+Worth keeping in view: `v0.4.0` in that slot *was* the fix for the `v0.2.0` trap, and it
+reintroduced the same defect one release later. The un-xfailed test is what stops a third round.
+---
+
+### C-267: An unknown entity id is answered with an empty 200, not a rejection — at every level, on every path
+
+| Field | Value |
+|-------|-------|
+| ID | C-267 |
+| Tier | 2 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When a consumer reports "the API returns nothing for country X", check the id against `geo_metadata` before concluding the forecast is empty. And when adding a new served level or a new entity vocabulary (M49 codes, a GAUL edition bump), add the existence check — there is none to copy. |
+| Location | `src/views_crafdapi/data/handlers/forecast_dataset.py:665-670` and `:927-932` (code→cell resolution), `src/views_crafdapi/forecast/geography/metadata_table.py:28` (`resolve_level_cells`), `src/views_crafdapi/data/handlers/grid_dataset.py:958-982` (`_subset_mask`), `:1292` (the guard that never fires), `src/views_crafdapi/managers/api.py:641-700` |
+
+Both `calculate_hdi_map` and `get_subset_dataframe` resolve a caller's entity codes to PRIO-GRID cells **before** any validation runs. `resolve_level_cells` returns `[]` for a code no cell carries, `entity_ids` becomes `[]`, and `_subset_mask`'s `.isin([])` selects nothing — so the base class's `KeyError: Invalid entity IDs` (`grid_dataset.py:1292`) is handed an empty set and never fires. The check exists; the resolution step upstream of it guarantees it has nothing to reject.
+
+Verified on the repo's own fixture (`make_fao_df`, ISO3s `AAA`/`BBB`): `calculate_hdi_map(entity_ids=['ZZZ'], level='country')` returns `(0, 33)` un-aggregated and `(0, 24)` aggregated; `get_subset_dataframe(entity_ids=['ZZZ'], level='country', aggregate=True)` returns `(0, 2)`; `calculate_hdi_map(entity_ids=[999999], level='gaul1', aggregate=True)` returns `(0, 24)`. All surface as HTTP 200, `success: true`, `shape: [0, N]`.
+
+What makes this a concern rather than a documented policy is the **inconsistency**: the same endpoint answers a bad `time_ids` with `KeyError` → HTTP 500 and a bad `features` with `ValueError` → HTTP 500. Three parameters, three behaviours, one of them silent. A consumer who writes `GRB` for `GBR` — or holds a GAUL code retired by a boundary revision — receives a well-formed "no fatalities predicted" where they should receive a rejection, and nothing in the response, the logs, or `/health` distinguishes that from a genuine zero. The same class as **C-232** (a healthy-looking empty answer), reached by a different mechanism, and adjacent to but not covered by **C-259**, which concerns validations *lost* on the direct `_sample_array` path — this one is bypassed on **every** path, including the ones C-259 restored, because the resolution step runs first.
+
+Cross-refs: **C-232**, **C-259**, **C-261** (the other unchecked assumption about `geo_metadata`'s contents).
+
+---
+
+### C-268: Revoking an API key does not stop it being served — the fail-soft cache paths keep answering for weeks
+
+| Field | Value |
+|-------|-------|
+| ID | C-268 |
+| Tier | 2 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When revoking or narrowing an Appwrite key in response to a suspected compromise, **restart the service** (or evict `_manager_cache`) — ADR-027 §4's promise that faoapi "inherits the change on the next authenticated call" does not hold. Equally, when adding a TTL or revalidation to `_manager_cache`, decide explicitly what the fail-soft metadata degradations should do on a *permanent* authorization failure rather than a transient one. |
+| Location | `src/views_crafdapi/managers/api.py:337-352` and `:354-378` (the two FastAPI dependencies), `:304-330` (`_validate_api_key`), `src/views_crafdapi/managers/dataset_service.py:196-206` (the manifest lookup), `:527-592` (`_serve_last_good_within_sla`), `docs/ADRs/active/027_authentication_and_per_key_isolation.md:41` |
+
+`_validate_api_key`'s docstring states it "validates the API key on every call", but both dependencies that reach it are guarded by `if api_key_hash not in self._manager_cache` — an `LRUCache(maxsize=100)` with **no TTL**, a choice ADR-011 §3 made deliberately ("no TTL for `_manager_cache` since client objects are stateless"). A key validated once therefore skips revalidation until 100 distinct other keys evict it or the process restarts.
+
+The revoked key then does not fail loudly downstream, because every metadata call on the forecast path is fail-soft by design. `get_latest_manifest()` → `search_files_by_metadata` catches the `AppwriteException` and returns `success=False` → `get_predictions_by_metadata` logs and returns `[]` → the manifest resolves to a genuine `None`. That is `NoRun`, which routes to `_serve_last_good_within_sla("no_manifest")`, and the last-good **manifested** run in that key's own disk partition is served — degraded, logged, but served — for as long as it stays inside the 45-day freshness SLA and the 3.5-week disk TTL. The revoked key keeps reading real forecast numbers through `/{level}/analysis/forecast/hdi-map` and `/data/forecast/bulk` for up to ~24 days. `/historical` degrades to 404 once the 4-hour warm TTL lapses, so the exposure is forecast-specific.
+
+No cross-key leakage is involved — the data served is that key's own partition. The failure is that **revocation, the operator's only response to a leaked key, has no effect on the serving path**, and the ADR asserts the opposite. Tier 2 rather than 1: the answer served is correct data, not corrupt data; what fails is the access-control lifecycle. Every mechanism involved was individually justified (no-TTL manager cache, ADR-011; never drop a good entry on a metadata blip, C-233; bounded grace fallback, ADR-033 §6) — the concern is their composition, which nothing states or tests.
+
+Cross-refs: **C-233** (the same fail-soft-on-metadata-error root, a different consequence), **C-269** (the other ADR-027 claim that does not hold), ADR-011 §3, ADR-027 §4.
+
+---
+
+### C-269: The downloaded-file cache is shared across API keys, and `/files/{id}/cached` serves from it with no authorization check
+
+| Field | Value |
+|-------|-------|
+| ID | C-269 |
+| Tier | 2 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | **Before issuing a second API key with a narrower Appwrite scope than the first** — either partition `CacheManager`'s directory per caller or remove the `/files/{bucket_id}/{file_id}/cached` route. Also when reading ADR-027 §3's isolation list as a completeness claim: it enumerates three cache layers and this is a fourth. |
+| Location | `src/views_crafdapi/managers/appwrite/manager.py:90-108` (`_setup_cache`), `src/views_crafdapi/managers/appwrite/file_cache.py:65-66` (`_get_cache_key`), `:146-165` (`get_cached_file_path`), `:57-63` (`_save_cache_metadata`), `src/views_crafdapi/managers/api.py:966-999` (the `/cached` route), `:1004-1032` (`/cache/stats`, `DELETE /cache`), `docs/ADRs/active/027_authentication_and_per_key_isolation.md:31-37` |
+
+ADR-027 §3 states that "all cached state is keyed by `api_key_hash`, so callers are isolated by construction" and that a request authenticated with key *A* "can never be served *B*'s cached dataset". Each per-key `AppWriteFileManager` does construct its own `CacheManager` — but every one of them resolves the same directory, `self.config.path_manager.cache / "appwrite_cache"`, because `path_manager` is the single shared `self._model_path` handed to every `AppwriteConfig`. The cache key is `f"{bucket_id}_{file_id}"` with no caller component.
+
+The `/files/{bucket_id}/{file_id}/cached` route reads `manager.cache_manager.get_cached_file_path(...)` **first** and returns those bytes as a `FileResponse`. The only Appwrite call it makes afterwards is `get_file`, for a display filename — and its failure is handled by falling back to `filename = file_id` and returning the file anyway. So any caller whose key passes the one-time `list_buckets` probe can retrieve any file another key has cached, including from buckets their own key cannot read. The sibling `/download` route does 404 first on a failed `get_file`, which is what makes this route's ordering the defect rather than a general design.
+
+Two lesser consequences of the same sharing: `DELETE /cache` purges every caller's cached bytes, and `/cache/stats` enumerates the whole box's cache broken down by bucket. One more, independent of authorization: each `CacheManager` loads the metadata JSON once at construction and rewrites the entire dict on every `add_to_cache`, so two long-lived per-key managers silently drop each other's entries — a lost-update race on a file no lock protects.
+
+Masked today by an effectively single-key deployment, which is the same condition that masks **C-236** and **C-272**. The trigger is the day that stops being true.
+
+Cross-refs: **C-236** (the same `_file_cache`/`CacheManager` layers, bounded-by-count rather than isolation), **C-268** (the other ADR-027 claim that does not hold), ADR-027 §3.
+
+---
+
+### C-270: The documented `search` parameter on `/files/{bucket_id}` builds a query syntax the pinned SDK does not speak
+
+| Field | Value |
+|-------|-------|
+| ID | C-270 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When a caller reports that `?search=` on the file listing 404s or ignores the term. And before documenting any new Appwrite query parameter — build it with `appwrite.query.Query`, never by string formatting. |
+| Location | `src/views_crafdapi/managers/api.py:838-841`, `src/views_crafdapi/managers/appwrite/manager.py:851-885` (`list_files`), `:945-955` (`list_buckets`, the correct sibling), `README.md:160,220`, `docs/api/README.md:94` |
+
+The route appends `f"search('name','{search}')"` to the query list. That is Appwrite's pre-0.15 query syntax; the pinned SDK (`appwrite==19.2.0`) emits JSON — verified locally: `Query.search('name','forecast')` returns `'{"method":"search","attribute":"name","values":["forecast"]}'`. The hand-built string passes through `list_files` unchanged to `storage.list_files`, the server rejects it, and the route returns HTTP 404 `"Error listing files"` for what is a malformed request, not a missing bucket.
+
+`list_buckets` fifteen lines further down uses `Query.search` correctly, so this is one missed call site rather than a systemic pattern — and the reason it survived the SDK-19 migration (ADR-018/ADR-019) is that no test constructs a real query for this parameter; the file-management surface is mocked at the manager boundary throughout. Both `README.md` and `docs/api/README.md` document `search` as a working listing filter.
+
+Secondary, and worth naming even though it is currently inert: the caller's raw input is interpolated into a query string with no escaping. It is inert only because the query is rejected wholesale — the construction, not the rejection, is what would have to change if the syntax were ever corrected by making the string valid rather than by switching to `Query`.
+
+Cross-refs: **C-243** (the same shape — a documented behaviour with no test that would notice it breaking), ADR-018/ADR-019 (SDK normalization and pinning).
+
+---
+
+### C-271: Three runtime dependencies are imported by `src/` but never declared; two more are declared dev-only
+
+| Field | Value |
+|-------|-------|
+| ID | C-271 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When a transitive dependency stops requiring one of these — e.g. `wandb` dropping `PyYAML`, or `appwrite`/`fastapi` dropping `pydantic` — or when trimming the declared dependency set under ADR-015. Note that ADR-015 audits only the *declared-but-unused* direction and would not catch any of these. |
+| Location | `src/views_crafdapi/managers/log.py:4` (`yaml`), `src/views_crafdapi/client.py:9` + `src/views_crafdapi/__init__.py:7` (`requests`), `src/views_crafdapi/managers/appwrite/sdk_compat.py:7` (`pydantic`), `src/views_crafdapi/plotting.py:11,14-17` (`geopandas`, `matplotlib`), `pyproject.toml:13-41` (runtime), `:73-81` (dev) |
+
+`PyYAML` sits on the **production boot path** — `CrafdApiManager.__init__` → `ModelManager.__init__` → `LoggingModule._setup_logging` → `yaml.safe_load` of `configs/logging.yaml` — and reaches the environment only through `wandb`. `requests` is imported by the package's own `__init__` (via `client.py`), so a bare `import views_crafdapi` fails without it; it too arrives transitively. `pydantic` is imported by `sdk_compat`, which normalizes **every** Appwrite SDK response on the serving path. None of the three appears in `[project] dependencies`.
+
+Separately, `geopandas` and `matplotlib` are declared under `[dependency-groups] dev` yet imported at module scope by `src/views_crafdapi/plotting.py`, so `import views_crafdapi.plotting` raises `ModuleNotFoundError` in a production install — a `src/` module that only works in a dev environment.
+
+`uv.lock` currently pins all five, so the failure mode is a future resolution rather than today's deployment: the boot path breaking on an upstream's dependency trim, in an environment built from `pyproject.toml` rather than the lock. ADR-015 §1 mandates that "every runtime dependency in `pyproject.toml` must have at least one corresponding import in `src/`" — and stops there; nothing states or checks the converse, and its own Alternative A (`deptry` in CI) was deferred as not yet worth the overhead. This entry is the evidence for revisiting that.
+
+Cross-refs: ADR-015 (whose audit direction leaves this uncovered), **C-239** (the other place a `src/` asset's real requirements diverge from what the package declares).
+
+---
+
+### C-272: The forecast serving-state and served-provenance are process-global, so one caller's refusal rewrites `/health` and `/provenance` for everyone
+
+| Field | Value |
+|-------|-------|
+| ID | C-272 |
+| Tier | 3 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | Before issuing a second API key — or when diagnosing a `degraded` `/health` that no operator action and no log line for *your* key explains. Also when acting on `/provenance/forecast`'s `artifact_id`: it names the last run **any** caller was served, not yours. |
+| Location | `src/views_crafdapi/managers/dataset_service.py:131,135` (the two fields), `:137-152` (their accessors), `:236-241`, `:317-341` (where they are set), `src/views_crafdapi/managers/api.py:1037-1100` (`/health`), `:394-435` (`_forecast_lineage`) |
+
+Every cache layer in the service is keyed by `api_key_hash` — but `_forecast_serving_state` and `_last_forecast_provenance` are plain instance attributes on the single process-wide `DatasetService`. A request from key *B* that ends in `Refused` or `NoRun` sets `{"degraded": True, "reason": …}`, which flips `/health`'s `status` to `degraded` and attaches `refusal_reason` to `/provenance/forecast` for key *A*, whose own serve is healthy. The inverse holds too: *B*'s next successful serve clears the state *A*'s refusal set, so a genuinely degraded caller can be shown green.
+
+**C-233** already records the not-keyed-by-API-key property, but in a specific and now-historical context — as one of two reasons a since-removed `is_served` field reported wrongly in both directions. The surface that remains after that removal — the `degraded` flag that drives external monitoring (ADR-032) and the `artifact_id` an operator uses to identify what is live — is not covered there. Registering separately rather than extending C-233 because the fix differs: C-233 wants a signal that exists on the manifest-only path, this wants the existing signals keyed per caller.
+
+Masked today by the effectively single-key deployment, as with **C-236** and **C-269**.
+
+Cross-refs: **C-233** (same root, different surface), **C-254**, **C-269**, ADR-032 (which pages on the `/health` body this contaminates).
+
+---
+
+### C-273: `wandb_alert` redacts the literal string `"None"` when no path is supplied
+
+| Field | Value |
+|-------|-------|
+| ID | C-273 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When re-enabling W&B notifications — `wandb_notifications` is `False` on every current construction path, so this is dormant until someone turns it on. |
+| Location | `src/views_crafdapi/wandb/utils.py:13,34`, `tests/test_wandb_redaction.py:59` |
+
+The redaction is `str(text).replace(str(models_path), "[REDACTED]")`. With the parameter's default `models_path=None`, `str(None)` is `"None"`, so every occurrence of that substring in the alert body is replaced — garbling exactly the messages ("value is None", "returned None") an alert is most likely to carry. The suite characterizes this as a footgun and **pins** the behaviour (`test_models_path_none_redacts_literal_none_substring`) rather than correcting it, which is the right call for a characterization test and the reason it needs a register entry instead: the test records the defect, it does not schedule it. Unreachable today — `CrafdApiManager` is constructed with `wandb_notifications=False` and no serving path calls `wandb_alert` — hence Tier 4. Named fix: skip the replacement entirely when `models_path` is falsy.
+
+---
+
+### C-274: Three `xfail` tests documenting open priogrid concerns now pass, and nothing reports it
+
+| Field | Value |
+|-------|-------|
+| ID | C-274 |
+| Tier | 4 |
+| Source | repo-assimilation (2026-08-18) |
+| Trigger | When next reading `C-61`–`C-65` as open concerns, or when considering `xfail_strict = true` in `pyproject.toml` — these three are the cases that would flip the suite red, and each needs a decision (gap closed → delete the xfail; assertion gone vacuous → fix it) before that switch. |
+| Location | `tests/test_falsify_priogrid_naming.py::TestP1_DatafactoryAlsoEmitsPriogridGid::test_datafactory_grid_to_dataframe_uses_priogrid_id`, `tests/test_falsify_shim_diagnosis.py::TestP1_MigrationTestCoverageGap::test_api_py_also_references_priogrid_gid`, `tests/test_falsify_shim_diagnosis.py::TestP4_CICDocumentsShimAsContract::test_fao_pgm_cic_does_not_guarantee_priogrid_gid`, `TESTING.md:75` |
+
+All three are marked `xfail` with the reason "documents open priogrid concerns C-61..C-65" and currently **XPASS** — verified 2026-08-18 via `uv run pytest -m "not integration" -rX` (1056 passed, 25 xfailed, **3 xpassed**). Under pytest's default non-strict setting an xpass neither fails the run nor appears in the default summary line's detail, so a documenting test that has started passing is indistinguishable, to anyone reading CI, from one still failing as designed. The gap it records may have closed upstream, or the assertion may have gone vacuous against changed source — the suite reports the same thing either way, and the register still lists C-61..C-65 as open on the strength of these tests.
+
+TESTING.md documents the xfail-vs-skip convention (skip for absent siblings, xfail for known gaps) but says nothing about what an xpass means or who acts on it. Same family as **C-243**: the suite's own claims drifting from what it measures.
+
+Cross-refs: **C-243**, inherited **C-61**–**C-65** (bodies not in this register — see **C-241**).
+
+---
+
+### C-275: A CIC in an ADR-006-governed directory declares "Related ADRs: None"
+
+| Field | Value |
+|-------|-------|
+| ID | C-275 |
+| Tier | 4 |
+| Source | graphify (2026-08-18) |
+| Trigger | When changing `PredictionStoreManager`'s selection, quarantine, or manifest-resolution behaviour and using its CIC to find which ADRs constrain the change — the header says none constrain it. Also when auditing CIC coverage under ADR-006, since this row reads as "checked, nothing applies" rather than "not filled in". |
+| Location | `docs/CICs/PredictionStoreManager.md:6` |
+
+Every other class contract in `docs/CICs/` names its governing ADRs, and seven of the nine name **ADR-006 ("this contract")** explicitly — the ADR that mandates the CIC's own existence. `PredictionStoreManager.md` alone declares `**Related ADRs:** None`.
+
+The claim is false on the file's own subject matter. `PredictionStoreManager` is where the ADR-013 §11.4 legacy-type transition guard lives (`manager.py:118-122`), where the C-71 quarantine blocklist and approval allowlist are applied, where `get_latest_manifest` implements the ADR-033 §2 manifest-first selection, and where `_provenance_from` builds the C-86 lineage record. ADR-006, ADR-013, ADR-033 and ADR-023 all bear on it directly.
+
+Registered rather than silently fixed because the interesting part is the failure mode, not the omission: an explicit **"None"** is a *declaration* under ADR-003, not a blank. A reader who trusts declarations — which this repository instructs them to do — concludes that no ADR governs the store manager and changes it without consulting one. A blank field would have prompted a check. Named fix: replace with the four ADRs above, or with `<to be filled>` if the audit has genuinely not been done.
+
+Cross-refs: **C-243** (docs asserting things about the code that are no longer true), **C-276** (the sibling CIC defect found in the same pass), ADR-006, ADR-003.
+
+---
+
+### C-276: `ForecastDataset.md`'s rename record was flattened by a global search-and-replace and now says nothing
+
+| Field | Value |
+|-------|-------|
+| ID | C-276 |
+| Tier | 4 |
+| Source | graphify (2026-08-18) |
+| Trigger | When tracing why `ForecastDataset` has a back-compat alias, or what the class was called before Phase 4a of #87 — this line is the only record and it no longer carries the old name. Also before running any future repo-wide identifier rename across `docs/`. |
+| Location | `docs/CICs/ForecastDataset.md:7` |
+
+The line reads:
+
+> **Supersedes (as the public leaf):** `ForecastDataset.md` (the class was renamed `ForecastDataset → ForecastDataset` in Phase 4a of #87; `ForecastDataset` is retained as a back-compat alias).
+
+A file that supersedes itself, and a rename from a name to the same name. The sentence was written to record a real event — the `_FAOPGMDataset`/`FAOForecastDataset`-era class becoming `ForecastDataset` during the un_fao → un_crafd clone — and a repo-wide rename pass then rewrote **both** sides of the arrow, destroying the only thing the sentence existed to preserve. The graph surfaced it as a self-edge: the extraction produced a `supersedes` relation whose source and target were the same node.
+
+Harmless to running code and to the served contract; it costs a reader the one recorded answer to "what was this called before, and why is there an alias". The same rename pass is the mechanism behind **C-257** (the `un_fao` → `un_crafd` launcher clone) — a class of change this repository has now been bitten by twice. Named fix: recover the pre-rename name from `git log --follow docs/CICs/ForecastDataset.md` and restate it, or delete the line and say plainly that the pre-clone name was lost.
+
+Cross-refs: **C-275** (found in the same pass), **C-257** (same rename-pass mechanism), **C-243**.
+### C-277: The disk-cache read path serves whatever is in the slot, without re-running the C-72 gate
+
+| Field | Value |
+|-------|-------|
+| ID | C-277 |
+| Tier | 2 |
+| Source | code-review medium (2026-08-21, PR review of `perf/c263-cold-start-historical`) |
+| Trigger | When adding any **third** writer of a value-dir — a wire-contract variant, a backfill tool, an operator repair script — validate before `write_value_dir`, not after reading back. The read path will not catch it for you. Equally, before relying on "implausible data cannot reach FAO", check that every writer validates, because nothing checks the reader. |
+| Location | `src/views_crafdapi/managers/dataset_service.py:283-306` (the disk gate), `src/views_crafdapi/managers/disk_cache.py::read`, versus the write-side gates at `dataset_service.py:521-522` (in-memory), `forecast/ingestion/wire_reader.py::WireRunAssembler.append_month` (wire), `forecast/ingestion/historical_stream.py::assert_plausible_chunk` (streamed) |
+
+ADR-013 §4.5 and the DatasetService CIC §6 both state the C-72 guarantee as "implausible data fails loud rather than reaching FAO". That guarantee is **entirely write-side**. `CrafdDiskCacheManager.read` reconstructs a dataset from the value-dir and hands it back; the disk gate in `get_latest_dataframe` serves it directly. No plausibility check runs on that path, ever.
+
+That is safe only while every writer validates before adopting — which is now true, but was not: the streamed historical ingest introduced on this branch called `write_value_dir` and validated *afterwards*. Reproduced end-to-end before the fix: ingest a good artifact, then one with `pg_ycoord = 999.0`; the bad value-dir was adopted (`rmtree` + `os.replace` over the previous good entry), validation raised, the broad fallback caught it, the request 500'd from the in-memory path — and the **next** request took the disk gate and served `pg_ycoord = 999.0` with `success: true`. The last good entry was already deleted.
+
+Fixed on this branch by moving the check into `stream_to_value` so it runs per row group, before anything is committed, and by raising `ImplausibleArtifact` rather than falling back (a data fault is not a streaming fault). **The entry is registered for the residual, not the instance**: there are now three independent writers of that cache slot and one unguarded reader, and the invariant that keeps them honest is written down in an ADR rather than asserted anywhere in code. A fourth writer that forgets produces exactly the failure above, silently.
+
+Cheapest real mitigation, deliberately not taken here (scope): validate on the read path once, or record the validation verdict in the value-dir meta so the reader can refuse an unvalidated entry.
+
+Cross-refs: **C-259** (validation living in one path and not its sibling — the same shape, one layer up), **C-72** (inherited — the gate this is about), **C-263** (the change that exposed it).
+
+---
+
+### C-278: The streamed and in-memory historical ingests accept different artifacts, and nothing tests that they agree
+
+| Field | Value |
+|-------|-------|
+| ID | C-278 |
+| Tier | 3 |
+| Source | code-review medium (2026-08-21, PR review of `perf/c263-cold-start-historical`) |
+| Trigger | When the producer changes the historical artifact's shape — a new value column, a nullable geography column, an unsigned index dtype, a different row-group layout — check which path will ingest it. A change that only makes the *streamed* path refuse degrades silently to a 12.2 GB cold start rather than failing. Also when `historical_targets` is ever actually configured (it is `{}` in production today — C-238). |
+| Location | `src/views_crafdapi/forecast/ingestion/historical_stream.py::stream_to_value` (the `NotStreamable` preconditions) versus `src/views_crafdapi/data/handlers/grid_dataset.py::_init_dataframe` + `data/handlers/forecast_dataset.py::__init__` |
+
+There are now two implementations of "turn a historical artifact into a `ForecastDataset`", and they do not accept the same inputs. The streamed one refuses: a non-dense grid, rows not already in `sort_index()` order, null geo metadata, and any value column outside the declared `targets`. The in-memory one accepts all four — it dense-fills, sorts, backfills geography per entity, and carries the extra columns as features.
+
+Each refusal is deliberate and each was added because the alternative was worse: reimplementing the constructor's dense-fill and per-entity backfill inside the streamer would duplicate the subtlest logic in the repo, and getting it slightly wrong changes served geography with no error. Refusing and falling back is the safe direction.
+
+The residual is that the divergence is **invisible when it fires**. A refusal logs at INFO and the request still succeeds — at the memory cost this whole change exists to remove. So the failure mode of C-263's fix is not an error; it is a quiet return to the old peak, discoverable only by reading logs or re-measuring the box. Nothing asserts that the two paths accept the same set of artifacts, and the byte-identity tests compare outputs only for inputs *both* accept.
+
+Also folded in here rather than given its own entry: the historical target-detection rule (`configs_getter().get("historical_targets")` else every non-index, non-metadata column) is now written twice — `dataset_service.py:504-507` and `:593-596`. Second occurrence, so WET-before-DRY says leave it; recorded because the two must agree or the paths build different `targets`.
+
+Cross-refs: **C-260** (two live implementations of one operation, already disagreeing — the same shape on the aggregate path), **C-238** (why `historical_targets` is unset in production, which is what currently masks the target-coverage divergence), **C-263**.
+
+---
+
+### C-279: A byte-identity proof over one artifact left a guard hole that eight mutation tests also missed
+
+| Field | Value |
+|-------|-------|
+| ID | C-279 |
+| Tier | 3 |
+| Source | code-review medium (2026-08-21, PR review of `perf/c263-cold-start-historical`) |
+| Trigger | When the next change is justified by "byte-identical on the real artifact", ask which properties of *that* artifact the proof depended on, and whether the guard is checked against inputs that violate them. Specifically: before trusting a streaming validator, construct an input where the violation straddles a chunk boundary rather than sitting inside one. |
+| Location | `src/views_crafdapi/forecast/ingestion/historical_stream.py:160-185` (the ordering guard), `tests/forecast/test_historical_stream.py::TestReviewFindings` |
+
+The streamed ingest rests on one precondition — file order already *is* `sort_index()` order — and the module verifies it per row group rather than assuming it. The verification had a hole: it compared cells only *within* a chunk and months only *across* the boundary, so a month split across two row groups with its halves written out of order passed every check. At 64,742 cells per month against ~1,048,576-row row groups a month spans row groups roughly every 16 months, so this is the ordinary case, not an exotic one.
+
+What makes it worth an entry is what did **not** catch it. The change shipped with: byte-identity against the in-memory path on the real 28.4M-row artifact; served-output equality on 1.55M rows across four call paths; and eight mutation tests, each confirmed to fail when its guard was removed. All of them passed. They passed because the real artifact is globally sorted, so the hole was unreachable through any of them — the proof was over an input whose properties made the defect invisible.
+
+The lesson generalises past this module: a guard tested only against inputs that satisfy the precondition tests the happy path of the guard, not the guard. Fixed by carrying the last cell across the boundary, with a test that builds the three-row-group artifact directly.
+
+Cross-refs: **C-258** (Tier 1 for the pattern rather than the instance — a stated invariant violated while CI reported success), **C-243** (shape-only assertions), **C-263**.

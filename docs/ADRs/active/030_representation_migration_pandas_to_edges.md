@@ -166,6 +166,17 @@ bytes) to confirm the encoding was not hiding a sub-ulp difference. C-146 (cells
 the level are excluded, not summed into a phantom unit) survives as a named predicate,
 `has_level_code`, rather than `pd.factorize`'s `-1` sentinel.
 
+**Verified in production, 2026-08-18 (v0.4.0).** `/data/forecast/bulk` on the deployed service:
+**HTTP 200, 461,991 bytes, 25.8 s, peak 6.0 G** — measured after a restart so the peak covers
+that request alone. It was 501 s, 504 at the proxy, on a service reporting `peak: 14.8G`.
+`smoke.py --expect-tag v0.4.0`: ALL PASS. The byte count matches the local build (461,664), i.e.
+the same table.
+
+Worth separating, because the first reading looked like a regression: the peak immediately after
+restart was **16.8 G**, which covered a **cold** load of both datasets — the historical leg's
+`pd.read_parquet` of 28.4M rows (**C-169**) is a ~13 GB transient. Isolated, the bulk build is
+6.0 G. The aggregate path is no longer what threatens this box; the cold historical load is.
+
 **The endpoint (#79).** `/data/forecast/bulk` builds the full 45-column table in **31.2 s at
 10.5 GB peak** with historical included (23.4 s / 4.5 GB without) — against the 300 s nginx
 `proxy_read_timeout` that made it return 504. It was 501 s before C-235 and 109 s after.
@@ -195,3 +206,119 @@ index/assembly pandas that `_aggregate_distributions` used to own is now written
 sample. `_aggregate_distributions` and `_frame_native_joint_sum` remain for
 `get_subset_dataframe(aggregate=True)`, which has a live caller (`managers/api.py:668`) that
 genuinely wants a DataFrame; the two paths are deliberately allowed to duplicate.
+
+---
+
+## Addendum — the historical cold-start load (2026-08-18, C-263 / #98)
+
+The S7 addendum above closed with a measurement and an open question: *"The aggregate path is no
+longer what threatens this box; the cold historical load is."* This addendum answers it.
+
+**What the cold start actually cost, and why.** The historical leg decoded the whole artifact
+into one pandas frame and handed that frame to `ForecastDataset`, which copied out of it. The two
+are resident **at the same time**, so the peak is the sum — and no amount of freeing afterwards
+lowers a peak that has already happened. Measured on the real artifact
+(`historical_dataset_20260814_203554.parquet`, 28,421,738 rows):
+
+| rows | in-memory path, peak above baseline | streamed |
+|---|---|---|
+| 3,884,520 (60 months) | 1.307 GB | 0.354 GB |
+| 7,769,040 (120 months) | 2.575 GB | 0.274 GB |
+| 28,421,738 (all 439 months) | **12.205 GB** | **3.940 GB** |
+
+Both full-scale figures are measured, on the same host in the same state.
+
+**Correction, 2026-08-21.** The first version of this table gave the full-scale in-memory figure
+as "~9.4 GB *(extrapolated)*", linearly from the 120-month row, because the development host had
+only 9.6 GB free at the time and could not run it. With 19 GB free it was measured: **12.205 GB**.
+The linear extrapolation understated the real peak by 30% — the in-memory path grows *super*
+linearly, so the saving is 8.27 GB and the ratio 3.1x, not the 2.4x first claimed. Recorded as a
+correction rather than silently improved, because the error was in the direction that flattered
+the change, and a reader who checked the arithmetic against the 120-month row would not reproduce
+it.
+
+The streamed column is near-flat in row count because the value-dir is file-backed and read back
+memory-mapped; the in-memory column is not.
+
+**What streaming costs.** It is *slower*: 36.5 s against 26.5 s for the whole ingest at full
+scale, ~38% more wall time, because the loader makes two passes — one to build the category
+vocabulary, one for the data. That is the trade this change makes deliberately: ~10 s once per
+restart, against 8.27 GB of peak on a box that has already been OOM-killed three times. At
+smaller scales streaming measured *faster*, which is why the trade is stated at full scale rather
+than from the 120-month row.
+
+**Three hypotheses the measurement killed.** Recorded because each looked obvious and each was
+wrong, and #98 listed two of them as candidate directions:
+
+1. *"The four object-dtype geography columns cost ~6-7 GB."* They do not. That figure came from
+   `memory_usage(deep=True)`, which sums `sys.getsizeof` per element and therefore counts each
+   **shared** string once per row; Arrow's `to_pandas` interns repeated values. Reading them
+   dictionary-encoded instead moves peak RSS by ~0.7 GB, not ~6 GB. The claim had been sitting in
+   a load-bearing comment in `dataset_service.py`; it is now corrected there.
+2. *"Release the source frame and the retained file bytes."* Both were real defects — `del
+   file_bytes` was a no-op because `_download_file_bytes` had stored the same object in
+   `_file_cache`, and the decoded frame stayed alive through `to_value()`. Fixing both frees ~0.25 GB
+   at 60-month scale and **moves the peak by nothing**, because the peak occurs during construction,
+   before either line runs.
+3. *"Elide the redundant copies."* `to_array_columns` copied unconditionally for an artifact with
+   no list columns, `sort_index()` copied an already-sorted index, and `geo_metadata.reindex()`
+   copied against an identical index. All three are genuine waste and all three are now elided.
+   They too leave the peak unchanged.
+
+**Corrected 2026-08-21: the wall-time figure first published for (3) was wrong.** It was given as
+"~15-20%", blended from end-to-end runs that also contained the (2) changes and had visible
+run-to-run variance. Measured properly — 5 repetitions each, 3,884,520 real rows, median:
+
+| | before | after | |
+|---|---|---|---|
+| `fill_dense_grid` (isolated, already-dense input) | 0.332 s | 0.234 s | 1.42x |
+| `ForecastDataset(...)` construction | 0.971 s | 0.884 s | **1.10x** |
+| `validate_metadata_plausibility` | **2.384 s** | **0.018 s** | **135x** |
+
+So the copy elisions are worth ~9%, not 15-20%. What the blended figure was actually measuring,
+without knowing it, was the fourth change: `assert_geo_metadata_plausible` called `.astype(str)`
+on a **categorical** column, expanding 3.9M rows into Python strings to validate a set of ~200
+distinct codes. Checking `.cat.categories` instead is 135x faster on that call and saves ~17 s at
+full scale — which makes it the largest wall-time win in this change, and it had been recorded as
+an afterthought. `fill_dense_grid`'s fast path is real but small, and now applies only to the
+fallback and wire paths, since the streamed loader never calls it.
+
+**What was done.** `forecast/ingestion/historical_stream.py` assembles the value-dir a parquet row
+group at a time: each target's `(N,1)` **float64** block is written into a preallocated
+`np.lib.format.open_memmap`, geography is appended to an open `ParquetWriter`, and the result is
+adopted with the same `write_value_dir` the wire path uses and read back mmap'd. It is structurally
+the `WireRunAssembler` pattern (S6b-2 / #208) applied to the leg that did not get it.
+
+**Why this is not the §1 float32 hazard.** §1 keeps this leg float64 because the frame leaf
+accumulates in float32 and compounds error across cells (C-258, caught after a green suite). The
+streamed path performs **no arithmetic at all** — it moves bytes from arrow to a float64 memmap. It
+changes where assembly happens, not what is assembled.
+
+**The precondition, and why it is checked rather than assumed.** Streaming in file order is only
+equivalent if file order already *is* `sort_index()` order and the grid is already dense —
+otherwise the constructor's sort and dense-fill are real work. The producer's artifact satisfies
+both (439 months x 64,742 cells, month-ascending, cell-ascending within each month, the identical
+cell vector every month), but `stream_to_value` verifies it per row group and raises
+`NotStreamable` on any violation, and the service falls back to the unchanged in-memory path. A
+wrong row order here would move served numbers with no error anywhere, so it is the one thing not
+taken on trust.
+
+**Byte-identity, verified the way S7 was.** Against the in-memory path on the real artifact:
+manifest, index, and every float64 feature block identical **byte for byte**; the geo table
+identical including categorical dtype and **category order** (which fixes served group order under
+`groupby(observed=True)`). On 1,553,808 real rows the served outputs match exactly —
+`calculate_hdi_map(aggregate=True, level="country")` (the C-258 path, 4,848 x 36, all float64),
+`get_subset_dataframe(aggregate=True, level="gaul1")`, the bulk `s_actual` column
+(`_actual_by_admin1`), and a cell-level subset with metadata (129,484 x 12).
+
+**What this leaves unproven.** The production cold-start figure. The before/after in #98 requires
+`systemctl restart` on the shared box, which was out of scope for the session that made the change;
+the local measurement predicts roughly 16.8 G → ~11 G, and that prediction is what needs checking,
+not assuming. Until it is checked, **#99's memory ceilings remain blocked** — on a measurement now,
+not on a code change.
+
+**§8 scope, flagged not resolved.** §8 places the historical/scalar leg outside this migration.
+Nothing here changes its representation, so the scoping is not violated in substance. But §8 was
+written before the cold-start measurement existed, and the leg has now acquired a streaming
+assembler that looks a great deal like the one §5/§6 built for the forecast leg. Whether §8 should
+be amended is a governance question for the operator, not something this change decides.

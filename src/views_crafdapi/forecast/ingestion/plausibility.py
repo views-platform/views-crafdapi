@@ -60,7 +60,24 @@ def assert_geo_metadata_plausible(geo_metadata: pd.DataFrame) -> None:
                 f"implausible coordinate (C-72)"
             )
 
-    iso = gm["country_iso_a3"].dropna().astype(str)
+    iso_col = gm["country_iso_a3"]
+    if isinstance(iso_col.dtype, pd.CategoricalDtype):
+        # C-263: the check is over the SET of distinct codes, so run it on the categories —
+        # a few hundred labels — instead of expanding the categorical back to one Python string
+        # per row. `.astype(str)` on 28.4M rows materialised the object block this column exists
+        # to avoid. The reported count is still the row count, so the error message is unchanged
+        # for any input that fails; only the work done to reach it differs.
+        cats = pd.Series(iso_col.cat.categories.astype(str))
+        bad_cats = cats[(cats != _NO_COUNTRY_SENTINEL) & ~cats.str.fullmatch(r"[A-Za-z]{3}")]
+        if len(bad_cats) > 0:
+            n_bad = int(iso_col.isin(bad_cats).sum())
+            raise ValueError(
+                f"country_iso_a3: {n_bad} value(s) not a 3-letter code "
+                f"(e.g. {bad_cats.tolist()[:5]}) — implausible (C-72)"
+            )
+        return
+
+    iso = iso_col.dropna().astype(str)
     iso = iso[iso != _NO_COUNTRY_SENTINEL]  # the "no country" sentinel is missing, not malformed
     bad_iso = iso[~iso.str.fullmatch(r"[A-Za-z]{3}")]
     if len(bad_iso) > 0:

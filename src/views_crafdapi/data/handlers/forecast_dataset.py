@@ -120,7 +120,18 @@ class ForecastDataset(_GridDataset):
         
         # Align geo_metadata to match the processed dataframe's index
         # This handles cases where parent's _preprocess_dataframe filters/adds rows
-        self.geo_metadata = _temp_geo_metadata.reindex(self.dataframe.index)
+        #
+        # C-263: when the parent added and removed nothing — the already-dense artifact — the
+        # reindex is an identity that still costs a full copy of the 9-column geo table (~1.9 GB
+        # at the 28.4M-row global historical scale, measured). `equals` compares the index values
+        # pairwise and returns the same verdict the reindex would act on, without allocating the
+        # result. `_temp_geo_metadata` is already a `.copy()` taken from the caller's frame, so
+        # adopting it directly aliases nothing the caller holds; the backfill and the categorical
+        # cast below then mutate our own copy exactly as they did before.
+        if _temp_geo_metadata.index.equals(self.dataframe.index):
+            self.geo_metadata = _temp_geo_metadata
+        else:
+            self.geo_metadata = _temp_geo_metadata.reindex(self.dataframe.index)
         
         # For rows that were added by preprocessing (missing combinations), 
         # we need to fill metadata. Get metadata for each unique entity from original data.
