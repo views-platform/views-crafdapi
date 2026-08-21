@@ -1398,6 +1398,13 @@ Named options, none taken here: bump `_VALUE_SCHEMA_VERSION` when the ingest pat
 record the producing code version in the value-dir meta and refuse a mismatch (precise, but a new
 invariant on the hot path); or leave it manual and documented, which is the current position.
 
+**Generalised 2026-08-21.** This entry turned out to be one instance of a wider shape — an
+artifact asserting a state the system is not in, with the assertion being the only thing anyone
+checks. Seven instances are collected in `reports/ops/declared_vs_in_effect.md`, including two
+that ran 11 and 12 days, and one where the *verification itself* was green with a real hole in
+the guard. The report's finding: reading the artifact caught none of them; only reading runtime
+state or attacking the claim did. This entry stays as the concrete code-level instance.
+
 **The specific instance is discharged (2026-08-21); the mechanism is not.** The two historical
 value-dirs were cleared by hand, the service restarted, and the streamed ingest ran — confirmed
 in the journal, and the cold-start peak came in at 7.3 G against 16.8 G. So v0.5.1 is now both
