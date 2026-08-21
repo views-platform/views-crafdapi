@@ -616,12 +616,6 @@ class DatasetService:
                 raise RuntimeError("streamed historical value-dir not readable after adopt")
             dataset = disk["dataset"]
 
-            # C-72 still applies. The value plausibility check is a no-op for a non-prediction
-            # dataset (it guards `pred_vars`); the geo check is the one that matters here and it
-            # runs against the reconstructed table, exactly as on the in-memory path.
-            dataset.validate_value_plausibility()
-            dataset.validate_metadata_plausibility()
-
             cache["data"] = dataset.dataframe
             cache["file_id"] = file_id
             cache["timestamp"] = disk["timestamp"]
@@ -633,11 +627,24 @@ class DatasetService:
                 f"(C-263 low-memory path)"
             )
             return cache["data"].copy()
+        except historical_stream.ImplausibleArtifact as e:
+            # C-72 is not a streaming problem, so it must not be answered by trying the other
+            # streamer. The in-memory path would reach the same verdict after paying the full
+            # ~12 GB peak this change exists to avoid, and falling back once left the *adopted*
+            # bad value-dir in the cache slot for the next request to serve unvalidated. Fail
+            # loud here, with the same 500 the in-memory path raises.
+            logger.error("Historical artifact failed plausibility while streaming: %s", e)
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to process downloaded data into a valid dataset.",
+            ) from e
         except historical_stream.NotStreamable as e:
             logger.info(
                 "Historical artifact is not streamable (%s); using the in-memory path", e
             )
             return None
+        except HTTPException:
+            raise  # the plausibility refusal above — not something to fall back from
         except Exception as e:  # noqa: BLE001 — an optimisation must never fail the request
             logger.warning(
                 "Streamed historical ingest failed (%s); falling back to the in-memory path",

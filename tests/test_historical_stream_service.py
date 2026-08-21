@@ -135,3 +135,59 @@ class TestFallsBackRatherThanFailing:
         )
         leftovers = list((Path(tmp_path) / "datasets").glob("*.tmp"))
         assert leftovers == [], f"staging dir leaked: {leftovers}"
+
+
+class TestPlausibilityFailsLoudRatherThanFallingBack:
+    """CR-1, service half. A C-72 violation is a data fault, not a streaming fault.
+
+    Before the fix it was caught by the broad fallback catch, so: the bad value-dir had already
+    been adopted into the cache slot (deleting the last good one), the request 500'd from the
+    in-memory path after paying the full peak, and the NEXT request took the disk-cache branch —
+    which does not re-validate — and served the implausible geography to CRAF'd.
+    """
+
+    def _bad_bytes(self, tmp_path):
+        df = pd.DataFrame({
+            "month_id": np.repeat([600, 601], 4), "priogrid_id": np.tile([100, 101, 102, 103], 2),
+            "pg_xcoord": np.zeros(8), "pg_ycoord": [0, 0, 0, 999.0, 0, 0, 0, 0],  # 999 > 90
+            "country_iso_a3": ["AAA"] * 8, "admin1_gaul1_code": np.zeros(8),
+            "admin1_gaul1_name": ["R"] * 8, "admin1_gaul0_code": np.zeros(8),
+            "admin1_gaul0_name": ["P"] * 8, "admin2_gaul2_code": np.zeros(8),
+            "admin2_gaul2_name": ["D"] * 8,
+            **{t: np.random.default_rng(0).random(8) for t in TARGETS},
+        })
+        path = Path(tmp_path) / "bad.parquet"
+        pq.write_table(pa.Table.from_pandas(df, preserve_index=False), path)
+        return path.read_bytes()
+
+    def test_implausible_geography_raises_500_instead_of_falling_back(self, tmp_path):
+        from fastapi import HTTPException
+        svc = _service(tmp_path)
+        with pytest.raises(HTTPException) as exc:
+            svc._try_stream_historical(
+                "keyhash", "historical", self._bad_bytes(tmp_path), "fid-bad",
+                _provenance(), _cache_slot(), 1_000_000.0,
+            )
+        assert exc.value.status_code == 500
+
+    def test_a_good_cached_entry_survives_a_later_bad_artifact(self, tmp_path):
+        """The eviction half: the previous good value-dir must still be there afterwards."""
+        from fastapi import HTTPException
+        svc = _service(tmp_path)
+        svc._try_stream_historical(
+            "keyhash", "historical", _dense_bytes(tmp_path), "fid-good",
+            _provenance(), _cache_slot(), 1_000_000.0,
+        )
+        good = svc._disk_cache.read("keyhash", "historical")
+        assert good is not None and good["file_id"] == "fid-good"
+
+        with pytest.raises(HTTPException):
+            svc._try_stream_historical(
+                "keyhash", "historical", self._bad_bytes(tmp_path), "fid-bad",
+                _provenance(), _cache_slot(), 1_000_000.0,
+            )
+
+        after = svc._disk_cache.read("keyhash", "historical")
+        assert after is not None, "the good entry was evicted by a refused artifact"
+        assert after["file_id"] == "fid-good", f"cache slot poisoned: {after['file_id']}"
+        assert after["dataset"].geo_metadata["pg_ycoord"].max() <= 90

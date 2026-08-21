@@ -49,9 +49,15 @@ from typing import Dict, Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+# `pyarrow.compute` is a submodule: `import pyarrow` does NOT bind it. It was reachable here only
+# because pandas imports it for its own Arrow interop — verified, `import pyarrow, pyarrow.parquet`
+# alone leaves `pa.compute` undefined. Relying on that would have failed as an AttributeError
+# swallowed by the caller's fallback, silently reverting to the path this module exists to avoid.
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from views_crafdapi.data.value_format import _VALUE_SCHEMA_VERSION
+from views_crafdapi.forecast.ingestion.plausibility import assert_geo_metadata_plausible
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +67,21 @@ _ENTITY_ID = "priogrid_id"
 #: The upstream vocabulary shim (C-61): 774 platform parquet files bake `priogrid_gid` into
 #: their Arrow schema. Accepted on read and normalised, exactly as `_init_dataframe` does.
 _ENTITY_ALIASES = (_ENTITY_ID, "priogrid_gid")
+
+
+class ImplausibleArtifact(Exception):
+    """The artifact streamed cleanly but its geography violates C-72.
+
+    Distinct from :class:`NotStreamable` because the two need opposite responses. "I cannot
+    stream this" should fall back to the in-memory path; "this data is invalid" must **not** —
+    the in-memory path would reach the same verdict after paying the full 12.2 GB peak, and
+    C-72 requires the request to fail loud either way.
+
+    The check runs per chunk, before anything is committed. It used to run on the reconstructed
+    dataset *after* ``write_value_dir`` had already replaced the cache slot — so a bad artifact
+    evicted the last good one, the request 500'd, and the **next** request took the disk-cache
+    branch, which does not re-validate, and served the implausible geography.
+    """
 
 
 class NotStreamable(Exception):
@@ -76,6 +97,18 @@ def _entity_column(names: Sequence[str]) -> Optional[str]:
         if alias in names:
             return alias
     return None
+
+
+def assert_plausible_chunk(geo_df: pd.DataFrame, rg: int) -> None:
+    """Run the C-72 geography check on one chunk, before any of it can be committed.
+
+    Both checks `assert_geo_metadata_plausible` makes — coordinate ranges and ISO3 shape — are
+    row-local, so chunk-wise is equivalent to whole-table and fails on the first bad row group.
+    """
+    try:
+        assert_geo_metadata_plausible(geo_df)
+    except ValueError as exc:
+        raise ImplausibleArtifact(f"row group {rg}: {exc}") from exc
 
 
 def stream_to_value(
@@ -107,12 +140,30 @@ def stream_to_value(
         raise NotStreamable(
             f"artifact has no ({_TIME_ID}, {'/'.join(_ENTITY_ALIASES)}) columns: {schema_names}"
         )
+    if entity_col != _ENTITY_ID:
+        # Mirror `_init_dataframe`'s WARNING for the C-61 vocabulary shim, so the same upstream
+        # condition is observable whichever path ingested the artifact.
+        logger.warning("artifact entity column is %r, normalising to %r", entity_col, _ENTITY_ID)
     missing_targets = [t for t in targets if t not in schema_names]
     if missing_targets:
         raise NotStreamable(f"targets absent from the artifact: {missing_targets}")
     missing_meta = [c for c in metadata_cols if c not in schema_names]
     if missing_meta:
         raise NotStreamable(f"geo metadata columns absent from the artifact: {missing_meta}")
+
+    # CR-4: the in-memory path moves every remaining scalar column into `_feature_store` and
+    # records it in the manifest; this one reads only the named targets. If the artifact carries a
+    # value column `targets` omits, the two paths would disagree on the same input, so refuse.
+    value_cols = [
+        c for c in schema_names
+        if c not in {_TIME_ID, *_ENTITY_ALIASES} and c not in set(metadata_cols)
+    ]
+    extra = [c for c in value_cols if c not in set(targets)]
+    if extra:
+        raise NotStreamable(
+            f"artifact carries value column(s) {extra} outside the requested targets — the "
+            f"in-memory path would keep them as features and this one would drop them"
+        )
 
     n_rows = pf.metadata.num_rows
     if n_rows == 0:
@@ -128,7 +179,7 @@ def stream_to_value(
         for rg in range(pf.metadata.num_row_groups):
             chunk = pf.read_row_group(rg, columns=list(categories))
             for col in categories:
-                vals = pa.compute.unique(chunk.column(col).combine_chunks())
+                vals = pc.unique(chunk.column(col).combine_chunks())
                 categories[col].update(v for v in vals.to_pylist() if v is not None)
     ordered_categories = {c: sorted(v) for c, v in categories.items()}
 
@@ -148,13 +199,17 @@ def stream_to_value(
     geo_writer: Optional[pq.ParquetWriter] = None
     row = 0
     prev_month: Optional[int] = None
+    prev_cell: int = -1
     read_cols = [_TIME_ID, entity_col] + list(targets) + list(metadata_cols)
 
     try:
         for rg in range(pf.metadata.num_row_groups):
             chunk = pf.read_row_group(rg, columns=read_cols)
-            months = chunk.column(_TIME_ID).to_numpy()
-            cells = chunk.column(entity_col).to_numpy()
+            # int64 before any differencing: `to_numpy()` preserves the parquet dtype, and on an
+            # unsigned column `np.diff` wraps a descending step into a large positive one — the
+            # ordering guard would then pass on exactly the input it exists to reject (CR-6).
+            months = chunk.column(_TIME_ID).to_numpy().astype(np.int64)
+            cells = chunk.column(entity_col).to_numpy().astype(np.int64)
             n = len(months)
             if n == 0:
                 continue
@@ -164,6 +219,17 @@ def stream_to_value(
                 raise NotStreamable(
                     f"row group {rg} starts at month {months[0]} after month {prev_month} — "
                     f"file order is not month-ascending, so it is not sort_index() order"
+                )
+            # CR-2: a month SPANS row groups — at 64,742 cells against ~1M-row groups that is the
+            # normal case, not an edge one. Comparing only months at the boundary and only cells
+            # within a chunk left the seam unchecked, so a month written upper-half-first passed
+            # every guard (density and C-87 included) and produced a value-dir in an order
+            # `sort_index()` would never emit. Carry the last cell across the boundary too.
+            if prev_month is not None and months[0] == prev_month and cells[0] <= prev_cell:
+                raise NotStreamable(
+                    f"row group {rg} resumes month {months[0]} at cell {cells[0]}, which does not "
+                    f"ascend from cell {prev_cell} where the previous row group left it — file "
+                    f"order is not sort_index() order"
                 )
             if np.any(np.diff(months) < 0):
                 raise NotStreamable(f"row group {rg} is not month-ascending internally")
@@ -194,6 +260,19 @@ def stream_to_value(
                     [months, cells], names=[_TIME_ID, _ENTITY_ID]
                 ),
             )
+            # CR-3: `ForecastDataset.__init__` overwrites EVERY row of an entity that has any
+            # null geo column with that entity's first non-null values. Streaming writes each
+            # chunk verbatim, so a partially-null cell would give a different geo table — and a
+            # different cell set at aggregation — depending on which path ingested it. Refuse
+            # rather than reimplement the backfill: the real artifact has none (measured, 0
+            # missing), so this costs nothing and cannot drift from the constructor's rule.
+            null_cols = [c for c in metadata_cols if geo_df[c].isna().any()]
+            if null_cols:
+                raise NotStreamable(
+                    f"row group {rg} has null geo metadata in {null_cols} — the in-memory path "
+                    f"would backfill those rows per entity and this one would not"
+                )
+            assert_plausible_chunk(geo_df, rg)
             for col, cats in ordered_categories.items():
                 geo_df[col] = pd.Categorical(geo_df[col], categories=cats)
             table = pa.Table.from_pandas(geo_df, preserve_index=True)
@@ -203,6 +282,7 @@ def stream_to_value(
             del geo_df, table, chunk
 
             prev_month = int(months[-1])
+            prev_cell = int(cells[-1])
             row += n
     finally:
         if geo_writer is not None:

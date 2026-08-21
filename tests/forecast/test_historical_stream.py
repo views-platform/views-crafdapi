@@ -26,6 +26,7 @@ import pytest
 
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.forecast.ingestion.historical_stream import (
+    ImplausibleArtifact,
     NotStreamable,
     stream_to_value,
 )
@@ -158,4 +159,89 @@ class TestRefusesWhatItCannotReproduce:
         df = _dense_frame().drop(columns=["lr_ged_os"])
         art = _write(df, tmp_path / "a.parquet")
         with pytest.raises(NotStreamable, match="targets absent"):
+            stream_to_value(art, tmp_path / "out", TARGETS, META, CATS)
+
+
+class TestReviewFindings:
+    """Regressions for the findings `/code-review medium` and `/review-diff` raised on PR review.
+
+    Each of these was reproduced against the unfixed loader before the fix was written.
+    """
+
+    def test_refuses_descending_cells_across_a_row_group_boundary(self, tmp_path):
+        """CR-2. The per-chunk guard compared cells only *within* a chunk and months only at the
+        boundary, so a month split across two row groups with the second half descending passed
+        every check — density, C-87 and all — and produced a value-dir in an order `sort_index()`
+        would never emit. At 64,742 cells/month against ~1M-row row groups a month spanning two
+        groups is the norm, not an edge case."""
+        def rows(month, cells):
+            n = len(cells)
+            rng = np.random.default_rng(0)
+            d = {"month_id": [month] * n, "priogrid_id": list(cells),
+                 "pg_xcoord": np.zeros(n), "pg_ycoord": np.zeros(n),
+                 "country_iso_a3": ["AAA"] * n, "admin1_gaul1_code": np.zeros(n),
+                 "admin1_gaul1_name": ["R"] * n, "admin1_gaul0_code": np.zeros(n),
+                 "admin1_gaul0_name": ["P"] * n, "admin2_gaul2_code": np.zeros(n),
+                 "admin2_gaul2_name": ["D"] * n}
+            for t in TARGETS:
+                d[t] = rng.random(n)
+            return pd.DataFrame(d)
+
+        chunks = [rows(600, [104, 105, 106, 107]),   # month 600, upper half FIRST
+                  rows(600, [100, 101, 102, 103]),   # month 600, lower half SECOND
+                  rows(601, list(range(100, 108)))]
+        art = tmp_path / "split.parquet"
+        writer = pq.ParquetWriter(art, pa.Table.from_pandas(chunks[0], preserve_index=False).schema)
+        for c in chunks:
+            writer.write_table(pa.Table.from_pandas(c, preserve_index=False))
+        writer.close()
+        assert pq.ParquetFile(art).metadata.num_row_groups == 3
+
+        # "ascend" matches both the within-chunk message ("ascending") and the boundary one
+        # ("does not ascend from cell N"), so the test does not pin which guard fires.
+        with pytest.raises(NotStreamable, match="ascend"):
+            stream_to_value(art, tmp_path / "out", TARGETS, META, CATS)
+
+    def test_refuses_implausible_geography_before_writing_anything_servable(self, tmp_path):
+        """CR-1. Plausibility (C-72) ran only after the value-dir had been adopted into the cache
+        slot, replacing the previous good entry — and the disk read path does not re-validate, so
+        the next request served the implausible geography. The check now runs while streaming,
+        before any of it can be committed."""
+        df = _dense_frame(n_months=3, n_cells=6)
+        df.loc[4, "pg_ycoord"] = 999.0  # outside [-90, 90]
+        art = _write(df, tmp_path / "bad.parquet")
+        with pytest.raises(ImplausibleArtifact, match="pg_ycoord"):
+            stream_to_value(art, tmp_path / "out", TARGETS, META, CATS)
+
+    def test_refuses_null_geo_metadata_the_in_memory_path_would_backfill(self, tmp_path):
+        """CR-3. `ForecastDataset.__init__` overwrites every row of an entity that has ANY null geo
+        column with that entity's first non-null values. Streaming writes each chunk verbatim, so
+        an artifact with a partially-null cell would produce a different geo table by ingest path
+        — and a different cell set at aggregation, with no error."""
+        df = _dense_frame(n_months=3, n_cells=6)
+        df.loc[7, "admin1_gaul1_name"] = None
+        art = _write(df, tmp_path / "nulls.parquet")
+        with pytest.raises(NotStreamable, match="null"):
+            stream_to_value(art, tmp_path / "out", TARGETS, META, CATS)
+
+    def test_refuses_when_targets_omit_a_value_column_the_other_path_would_keep(self, tmp_path):
+        """CR-4. The in-memory path moves EVERY remaining scalar column into `_feature_store` and
+        lists it in the manifest; streaming reads only the named targets. With `historical_targets`
+        configured to a subset — the only reason that config key exists — the two paths would
+        produce different manifests for the same artifact."""
+        df = _dense_frame(n_months=3, n_cells=6)
+        art = _write(df, tmp_path / "a.parquet")
+        with pytest.raises(NotStreamable, match="value column"):
+            stream_to_value(art, tmp_path / "out", TARGETS[:1], META, CATS)
+
+    def test_descending_months_are_caught_on_unsigned_index_columns(self, tmp_path):
+        """CR-6. `np.diff` on an unsigned dtype wraps, so a descending sequence reads as a large
+        positive step and the ordering guard passes on exactly the input it exists to reject.
+        Some platform parquet schemas write the index columns unsigned."""
+        df = _dense_frame(n_months=3, n_cells=6)
+        df = pd.concat([df[df.month_id == 602], df[df.month_id != 602]], ignore_index=True)
+        df["month_id"] = df["month_id"].astype("uint32")
+        df["priogrid_id"] = df["priogrid_id"].astype("uint32")
+        art = _write(df, tmp_path / "unsigned.parquet")
+        with pytest.raises(NotStreamable, match="ascending"):
             stream_to_value(art, tmp_path / "out", TARGETS, META, CATS)

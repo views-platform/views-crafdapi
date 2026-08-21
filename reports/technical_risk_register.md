@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 45                                             |
-| Open Concerns     | 43                                             |
+| Total Concerns    | 48                                             |
+| Open Concerns     | 46                                             |
 | Resolved Concerns | 2                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -1036,3 +1036,64 @@ A file that supersedes itself, and a rename from a name to the same name. The se
 Harmless to running code and to the served contract; it costs a reader the one recorded answer to "what was this called before, and why is there an alias". The same rename pass is the mechanism behind **C-257** (the `un_fao` → `un_crafd` launcher clone) — a class of change this repository has now been bitten by twice. Named fix: recover the pre-rename name from `git log --follow docs/CICs/ForecastDataset.md` and restate it, or delete the line and say plainly that the pre-clone name was lost.
 
 Cross-refs: **C-275** (found in the same pass), **C-257** (same rename-pass mechanism), **C-243**.
+### C-277: The disk-cache read path serves whatever is in the slot, without re-running the C-72 gate
+
+| Field | Value |
+|-------|-------|
+| ID | C-277 |
+| Tier | 2 |
+| Source | code-review medium (2026-08-21, PR review of `perf/c263-cold-start-historical`) |
+| Trigger | When adding any **third** writer of a value-dir — a wire-contract variant, a backfill tool, an operator repair script — validate before `write_value_dir`, not after reading back. The read path will not catch it for you. Equally, before relying on "implausible data cannot reach FAO", check that every writer validates, because nothing checks the reader. |
+| Location | `src/views_crafdapi/managers/dataset_service.py:283-306` (the disk gate), `src/views_crafdapi/managers/disk_cache.py::read`, versus the write-side gates at `dataset_service.py:521-522` (in-memory), `forecast/ingestion/wire_reader.py::WireRunAssembler.append_month` (wire), `forecast/ingestion/historical_stream.py::assert_plausible_chunk` (streamed) |
+
+ADR-013 §4.5 and the DatasetService CIC §6 both state the C-72 guarantee as "implausible data fails loud rather than reaching FAO". That guarantee is **entirely write-side**. `CrafdDiskCacheManager.read` reconstructs a dataset from the value-dir and hands it back; the disk gate in `get_latest_dataframe` serves it directly. No plausibility check runs on that path, ever.
+
+That is safe only while every writer validates before adopting — which is now true, but was not: the streamed historical ingest introduced on this branch called `write_value_dir` and validated *afterwards*. Reproduced end-to-end before the fix: ingest a good artifact, then one with `pg_ycoord = 999.0`; the bad value-dir was adopted (`rmtree` + `os.replace` over the previous good entry), validation raised, the broad fallback caught it, the request 500'd from the in-memory path — and the **next** request took the disk gate and served `pg_ycoord = 999.0` with `success: true`. The last good entry was already deleted.
+
+Fixed on this branch by moving the check into `stream_to_value` so it runs per row group, before anything is committed, and by raising `ImplausibleArtifact` rather than falling back (a data fault is not a streaming fault). **The entry is registered for the residual, not the instance**: there are now three independent writers of that cache slot and one unguarded reader, and the invariant that keeps them honest is written down in an ADR rather than asserted anywhere in code. A fourth writer that forgets produces exactly the failure above, silently.
+
+Cheapest real mitigation, deliberately not taken here (scope): validate on the read path once, or record the validation verdict in the value-dir meta so the reader can refuse an unvalidated entry.
+
+Cross-refs: **C-259** (validation living in one path and not its sibling — the same shape, one layer up), **C-72** (inherited — the gate this is about), **C-263** (the change that exposed it).
+
+---
+
+### C-278: The streamed and in-memory historical ingests accept different artifacts, and nothing tests that they agree
+
+| Field | Value |
+|-------|-------|
+| ID | C-278 |
+| Tier | 3 |
+| Source | code-review medium (2026-08-21, PR review of `perf/c263-cold-start-historical`) |
+| Trigger | When the producer changes the historical artifact's shape — a new value column, a nullable geography column, an unsigned index dtype, a different row-group layout — check which path will ingest it. A change that only makes the *streamed* path refuse degrades silently to a 12.2 GB cold start rather than failing. Also when `historical_targets` is ever actually configured (it is `{}` in production today — C-238). |
+| Location | `src/views_crafdapi/forecast/ingestion/historical_stream.py::stream_to_value` (the `NotStreamable` preconditions) versus `src/views_crafdapi/data/handlers/grid_dataset.py::_init_dataframe` + `data/handlers/forecast_dataset.py::__init__` |
+
+There are now two implementations of "turn a historical artifact into a `ForecastDataset`", and they do not accept the same inputs. The streamed one refuses: a non-dense grid, rows not already in `sort_index()` order, null geo metadata, and any value column outside the declared `targets`. The in-memory one accepts all four — it dense-fills, sorts, backfills geography per entity, and carries the extra columns as features.
+
+Each refusal is deliberate and each was added because the alternative was worse: reimplementing the constructor's dense-fill and per-entity backfill inside the streamer would duplicate the subtlest logic in the repo, and getting it slightly wrong changes served geography with no error. Refusing and falling back is the safe direction.
+
+The residual is that the divergence is **invisible when it fires**. A refusal logs at INFO and the request still succeeds — at the memory cost this whole change exists to remove. So the failure mode of C-263's fix is not an error; it is a quiet return to the old peak, discoverable only by reading logs or re-measuring the box. Nothing asserts that the two paths accept the same set of artifacts, and the byte-identity tests compare outputs only for inputs *both* accept.
+
+Also folded in here rather than given its own entry: the historical target-detection rule (`configs_getter().get("historical_targets")` else every non-index, non-metadata column) is now written twice — `dataset_service.py:504-507` and `:593-596`. Second occurrence, so WET-before-DRY says leave it; recorded because the two must agree or the paths build different `targets`.
+
+Cross-refs: **C-260** (two live implementations of one operation, already disagreeing — the same shape on the aggregate path), **C-238** (why `historical_targets` is unset in production, which is what currently masks the target-coverage divergence), **C-263**.
+
+---
+
+### C-279: A byte-identity proof over one artifact left a guard hole that eight mutation tests also missed
+
+| Field | Value |
+|-------|-------|
+| ID | C-279 |
+| Tier | 3 |
+| Source | code-review medium (2026-08-21, PR review of `perf/c263-cold-start-historical`) |
+| Trigger | When the next change is justified by "byte-identical on the real artifact", ask which properties of *that* artifact the proof depended on, and whether the guard is checked against inputs that violate them. Specifically: before trusting a streaming validator, construct an input where the violation straddles a chunk boundary rather than sitting inside one. |
+| Location | `src/views_crafdapi/forecast/ingestion/historical_stream.py:160-185` (the ordering guard), `tests/forecast/test_historical_stream.py::TestReviewFindings` |
+
+The streamed ingest rests on one precondition — file order already *is* `sort_index()` order — and the module verifies it per row group rather than assuming it. The verification had a hole: it compared cells only *within* a chunk and months only *across* the boundary, so a month split across two row groups with its halves written out of order passed every check. At 64,742 cells per month against ~1,048,576-row row groups a month spans row groups roughly every 16 months, so this is the ordinary case, not an exotic one.
+
+What makes it worth an entry is what did **not** catch it. The change shipped with: byte-identity against the in-memory path on the real 28.4M-row artifact; served-output equality on 1.55M rows across four call paths; and eight mutation tests, each confirmed to fail when its guard was removed. All of them passed. They passed because the real artifact is globally sorted, so the hole was unreachable through any of them — the proof was over an input whose properties made the defect invisible.
+
+The lesson generalises past this module: a guard tested only against inputs that satisfy the precondition tests the happy path of the guard, not the guard. Fixed by carrying the last cell across the boundary, with a test that builds the three-row-group artifact directly.
+
+Cross-refs: **C-258** (Tier 1 for the pattern rather than the instance — a stated invariant violated while CI reported success), **C-243** (shape-only assertions), **C-263**.

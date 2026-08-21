@@ -23,7 +23,9 @@ def to_array_columns(df: pd.DataFrame) -> pd.DataFrame:
     the index is unsorted, `fill_dense_grid` (which sorts) when preprocessing runs, and
     `.drop(columns=...)` when the stores are built — so no caller frame is mutated in place.
     """
-    if not any(isinstance(df[col].iloc[0], list) for col in df.columns) or df.empty:
+    # `df.empty` FIRST: the generator dereferences `.iloc[0]`, so on a 0-row frame that
+    # still has columns the `or df.empty` clause is never reached and this raises IndexError.
+    if df.empty or not any(isinstance(df[col].iloc[0], list) for col in df.columns):
         return df
     converted = df.copy()
     for col in converted.columns:
