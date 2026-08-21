@@ -37,6 +37,24 @@ def fill_dense_grid(
         )
 
     df = df[df.index.get_level_values(entity_id).isin(existing_entity_ids)]
+
+    # Already-dense fast path (C-263). The producer's historical artifact IS the dense grid:
+    # 439 months x 64,742 cells == 28,421,738 rows, exactly, with no gaps. On that input the
+    # work below is performed in full and finds nothing — `MultiIndex.from_product` materialises
+    # all 28.4M pairs and `.difference()` hashes them against the frame's own index, purely to
+    # reach the `len(missing_combinations) == 0` early return a few lines down.
+    #
+    # The precondition is decidable without building either object. After the filter above,
+    # every remaining row's (time, entity) pair is drawn from `time_values x existing_entity_ids`,
+    # so the frame's index is a SUBSET of the product. A subset whose cardinality equals the
+    # product's, and which contains no duplicate pairs, IS the product — nothing is missing.
+    # Both facts are cheap: a multiply and an index uniqueness check.
+    #
+    # `is_unique` is load-bearing, not defensive: without it a frame with one duplicated pair
+    # and one absent pair has the right length and would skip a fill it genuinely needs.
+    if len(df) == len(time_values) * len(existing_entity_ids) and df.index.is_unique:
+        return df.sort_index()
+
     all_combinations = pd.MultiIndex.from_product(
         [time_values, existing_entity_ids], names=[time_id, entity_id]
     )

@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Owner:** Project maintainers
-**Last reviewed:** 2026-06-27
+**Last reviewed:** 2026-08-21
 **Related ADRs:** ADR-001 (Infrastructure category), ADR-008 (logging and observability), ADR-009 (boundary contracts and configuration validation)
 **Source:** epic #144 / C-36, S2 — extracted from `CrafdApiManager._get_latest_dataframe`
 
@@ -28,6 +28,7 @@
 ## 3. Responsibilities and Guarantees
 
 - **Three-tier fetch:** (1) in-memory `dataframe_cache[api_key_hash][category]` (TTL-bounded; advisory staleness warning on hit), (2) disk cache via `CrafdDiskCacheManager`, (3) remote Appwrite download. A hit at any tier populates the higher tiers. `force_refresh=True` bypasses tiers 1–2.
+- **Streamed historical ingest (C-263 / #98):** on a tier-3 miss for `category="historical"`, the artifact is first offered to `forecast.ingestion.historical_stream.stream_to_value`, which assembles the value-dir a parquet row group at a time instead of decoding the whole 28.4M-row frame — 3.9 GB peak against 12.2 GB, measured. It applies only to an artifact already dense and already in `sort_index()` order, and raises `NotStreamable` otherwise; the in-memory path below then runs **unchanged**. A refusal is not an error: the request succeeds, at the old memory cost. C-72 plausibility runs *while streaming*, before anything is committed, and a violation raises `ImplausibleArtifact` → HTTP 500 rather than falling back (C-277).
 - **Provenance (C-86):** the latest artifact is resolved via `manager.get_latest_provenance(filters={"category": …})`; the lineage (file id, declared upstream `source`, `methodology_version`, hash, created-at, filename) is logged and stored on the cache entry. No forecast/historical artifact → `HTTPException(404)`.
 - **Format auto-detection:** parquet → CSV (utf-8 only) → JSON → feather. **Pickle is excluded** (C-59, RCE on untrusted bytes); a `PAR1` magic header that fails to parse short-circuits to 500 (C-52).
 - **Plausibility (C-72):** before caching/serving, `validate_value_plausibility()` + `validate_metadata_plausibility()` run; a violation surfaces as 500 — implausible data fails loud rather than reaching FAO.
@@ -47,7 +48,7 @@
 ## 5. Outputs and Side Effects
 
 - Returns a pandas `DataFrame` / `ForecastDataset` (copies).
-- **Side effects:** mutates the injected in-memory caches; writes the disk cache; logs provenance + staleness + format-detection at INFO/DEBUG.
+- **Side effects:** mutates the injected in-memory caches; writes the disk cache; logs provenance + staleness + format-detection at INFO/DEBUG. On the streamed historical path it additionally stages the downloaded artifact to a temp file under the disk cache's staging dir and adopts the assembled value-dir with `write_value_dir` (previously wire-only), discarding the staging dir on any failure.
 
 ---
 

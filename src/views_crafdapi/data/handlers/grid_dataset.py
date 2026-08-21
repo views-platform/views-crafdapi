@@ -106,8 +106,16 @@ class _GridDataset:
             )
         self.original_columns = dataframe.columns.tolist()
 
-        # Convert and sort FIRST before saving original index
-        self.dataframe = self._convert_to_arrays(dataframe).sort_index()  # Sort early
+        # Convert and sort FIRST before saving original index.
+        # C-263: `sort_index()` on an already-sorted index is an identity that still allocates a
+        # full copy. The producer's historical artifact arrives month-sorted, and the copy was
+        # ~0.8 GB of the cold-start peak at 28.4M rows. Skipping it when the index is already
+        # monotonic yields the same values in the same order; `_preprocess_dataframe` below sorts
+        # again on the way out, so the invariant "self.dataframe is sorted" is unaffected either way.
+        converted = self._convert_to_arrays(dataframe)
+        self.dataframe = (
+            converted if converted.index.is_monotonic_increasing else converted.sort_index()
+        )  # Sort early
 
         self.original_index = self.dataframe.index.copy()  # Save sorted index
 
