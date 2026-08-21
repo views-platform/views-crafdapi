@@ -36,7 +36,10 @@ RUNBOOK = Path(__file__).resolve().parent.parent / "deployment" / "RELEASE_RUNBO
 # finding rather than only a documentation one.
 
 
-@pytest.mark.xfail(strict=True, reason="C-265 open: Step 7 still expects version 0.1.0 + 503s")
+# RESOLVED in v0.5.0: Step 7 is now explicitly framed as the record of the 2026-08-02 first
+# stand-up, with the current expectation (ALL PASS, and a 503 meaning a real outage) stated
+# alongside it. The xfail is gone; this is an ordinary guard now, and it fails if the stale
+# wording ever comes back.
 def test_runbook_does_not_tell_the_reader_to_expect_the_pre_delivery_failure_state():
     """The bucket is no longer empty, so 503s are no longer the correct expectation."""
     text = RUNBOOK.read_text()
@@ -61,7 +64,10 @@ def test_runbook_does_not_tell_the_reader_to_expect_the_pre_delivery_failure_sta
 # the wrong version. This is the same defect class the rewrite was meant to close.
 
 
-@pytest.mark.xfail(strict=True, reason="C-266 open: release block hardcodes TAG=v0.4.0")
+# RESOLVED in v0.5.0: the block reads `TAG=vX.Y.Z`. An unedited paste now fails at the deploy
+# gate (`checkout-deploy-tag.sh` cannot resolve `refs/tags/vX.Y.Z`) instead of quietly deploying
+# a stale real tag. The guard stays, un-xfailed, so the next release cannot reintroduce it —
+# which is the whole point, since v0.4.0 was itself the reintroduction of the v0.2.0 trap.
 def test_runbook_release_block_does_not_hardcode_a_real_looking_tag():
     """A stale placeholder fails safe; a stale real tag deploys the wrong version silently."""
     text = RUNBOOK.read_text()

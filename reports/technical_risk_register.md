@@ -6,8 +6,8 @@
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
 | Total Concerns    | 48                                             |
-| Open Concerns     | 46                                             |
-| Resolved Concerns | 2                                              |
+| Open Concerns     | 44                                             |
+| Resolved Concerns | 4                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -795,7 +795,7 @@ No credential or data is exposed and the request is correctly refused, hence Tie
 
 ---
 
-### C-265: Runbook Step 7 states the pre-delivery failure state as the current expectation
+### C-265 (RESOLVED): Runbook Step 7 states the pre-delivery failure state as the current expectation
 
 | Field | Value |
 |-------|-------|
@@ -815,9 +815,17 @@ The staleness was identified during the v0.4.0 deploy and explicitly promised as
 
 Fix: mark Step 7 explicitly as the historical first stand-up, or restate its expectations for a service that has data. Enforced by `tests/test_falsify_shutdown_safety.py::test_runbook_does_not_tell_the_reader_to_expect_the_pre_delivery_failure_state`.
 
+
+**RESOLVED (2026-08-21, release/v0.5.0).** Step 7 is now explicitly framed as the record of the
+2026-08-02 first stand-up, with a block quote stating the current expectation directly: the first
+delivery landed 2026-07-27, `smoke.py` returns ALL PASS, and a 503 from the coverage checks is a
+real outage rather than an expected state. Readers are pointed at the recurring "Every future
+release" block for any deploy after the first. Enforced by
+`tests/test_falsify_shutdown_safety.py::test_runbook_does_not_tell_the_reader_to_expect_the_pre_delivery_failure_state`,
+which had been `xfail(strict=True)` and is now an ordinary passing guard.
 ---
 
-### C-266: The release block still hardcodes a real-looking tag — the trap it was rewritten to remove
+### C-266 (RESOLVED): The release block still hardcodes a real-looking tag — the trap it was rewritten to remove
 
 | Field | Value |
 |-------|-------|
@@ -841,6 +849,17 @@ A placeholder (`TAG=vX.Y.Z`) fails at the deploy gate on an unedited paste, whic
 
 Cross-refs: **C-167** shape (tag/version dual source of truth) and the 2026-08-15 deploy-gate outage, which is what taught this repo that a tag naming the wrong thing is an outage, not a nit.
 
+
+**RESOLVED (2026-08-21, release/v0.5.0).** The block reads `TAG=vX.Y.Z`, and the smoke line now
+uses `--expect-tag "$TAG"` rather than a second written-out tag. An unedited paste fails at the
+deploy gate — `checkout-deploy-tag.sh` cannot resolve `refs/tags/vX.Y.Z` and refuses — which is
+the direction the entry asked for: a stale placeholder fails loudly, a stale real tag succeeds at
+deploying the wrong version. Enforced by
+`tests/test_falsify_shutdown_safety.py::test_runbook_release_block_does_not_hardcode_a_real_looking_tag`,
+previously `xfail(strict=True)`, now an ordinary passing guard.
+
+Worth keeping in view: `v0.4.0` in that slot *was* the fix for the `v0.2.0` trap, and it
+reintroduced the same defect one release later. The un-xfailed test is what stops a third round.
 ---
 
 ### C-267: An unknown entity id is answered with an empty 200, not a rejection — at every level, on every path

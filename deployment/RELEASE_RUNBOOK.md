@@ -158,10 +158,15 @@ curl -s https://crafdapi.viewsforecasting.org/ping        # -> {"status":"ok"}
 curl -s https://crafdapi.viewsforecasting.org/version     # -> "0.1.0" + the tag
 ```
 
-Then the smoke test. **Read this before you run it:** because the CRAF'd bucket is
-empty, the forecast/historical coverage checks will report **503 (fail-visible)** —
-that is **expected and correct** until the producer's first delivery, *not* a broken
-deploy. What must pass now is `ping` and `version = 0.1.0`.
+Then the smoke test.
+
+> **This step is the record of the 2026-08-02 first stand-up, not a description of today.**
+> At that point the CRAF'd bucket was empty, so the forecast/historical coverage checks
+> reported an honest **503** and only `ping` and `version` could pass. The producer's first
+> delivery landed **2026-07-27**; since then `smoke.py` returns **ALL PASS**, and a 503 from
+> the coverage checks is a real outage, not an expected state. Read the version numbers below
+> as `v0.1.0`-era history; for any deploy after the first, use the recurring block under
+> *"Every future release"* and expect ALL PASS.
 
 ```bash
 # from the deploy checkout, with the CRAF'd caller/read-scoped key exported
@@ -196,7 +201,7 @@ faoapi (`views-faoapi` on :8000) is untouched throughout. Then tell the agent wh
 
 ```bash
 # --- as your own user ---
-TAG=v0.4.0   # <-- the ONLY line to change. Set it to the tag you are deploying.
+TAG=vX.Y.Z   # <-- the ONLY line to change. Set it to the tag you are deploying.
 echo $TAG | sudo -u views-crafdapi-deploy tee /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
 sudo systemctl restart views-crafdapi
 curl -s https://crafdapi.viewsforecasting.org/version     # expect version AND deployed_tag = $TAG
@@ -205,7 +210,7 @@ curl -s https://crafdapi.viewsforecasting.org/version     # expect version AND d
 sudo -iu views-crafdapi-deploy
 cd views-crafdapi
 read -rsp "caller key: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
-.venv/bin/python scripts/smoke.py --expect-tag v0.4.0   # verify + warm
+.venv/bin/python scripts/smoke.py --expect-tag "$TAG"   # verify + warm
 exit
 ```
 
@@ -222,6 +227,13 @@ Rollback: the same four lines with the previous tag.
 The tag was written out twice here, and the block was still naming `v0.2.0` two releases after
 it stopped being current — so pasting it as-is would have silently rolled production back while
 looking like a deploy. One variable, changed once, is why it is written this way.
+
+That rewrite reduced the trap without removing it: `TAG=v0.4.0` was still a real, plausible tag
+that pasted cleanly and would be stale at the next release exactly as `v0.2.0` had been. It is
+now a **placeholder**. An unedited paste fails at the deploy gate — `checkout-deploy-tag.sh`
+cannot resolve `refs/tags/vX.Y.Z` and refuses — which is the correct direction: a stale
+placeholder fails loudly, a stale real tag succeeds at deploying the wrong version. Register
+**C-266**.
 
 **The tag must exist on the remote before the restart** — the service checks out what this file
 names, so a tag that is only local leaves the service on the old version while the file claims
@@ -254,4 +266,28 @@ Deployed so far: **v0.1.0** (2026-08-02, first stand-up — bucket empty by desi
 **v0.2.0** (the first CRAF'd delivery is live and `/provenance/forecast` reports it), **v0.3.0**
 (2026-08-17, the #70 fix), **v0.4.0** (ADR-030 S7 — the aggregate path stops round-tripping its
 samples through pandas; `/data/forecast/bulk` 501 s → 31 s, peak RSS 13.7 → 6.7 GB, served output
-byte-identical).
+byte-identical), **v0.5.0** (C-263/#98 — the cold-start historical load is streamed into the
+value-dir a row group at a time instead of being decoded whole; peak 12.2 → 3.9 GB measured
+locally, served output byte-identical. **The production cold-start peak is the number this
+release exists to obtain — take it during the deploy, per the section below.**).
+
+
+## Taking the v0.5.0 cold-start measurement
+
+v0.5.0 exists to move the cold-start peak, and that number does not exist until it is taken on
+the box. #99 (memory ceilings, C-262) is blocked on it — not on a code change. Take it in the
+same shape as the "before", or the two are not comparable:
+
+```bash
+sudo systemctl restart views-crafdapi          # cold caches
+curl -s -o /dev/null -w '%{http_code} %{size_download} %{time_total}\n' \
+     -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
+     https://crafdapi.viewsforecasting.org/data/forecast/bulk
+systemctl status views-crafdapi | grep Memory   # the peak covers that one request
+```
+
+Reference points, all measured before this release: cold start **16.8 G**, steady state **6.0 G**,
+`views-faoapi` resident **5.9 G**, box total **22 GiB**. The local prediction for v0.5.0 is
+~11 G cold; the criterion in #98 is "comfortably under ~14 G". Record what you actually see on
+**C-263** and in the ADR-030 addendum, whichever way it goes — a disappointing number is the
+useful one, because the fix is then not yet done.
