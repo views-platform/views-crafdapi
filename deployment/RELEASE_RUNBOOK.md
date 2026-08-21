@@ -268,8 +268,11 @@ Deployed so far: **v0.1.0** (2026-08-02, first stand-up — bucket empty by desi
 samples through pandas; `/data/forecast/bulk` 501 s → 31 s, peak RSS 13.7 → 6.7 GB, served output
 byte-identical), **v0.5.0** (C-263/#98 — the cold-start historical load is streamed into the
 value-dir a row group at a time instead of being decoded whole; peak 12.2 → 3.9 GB measured
-locally, served output byte-identical. **The production cold-start peak is the number this
-release exists to obtain — take it during the deploy, per the section below.**).
+locally, served output byte-identical. Tagged but **never deployed** — superseded by v0.5.1), **v0.5.1** (the streamed
+ingest above, plus a bounded restart loop: the deploy gate's refusals are deterministic and were
+being retried forever, which is what the 47-minute incident on 2026-08-15 actually was.
+**The production cold-start peak is the number this release exists to obtain — take it during
+the deploy, per the section below.**).
 
 
 ## Taking a cold-start memory measurement
