@@ -220,7 +220,9 @@ class TestMemoryCeiling:
     """
 
     COLD_PEAK_G = 7.3
-    BOX_G = 22
+    BOX_G = 22            # `free -g` on the box, 2026-08-21 — NOT the 24 GB views-faoapi#368 assumed
+    NEIGHBOUR_MAX_G = 11  # views-faoapi/deployment/views-faoapi.service
+    OS_RESERVE_G = 2      # OS + nginx + page cache; the box has no swap, so this is not optional
 
     def _unit(self):
         import configparser
@@ -252,9 +254,22 @@ class TestMemoryCeiling:
             f"MemoryMax={mx}G is at or below the measured cold-start peak "
             f"{self.COLD_PEAK_G}G — the service would be killed on every restart"
         )
-        assert mx >= self.COLD_PEAK_G * 1.25, (
-            f"MemoryMax={mx}G leaves under 25% headroom over a measured peak that will grow with "
-            f"the month horizon and ADR-034's ADDITIONAL_TARGETS"
+        assert mx >= self.COLD_PEAK_G * 1.2, (
+            f"MemoryMax={mx}G leaves under 20% headroom over the measured peak. The margin is "
+            f"this tight because the box is shared — see the co-tenancy test below, which is "
+            f"what caps it from the other side."
+        )
+
+    def test_the_pair_of_ceilings_fits_the_box(self):
+        """The constraint that actually sets our number. views-faoapi#368 sized its pair from a
+        24 GB box; `free -g` says 22 GiB, so 11 + 11 leaves nothing for the OS — and with no swap
+        that is an immediate OOM, which is precisely what the ceilings exist to prevent."""
+        mx = self._gb(self._unit().get("Service", "MemoryMax"))
+        total = mx + self.NEIGHBOUR_MAX_G + self.OS_RESERVE_G
+        assert total <= self.BOX_G, (
+            f"MemoryMax={mx}G + views-faoapi {self.NEIGHBOUR_MAX_G}G + {self.OS_RESERVE_G}G OS "
+            f"reserve = {total}G, over the {self.BOX_G} GiB box. Both services at their ceiling "
+            f"must not be able to exhaust the machine."
         )
 
     def test_high_is_below_max_and_above_the_cold_start(self):

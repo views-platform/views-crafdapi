@@ -412,7 +412,7 @@ Rollback is the `TAG=` block with the previous tag.
 
 ## Memory ceilings, and removing the temporary one
 
-`deployment/views-crafdapi.service` declares `MemoryHigh=9G` / `MemoryMax=11G`, derived from the
+`deployment/views-crafdapi.service` declares `MemoryHigh=8G` / `MemoryMax=9G`, derived from the
 **measured cold start** of 7.3 G (2026-08-21, v0.5.1) — not from the 3.7 G steady state, which is
 the distinction C-263 exists for: a ceiling sized from the steady state kills the service on every
 restart and looks generous until it does.
@@ -427,7 +427,7 @@ systemctl show views-crafdapi -p MemoryMax -p MemoryHigh        # what is actual
 sudo rm -f /run/systemd/system.control/views-crafdapi.service.d/50-MemoryMax.conf
 sudo rmdir --ignore-fail-on-non-empty /run/systemd/system.control/views-crafdapi.service.d
 sudo systemctl daemon-reload
-systemctl show views-crafdapi -p MemoryMax -p MemoryHigh        # expect 11G / 9G from the unit
+systemctl show views-crafdapi -p MemoryMax -p MemoryHigh        # expect 9G / 8G from the unit
 ```
 
 Do **not** use `systemctl revert views-crafdapi` to clear it. `revert` removes overrides in both
@@ -436,6 +436,12 @@ file itself.
 
 The values take effect on the next restart. Confirm with `systemctl show` rather than by reading
 the unit file, because that is exactly the gap the runtime drop-in created.
+
+**The box is 22 GiB with no swap** (`free -g`, 2026-08-21) — not the 24 GB views-faoapi#368
+assumed when it sized its pair at 11G each. 11 + 11 is the whole machine, and with no swap,
+reaching it is an immediate OOM rather than a slowdown. The pair has to sum to ~20 GiB, so crafd
+takes 9G and faoapi keeps 11G: crafd is the one with a measured number (7.3 G) and can afford the
+tighter cap.
 
 **views-faoapi still has no ceiling**, and that is the other half of #99. Its 4.8 G is an
 *observed* resident figure, not a measured cold start — the same kind of number crafd's own

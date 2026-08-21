@@ -756,11 +756,31 @@ half has one.** The crafd procedure is in `RELEASE_RUNBOOK.md` ("Taking a cold-s
 measurement") and transfers directly — including the part that makes it valid, which is clearing
 the cached value-dirs first so the ingest actually runs (C-282).
 
-Until faoapi's number exists, any pair of ceilings is one measurement and one guess. The
-conservative reading of what is known: crafd's measured cold peak is 7.3 G, so a crafd ceiling in
-the 10-12 G range carries 37-64% headroom over measurement, and whatever is left of 22 GiB after
-the OS and page cache is faoapi's budget — which may or may not be enough, and that is the open
-question rather than an answer.
+**The box is 22 GiB with no swap** — `free -g`, 2026-08-21. views-faoapi#368 sized its pair from
+"24 GB − 2 GB OS = 22 GB → **11 GB each**", and its unit file carries those values today. On a
+22 GiB machine that arithmetic does not hold: 11 + 11 is the entire box with nothing for the OS,
+nginx or page cache, and with **zero swap** reaching it is an immediate OOM — the exact event the
+ceilings exist to prevent. The 24 GB figure was never checked against the box; the hostname
+(`ubuntu-24gb-…`) says 24 and `free` says 22.
+
+Resolved by making the pair sum to ~20 GiB and giving crafd the smaller share, because crafd is
+the one with a measured number:
+
+| | ceiling | headroom over its own peak | basis |
+|---|---|---|---|
+| views-crafdapi | `MemoryHigh=8G` / **`MemoryMax=9G`** | 23% over a **measured** 7.3 G | this repo, 2026-08-21 |
+| views-faoapi | `MemoryHigh=9G` / `MemoryMax=11G` (unchanged) | ~10% over a **believed** ~10 G | C-191, never measured |
+| OS + nginx + page cache | 2 GiB | | |
+
+crafd's half is landed and pinned from both sides by
+`tests/test_deployment_artifacts.py::TestMemoryCeiling` — ≥20% over the measured peak rules out
+8G, and composing with the neighbour inside 22 GiB rules out 10G and 11G. One value satisfies
+both.
+
+**faoapi's half is neither measured nor active.** Its unit declares the caps; the box has no
+ceiling in effect, because views-faoapi#368 was closed 2026-08-09 with its operator install step
+undone. Filed as views-faoapi#432. Until that lands and its cold start is measured, this entry is
+half-satisfied: the service that could exhaust the box is the one still uncapped.
 
 S7 improves the arithmetic but does not address the coupling. `MemoryMax=` on both units converts "the box falls over and the kernel chooses a victim" into "this request fails, loudly, in the service that caused it" — a bounded local change, and the failure becomes attributable. Deliberately not bundled into the v0.4.0 deploy.
 
