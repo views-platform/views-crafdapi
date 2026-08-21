@@ -111,3 +111,35 @@ def test_runbook_blocks_naming_the_deploy_user_say_they_run_on_the_box():
         f"preceding lines: {unmarked}. A reader pasting that on a laptop gets "
         "`sudo: unknown user views-crafdapi-deploy`."
     )
+
+
+def test_runbook_verifies_the_deploy_tag_before_restarting():
+    """C-281, fourth instance. A pasted block left command text in the deploy-tag file, and
+    `/version` reported `deployed_tag: "sudo systemctl restart views-crafdapi5"`.
+
+    A corrupted tag normally fails loudly at the gate — `refs/tags/<junk>` does not resolve. The
+    case worth guarding is the quiet one, where corruption spells a DIFFERENT REAL TAG and the
+    wrong version deploys with every check green (C-266's failure, new cause). So the tag file's
+    content must be confirmed between writing it and restarting.
+    """
+    text = RUNBOOK.read_text()
+    write_at = text.find(".views-crafdapi-deploy-tag")
+    restart_at = text.find("systemctl restart views-crafdapi", write_at)
+    assert write_at != -1 and restart_at != -1, "release block not found"
+    between = text[write_at:restart_at]
+    assert "od -c" in between, (
+        "RELEASE_RUNBOOK.md restarts the service without confirming what landed in the "
+        "deploy-tag file. Paste corruption has put command text there once already; a "
+        "verification step between the write and the restart is what makes it visible."
+    )
+
+
+def test_runbook_paste_warning_is_not_scoped_to_read_alone():
+    """The warning said `read` swallows the next line. `sudo`'s password prompt does too, and
+    `sudo` is in every one of these blocks — the warning was right about the hazard and wrong
+    about its extent."""
+    text = RUNBOOK.read_text()
+    assert "not specific to `read`" in text, (
+        "the paste-corruption warning is still scoped to `read -rsp`; any prompting command in "
+        "a pasted block can consume the buffered remainder, and `sudo` prompts in all of them"
+    )
