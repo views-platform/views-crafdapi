@@ -6,6 +6,41 @@ one instance; this report is the argument that the shape is worth more than the 
 
 ---
 
+## What the day was
+
+Context, so this reads without the conversation that produced it.
+
+`views-crafdapi` serves CRAF'd conflict forecasts from a Hetzner box it shares with
+`views-faoapi`. That box has **22 GiB and no swap**, and it OOM-killed three times in August,
+because crafdapi's first request after a restart peaked at **16.8 G** while loading a 28.4M-row
+historical artifact. With faoapi resident at ~5 G there was no memory ceiling that both survived a
+restart and left the neighbour room — issue **#98** (register **C-263**), which blocked **#99**
+(**C-262**, the ceilings themselves).
+
+On 2026-08-21 three things happened in sequence: **v0.5.1** shipped a streamed historical ingest
+that took the cold start to **7.3 G**; the measurement proving it was taken on the box; and the
+memory ceilings that measurement unblocked were sized. Each step surfaced at least one instance of
+the shape below. None caused an outage. The last one found would have caused the exact outage the
+work was preventing.
+
+## Timeline
+
+All 2026-08-21 UTC unless stated. Instance letters refer to the table below.
+
+| when | what |
+|---|---|
+| 2026-08-09 | views-faoapi#368 closed with its operator install step undone — **B** begins, unnoticed |
+| 2026-08-10 | repo-assimilation writes C-238's cause from reading code — **D** begins |
+| 2026-08-18 | C-262 records the installed faoapi unit as having no `MemoryMax`. Nobody connects it to #368. A falsification audit finds **F** |
+| ~10:02 | a restart is issued without writing the deploy-tag file. A 502 inside the ~3 s restart window is read as a live outage — wrongly |
+| 10:06:23 | `deploy-gate: serving tag v0.4.0`. `GET /version` returns `0.4.0` — **A** |
+| 10:06:24 | the same journal read shows three config-AST ERRORs — **D**; and the C-237 shutdown traceback, predicted 11 days earlier |
+| midday | PR review of the streamed ingest constructs an adversarial input — **G**. A `[Service]`/`[Unit]` placement bug is caught pre-merge — **E** |
+| ~15:00 | v0.5.1 released, tagged, deployed. `/version` = `0.5.1`, all checks green |
+| ~19:00 | the ceiling work begins. `systemctl status views-faoapi` has no `max:` field — **B**, 12 days later |
+| 19:55 | historical cache cleared, service restarted, one bulk request: **peak 7.3 G**, and the journal shows the streamed path executing for the first time — **C** |
+| ~21:00 | `free -g` returns 22 GiB, not the 24 GB both ceilings were sized from — **H** |
+
 ## The shape
 
 > **An artifact asserts a state. The system is in a different state. The assertion is the only
@@ -154,6 +189,72 @@ diluted into the other.
   have context that changes it.
 - Eight instances from one repository over twelve days is not a base rate. It is enough to justify
   the habit changes above and not enough to justify machinery.
+
+## Where it stands, 2026-08-22
+
+| | state |
+|---|---|
+| **views-crafdapi** | v0.5.1 serving. Cold start **7.3 G**, down from 16.8 G, output byte-identical. |
+| crafd ceiling | `MemoryHigh=8G` / `MemoryMax=9G` **committed, not installed**. A temporary `MemoryMax=14G` set via `set-property --runtime` during the measurement still overrides it. |
+| **views-faoapi** | **No ceiling in effect.** Its unit has declared `MemoryMax=11G` since 2026-08-09; the box has never been reloaded. Filed as views-faoapi#432. |
+| faoapi cold start | **Never measured.** Its 4.8 G is a resident figure — the same kind of number crafd's 3.7 G steady state is, and crafd's cold start was 2× that. |
+| #98 / C-263 | closed / resolved |
+| #99 / C-262 | open, half-satisfied — crafd's half sized from a measurement, faoapi's neither measured nor active |
+
+The honest summary of the position: **the service that can still exhaust the box is the one with
+no ceiling, and its ceiling is the one nobody has measured.** That is instance B and instance H
+sitting next to each other, and it is the single most useful thing this report has to say.
+
+## Evidence
+
+The preamble claims every fact here is read rather than remembered. These are the reads, so the
+instances can be checked rather than taken on trust.
+
+**A** — after a restart that did not write the deploy-tag file:
+```
+$ curl -s https://crafdapi.viewsforecasting.org/version
+{"version":"0.4.0","deployed_tag":"v0.4.0","served_contract_version":"1.5"}
+$ sudo journalctl -u views-crafdapi
+10:06:23  deploy-gate: serving tag v0.4.0 (v0.4.0, 1fb30b6)
+```
+
+**B** — the two services side by side. faoapi has no `max:` field; crafd has one only because a
+temporary runtime cap was set minutes earlier:
+```
+views-faoapi:   Memory: 4.8G (peak: 4.8G)
+views-crafdapi: Memory: 3.7G (max: 14.0G available: 10.2G peak: 7.3G)
+```
+
+**C** — the streamed ingest, executing for the first time after the cache was cleared:
+```
+historical_stream.py:339 - Streamed historical value-dir: 28421738 rows,
+                           439 months x 64742 cells, 3 target(s)
+dataset_service.py:625  - ... (C-263 low-memory path)
+```
+439 × 64,742 = 28,421,738, the exact grid the loader's precondition asserts.
+
+**D** — every boot, at ERROR, for eleven days:
+```
+ERROR - Config config_deployment.py failed AST safety check — refusing to execute
+ERROR - Config config_hyperparameters.py failed AST safety check — refusing to execute
+ERROR - Config config_meta.py failed AST safety check — refusing to execute
+```
+
+**H** — the number both ceilings were derived from:
+```
+$ free -g
+               total        used        free      shared  buff/cache   available
+Mem:              22           7           8           0           7          15
+Swap:              0           0           0
+```
+
+**The measurement the day existed for**, for completeness — cold start, cache cleared, one request:
+```
+200  461991 bytes  62.09 s
+Memory: 3.7G (max: 14.0G available: 10.2G peak: 7.3G)
+```
+461,991 bytes is the same byte count ADR-030 records for the v0.4.0 production run: the served
+artifact is unchanged across the change.
 
 ## Cross-references
 
