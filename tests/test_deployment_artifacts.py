@@ -210,3 +210,69 @@ class TestRestartLoopIsBounded:
             "ExecStartPre does network I/O; an untimed start can hang indefinitely"
         )
         assert int(cfg.get("Service", "TimeoutStartSec")) > 0
+
+
+class TestMemoryCeiling:
+    """C-262/#99. The ceiling must be derivable from the measured COLD START, not the steady
+    state — sizing it from the latter is what C-263 exists to prevent.
+
+    Measured 2026-08-21 (v0.5.1): cold peak 7.3 G, steady 3.7 G, box 22 GiB.
+    """
+
+    COLD_PEAK_G = 7.3
+    BOX_G = 22
+
+    def _unit(self):
+        import configparser
+        cfg = configparser.ConfigParser(strict=False)
+        cfg.optionxform = str
+        cfg.read_string(_UNIT)
+        return cfg
+
+    @staticmethod
+    def _gb(value: str) -> float:
+        assert value.endswith("G"), f"expected a G-suffixed size, got {value!r}"
+        return float(value[:-1])
+
+    def test_a_ceiling_is_declared_in_the_unit_file(self):
+        """Not via `set-property --runtime`, which lives in /run and vanishes on reboot — a
+        ceiling nobody can read from the repo is what this replaced."""
+        cfg = self._unit()
+        assert cfg.has_option("Service", "MemoryMax"), "no MemoryMax in the unit file"
+        assert cfg.has_option("Service", "MemoryHigh"), (
+            "no MemoryHigh — #99 asks for back-pressure before the hard kill, which is a "
+            "materially different failure than a cliff for a once-per-restart transient"
+        )
+
+    def test_the_ceiling_clears_the_measured_cold_start(self):
+        """The trap C-263 documents: a ceiling above the steady state (3.7 G) but below the cold
+        start (7.3 G) kills the service on every single restart, and looks generous until then."""
+        mx = self._gb(self._unit().get("Service", "MemoryMax"))
+        assert mx > self.COLD_PEAK_G, (
+            f"MemoryMax={mx}G is at or below the measured cold-start peak "
+            f"{self.COLD_PEAK_G}G — the service would be killed on every restart"
+        )
+        assert mx >= self.COLD_PEAK_G * 1.25, (
+            f"MemoryMax={mx}G leaves under 25% headroom over a measured peak that will grow with "
+            f"the month horizon and ADR-034's ADDITIONAL_TARGETS"
+        )
+
+    def test_high_is_below_max_and_above_the_cold_start(self):
+        """A MemoryHigh at or below the real peak throttles every cold start and reads as a
+        fault rather than as margin."""
+        cfg = self._unit()
+        hi, mx = self._gb(cfg.get("Service", "MemoryHigh")), self._gb(cfg.get("Service", "MemoryMax"))
+        assert hi < mx, f"MemoryHigh={hi}G must be below MemoryMax={mx}G"
+        assert hi > self.COLD_PEAK_G, (
+            f"MemoryHigh={hi}G is at or below the measured cold peak {self.COLD_PEAK_G}G — "
+            f"back-pressure would apply on every normal restart"
+        )
+
+    def test_the_ceiling_leaves_the_neighbour_room_on_the_shared_box(self):
+        """C-262 is about co-tenancy: this box also runs views-faoapi (4.8 G observed), and the
+        original 16.8 G cold start left -0.7 GiB of headroom."""
+        mx = self._gb(self._unit().get("Service", "MemoryMax"))
+        assert mx <= self.BOX_G * 0.6, (
+            f"MemoryMax={mx}G takes more than 60% of the {self.BOX_G} GiB box, leaving too "
+            f"little for views-faoapi, the OS and page cache"
+        )

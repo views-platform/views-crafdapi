@@ -408,3 +408,37 @@ that is a permissions artefact, not a silent service. The gate prints exactly on
 success and a `FATAL deploy-gate:` naming the cause on failure; that line is the whole diagnosis.
 
 Rollback is the `TAG=` block with the previous tag.
+
+
+## Memory ceilings, and removing the temporary one
+
+`deployment/views-crafdapi.service` declares `MemoryHigh=9G` / `MemoryMax=11G`, derived from the
+**measured cold start** of 7.3 G (2026-08-21, v0.5.1) — not from the 3.7 G steady state, which is
+the distinction C-263 exists for: a ceiling sized from the steady state kills the service on every
+restart and looks generous until it does.
+
+A temporary `MemoryMax=14G` was set during that measurement with
+`systemctl set-property --runtime`. **It takes precedence over the unit file**, so installing the
+new unit is not enough — the runtime drop-in has to go:
+
+```bash
+# === ON THE BOX ===
+systemctl show views-crafdapi -p MemoryMax -p MemoryHigh        # what is actually in effect
+sudo rm -f /run/systemd/system.control/views-crafdapi.service.d/50-MemoryMax.conf
+sudo rmdir --ignore-fail-on-non-empty /run/systemd/system.control/views-crafdapi.service.d
+sudo systemctl daemon-reload
+systemctl show views-crafdapi -p MemoryMax -p MemoryHigh        # expect 11G / 9G from the unit
+```
+
+Do **not** use `systemctl revert views-crafdapi` to clear it. `revert` removes overrides in both
+`/run` *and* `/etc` — and this unit lives in `/etc/systemd/system/`, so it would delete the unit
+file itself.
+
+The values take effect on the next restart. Confirm with `systemctl show` rather than by reading
+the unit file, because that is exactly the gap the runtime drop-in created.
+
+**views-faoapi still has no ceiling**, and that is the other half of #99. Its 4.8 G is an
+*observed* resident figure, not a measured cold start — the same kind of number crafd's own
+steady state was, and crafd's cold start turned out to be 2x it. Take faoapi's cold start with
+the procedure above before sizing anything: restart it, clear its cached value-dirs, one heavy
+request, read the peak. Sizing it from 4.8 G would repeat C-263 on the neighbour.

@@ -59,6 +59,31 @@ RestartSec=5
 # measured 3 s start — generous enough never to fire on a healthy deploy, and the only thing
 # that converts a hang into a countable failure.
 TimeoutStartSec=180
+
+# Memory ceiling (C-262 / #99). Derived from a MEASURED cold start, not a steady state — that
+# distinction is the whole of C-263: crafd's steady state is 3.7 G and its cold start is 7.3 G,
+# so a ceiling sized from the former kills the service on every restart. Measured 2026-08-21 on
+# v0.5.1, with the historical value-dirs cleared first so the streamed ingest actually ran
+# (without that the disk cache serves the previous value-dir and the number is meaningless —
+# C-282):
+#
+#     cold-start peak 7.3 G   steady 3.7 G   box 22 GiB   views-faoapi 4.8 G observed
+#
+# MemoryMax=11G is 51% above the measured peak — headroom for a longer month horizon or ADR-034's
+# ADDITIONAL_TARGETS without a re-tune. MemoryHigh=9G is 23% above, so the kernel applies
+# back-pressure on an anomaly and never during a normal cold start; a High that sits close to the
+# real peak would throttle every restart and read as a fault rather than as margin.
+#
+# This REPLACES a temporary `systemctl set-property --runtime views-crafdapi MemoryMax=14G` set as
+# a seatbelt during the measurement. That drop-in lives in /run and takes precedence over this
+# file until it is removed — see RELEASE_RUNBOOK.md. A ceiling in a file nobody can read from the
+# repo is the thing this is fixing.
+#
+# NOT the whole of #99: views-faoapi shares this box and has no ceiling. Its 4.8 G is an OBSERVED
+# resident figure, not a measured cold start, and sizing its ceiling from that would repeat C-263
+# on the neighbour. It needs its own measurement (views-faoapi#418).
+MemoryHigh=9G
+MemoryMax=11G
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=views-crafdapi
