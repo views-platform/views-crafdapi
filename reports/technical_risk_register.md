@@ -1245,5 +1245,41 @@ three were found by someone following the document rather than reviewing it. Rul
 next runbook change should assume the reader is pasting without context, and say host, user, and
 expected output for every block.
 
-Cross-refs: **C-265**, **C-266** (both RESOLVED, same shape), **C-256** (one secret, several
-names — the same "reads fine, misleads in use" family).
+**Fourth instance, same day, different cause — the block does not have to be *wrong* to mislead.**
+After the host markers above were added, the corrected block was pasted on the box and the deploy
+still went sideways. `/version` returned:
+
+```
+{"version":"0.5.1","deployed_tag":"sudo systemctl restart views-crafdapi5"}
+```
+
+The deploy-tag file transiently contained pasted *command text*, and a later line of the same
+paste executed as `sudo cp <src> /etsudo cp <src> /etc/systemd/system/` — a command carrying a
+fragment of itself. Re-running the restart resolved it, and the end state was correct
+(`v0.5.1`, tag file exactly `v0.5.1\n`, no debris in `/etc/systemd/system/`).
+
+The mechanism is one this runbook already knew about in a narrower form. It warns "paste those
+two lines **separately** — pasted together, `read` swallows the next line as the key" — scoped
+to `read -rsp`. But **any** prompting command in a pasted block reads the terminal while the rest
+of the paste is still buffered, and `sudo`'s password prompt is in every one of these blocks. The
+existing warning was right about the hazard and wrong about its extent.
+
+What makes this worth recording rather than filing as a typo: the *loud* outcome is fine. A
+corrupted tag normally fails at the deploy gate, because `refs/tags/sudo systemctl restart
+views-crafdapi5` does not resolve — fail-visible, exactly as designed. The dangerous case is the
+quiet one, where corruption happens to spell **a different real tag** and the service deploys the
+wrong version with every check green. That is precisely **C-266**'s failure mode reached by a new
+route, which is why bounding it matters even though C-266 itself is resolved.
+
+Two mitigations added, both cheap: the warning is generalised from `read` to any prompt, with the
+`ssh -t <box> '...'` single-command alternative; and `od -c` on the tag file now sits between
+writing it and restarting, so the content is confirmed before anything acts on it. Neither
+prevents paste corruption — they make it visible before it deploys.
+
+Also worth keeping: **`/version` caught this unaided.** It reported the garbage rather than
+hiding it, which is what that endpoint exists for (C-167's tag/version dual source of truth). The
+observability worked; the procedure did not.
+
+Cross-refs: **C-265**, **C-266** (both RESOLVED, same shape — and C-266's failure mode is the one
+this could reach quietly), **C-256** (one secret, several names — the same "reads fine, misleads
+in use" family), **C-167** (the dual source of truth `/version` exists to expose).

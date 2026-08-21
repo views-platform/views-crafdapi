@@ -208,6 +208,7 @@ has happened, because the block below labels *which user* and never labelled *wh
 # === ON THE BOX (ssh first) — as your own user ===
 TAG=vX.Y.Z   # <-- the ONLY line to change. Set it to the tag you are deploying.
 echo $TAG | sudo -u views-crafdapi-deploy tee /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
+sudo od -c /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag   # <-- CHECK: exactly your tag, then \n
 sudo systemctl restart views-crafdapi
 curl -s https://crafdapi.viewsforecasting.org/version     # expect version AND deployed_tag = $TAG
 
@@ -223,6 +224,20 @@ Three things that have each cost a release: the deploy checkout is **not readabl
 user**, so `cd` into it fails and `sudo cd` cannot work (`cd` is a shell builtin) — use
 `sudo -iu`. `read -rs` prints **no prompt**, so it looks like a hang; `-rsp` gives it one. And
 paste those two lines **separately** — pasted together, `read` swallows the next line as the key.
+
+**That hazard is not specific to `read`.** Any command in a pasted block that prompts — `read`,
+and `sudo` asking for a password — is reading the terminal while the rest of your paste is still
+buffered, and can consume it. On 2026-08-21 a pasted release block left the deploy-tag file
+containing `sudo systemctl restart views-crafdapi5`, and a later line in the same paste came out
+as `sudo cp <src> /etsudo cp <src> /etc/systemd/system/` — a command containing a fragment of
+itself. **Paste one line at a time, or run the block over `ssh -t <box> '...'` as a single
+command.**
+
+That is why `od -c` on the tag file sits between writing it and restarting. A corrupted tag
+usually fails loudly at the deploy gate (`refs/tags/<junk>` does not resolve) — but the case
+worth guarding is the quiet one, where the corruption happens to spell a *different real tag*
+and the service deploys the wrong version while every check looks fine. That is C-266's failure
+with a new cause.
 
 Inside that shell `sudo` prompts for *the service account's* password, which does not exist.
 `exit` first for anything needing sudo.
