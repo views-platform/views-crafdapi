@@ -291,8 +291,8 @@ value-dir a row group at a time instead of being decoded whole; peak 12.2 → 3.
 locally, served output byte-identical. Tagged but **never deployed** — superseded by v0.5.1), **v0.5.1** (the streamed
 ingest above, plus a bounded restart loop: the deploy gate's refusals are deterministic and were
 being retried forever, which is what the 47-minute incident on 2026-08-15 actually was.
-**The production cold-start peak is the number this release exists to obtain — take it during
-the deploy, per the section below.**).
+Deployed 2026-08-21: **cold-start peak 16.8 G -> 7.3 G measured**, served
+bulk artifact byte-count unchanged at 461,991 B, streamed ingest confirmed in the journal).
 
 
 ## Taking a cold-start memory measurement
@@ -350,11 +350,27 @@ outage"* below.
 
 ### Reference points
 
-All measured before v0.5.0: cold start **16.8 G**, steady state **6.0 G**, `views-faoapi`
-resident **5.9 G**, box total **22 GiB**. Local prediction for the streamed path is ~**11 G**
-cold; #98's criterion is "comfortably under ~14 G". Record what you actually see on **C-263** and
-in the ADR-030 addendum either way — a disappointing number is the useful one, because it means
-the fix is not done.
+| | crafd cold | crafd steady | + faoapi 5.9 G | of 22 GiB |
+|---|---|---|---|---|
+| v0.4.0 | 16.8 G | 6.0 G | 22.7 G | **does not fit** |
+| **v0.5.1** (2026-08-21) | **7.3 G** | 3.7 G | **13.2 G** | 8.8 GiB headroom |
+
+Record what you actually see on **C-263** and in the ADR-030 addendum either way — a
+disappointing number is the useful one, because it means the fix is not done. v0.5.1 came in
+below its own ~11 G prediction, so treat a figure from a local rig as a direction, not a number.
+
+**The clearing step above is not optional.** Skip it and the disk cache serves the previous
+value-dir: the request returns in about a second, the peak sits near the steady state, and the
+result looks excellent while measuring code that never ran (register **C-282**). Confirm which
+path executed before believing any figure:
+
+```bash
+sudo journalctl -u views-crafdapi --since "-10 min" --no-pager \
+  | grep -iE "Streamed historical|Successfully loaded historical"
+```
+
+`Streamed historical value-dir: … (C-263 low-memory path)` is the new path.
+`Successfully loaded historical dataframe with 28421738 rows` is the old one.
 
 ## A restart is not an outage — and a long 502 is not a slow restart
 
