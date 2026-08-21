@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 52                                             |
-| Open Concerns     | 47                                             |
+| Total Concerns    | 53                                             |
+| Open Concerns     | 48                                             |
 | Resolved Concerns | 5                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -57,6 +57,12 @@ Consequently:
 The ADR-030 §5 representation migration hard-drops both the `pred_*` sample columns (`grid_dataset.py:200`) and the historical scalar columns (`grid_dataset.py:223`) from `.dataframe`, moving them into `_sample_store` / `_feature_store`. `DatasetService.get_latest_dataframe` still returns `cache["data"].copy()` — that now index-only frame — and the two `/latest` route handlers serialize it directly. Verified empirically on the repo's own fixture: `ForecastDataset(make_fao_df()).dataframe.shape == (8, 0)` and `dataframe_to_dict(...)[0] == {'month_id': 600, 'priogrid_id': 100}`; the historical/feature path behaves identically. **The silent path is:** column drop → index-only `.dataframe` → `cache["data"].copy()` → `dataframe_to_dict` → HTTP 200 with `success: true` and `columns: []`, with no exception, no log line, and no `/health` degradation — while `README.md:157-170` and `docs/api/README.md:80` both document these endpoints as returning "the full latest dataframe". A consumer cannot distinguish "the artifact has no rows" from "this endpoint no longer carries data". Partially self-revealing (the envelope's `shape` and `columns` fields do expose the emptiness to a caller who inspects them), which is the only argument for Tier 2; Tier 1 is assigned because the deception is server-side, partner-facing, and unsignalled — precisely the "healthy-looking wrong answer" class ADR-033 exists to eliminate. Currently unmitigated and untested: `tests/test_api_endpoints.py:172-186` asserts only `status_code == 200`, `success is True`, `"dataframe" in body["data"]` and `category == "forecast"` — never that the payload carries values.
 
 See also inherited `C-148`/`C-153`/`D-12` (the `.dataframe` seal — body not in this register), which govern the *internal* access rule; this concern is the un-revisited *served-contract* consequence of that seal. See also `C-243` (the test suite's shape-only assertions are why this went unseen).
+
+**Do not fix this alone — see C-284 (2026-08-22).** The obvious remedy, restoring the dropped
+columns to the served frame, makes a second and worse defect worse still: `/data/historical/latest`
+already builds ~12.9 GB of Python objects for the 28.4M-row artifact and cannot complete; with the
+three target columns restored that becomes ~15.9 GB and 157 s. Bounding the response has to land
+in the same change as restoring the columns.
 
 ---
 
@@ -1457,3 +1463,53 @@ never been recorded — and it is deliberately not bundled into this entry's own
 
 Cross-refs: **C-74**, **C-76** (red-by-default signal loss), **C-266** (the other release-ritual
 step that was documented but wrong), ADR-023 §"the gate is enforced at PR review".
+
+---
+
+### C-284: `/data/historical/latest` serialises 28.4M rows into ~13 GB of Python objects — one request kills the service
+
+| Field | Value |
+|-------|-------|
+| ID | C-284 |
+| Tier | 2 |
+| Source | operator question, measured 2026-08-22 |
+| Trigger | Before pointing **any** consumer at `/data/historical/latest` — CRAF'd, a notebook, `CrafdApiClient`, or a curl from the README — and **before fixing C-232 by restoring the dropped columns**, which makes this strictly worse. Also when reviewing whether the C-262 ceilings can wait: this is the concrete request that turns an unbounded service into a box-wide outage. |
+| Location | `src/views_crafdapi/managers/api.py` (`get_latest_historical_dataframe`, `get_latest_forecast_dataframe`), `src/views_crafdapi/managers/serialization.py::dataframe_to_dict` + `convert_numpy_types`, documented at `README.md:121,211` and `docs/api/README.md` |
+
+The route has **no limit, no pagination and no size guard**. It calls `dataframe_to_dict(df)` on
+the whole latest historical frame, which does `reset_index()` → `to_dict(orient="records")` — one
+Python dict per row — and then `convert_numpy_types` walks the result and rebuilds it. FastAPI
+then encodes that to JSON, a further full traversal.
+
+Measured on 200,000 real rows and scaled to the artifact's 28,421,738:
+
+| | Python objects | JSON payload | build time |
+|---|---|---|---|
+| **as served today** (index-only, per C-232) | **12.9 GB** | 1.1 GB | 35 s |
+| **if C-232 is "fixed"** (3 target columns restored) | **15.9 GB** | 2.5 GB | 157 s |
+
+Both figures are *before* JSON encoding and *on top of* the 4-7 GB the dataset already occupies.
+The service cannot complete either. On a 22 GiB box it is an OOM; with the C-262 ceiling installed
+(`MemoryMax=9G`) it is a cgroup kill of crafdapi alone, followed by a restart — which is
+containment, not a fix.
+
+**The interaction with C-232 is the part that matters most.** C-232 is Tier 1 and its obvious
+remedy is "put the dropped columns back". Doing that alone converts a fatal endpoint into a more
+fatal one: 15.9 GB instead of 12.9 GB, 157 s instead of 35 s. **The two have to be fixed
+together** — restoring the columns requires bounding the response in the same change.
+
+Not currently reachable by accident: the endpoint needs a valid `X-API-Key`, and CRAF'd uses
+`/data/forecast/bulk` and the subset routes. But it is documented in `README.md` as returning "the
+full latest dataframe", with a copy-pasteable curl, and nothing in the response envelope or the
+docs warns that calling it ends the process. The forecast twin is the same code on a 2.33M-row
+frame — about 1.1 GB, heavy but survivable — so this is specifically a historical-scale problem.
+
+Named options, none taken here: a row cap with an explicit 413 or a documented `limit`/`offset`;
+streaming the response instead of materialising it; or retiring the `/latest` routes in favour of
+the bulk parquet and the subset endpoints, which is what consumers actually use. The third is
+probably right and is the largest change.
+
+Cross-refs: **C-232** (Tier 1, same routes — its remedy makes this worse, so they are one piece of
+work), **C-262** (the ceiling that would contain this), **C-236** (in-memory caches bounded by
+entry count, not bytes — the same "no byte-level bound anywhere" theme), **C-263** (the other
+28.4M-row memory event, resolved).
