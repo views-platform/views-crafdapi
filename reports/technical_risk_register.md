@@ -742,6 +742,26 @@ A temporary `MemoryMax=14G` was set on crafd via `systemctl set-property --runti
 during the measurement. It is **runtime-only** — it disappears on reboot, applies to one unit,
 and is not this entry's answer. Treat it as scaffolding to remove or replace deliberately.
 
+**faoapi's 5.9 G is a resident set, not a cold-start peak — do not size its ceiling from it.**
+The figure above is `MemoryCurrent`, taken while the service happened to be idle. It is the same
+*kind* of number as crafd's 6.0 G steady state, and crafd's cold start turned out to be **2.8x**
+that. Setting `views-faoapi MemoryMax=` from 5.9 G would therefore repeat, on the neighbouring
+service, precisely the error C-263 was opened to prevent here: a ceiling that looks generous
+against the steady state and kills the service on every restart.
+
+That matters more now than before, because this entry is no longer blocked and someone can act on
+it. faoapi has its own historical ingest and its own C-169; nothing here establishes what its
+cold start costs. **Both halves of the arithmetic need a measured cold-start peak, and only one
+half has one.** The crafd procedure is in `RELEASE_RUNBOOK.md` ("Taking a cold-start memory
+measurement") and transfers directly — including the part that makes it valid, which is clearing
+the cached value-dirs first so the ingest actually runs (C-282).
+
+Until faoapi's number exists, any pair of ceilings is one measurement and one guess. The
+conservative reading of what is known: crafd's measured cold peak is 7.3 G, so a crafd ceiling in
+the 10-12 G range carries 37-64% headroom over measurement, and whatever is left of 22 GiB after
+the OS and page cache is faoapi's budget — which may or may not be enough, and that is the open
+question rather than an answer.
+
 S7 improves the arithmetic but does not address the coupling. `MemoryMax=` on both units converts "the box falls over and the kernel chooses a victim" into "this request fails, loudly, in the service that caused it" — a bounded local change, and the failure becomes attributable. Deliberately not bundled into the v0.4.0 deploy.
 
 Tracked as **#99**, blocked by **#98**. Cross-refs: **C-235** (resolved — what used to drive crafd's peak), **C-263** (what drives it now, and blocks this), **views-faoapi#418** (the neighbouring service's own memory defect).
