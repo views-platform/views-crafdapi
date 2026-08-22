@@ -1466,7 +1466,7 @@ step that was documented but wrong), ADR-023 §"the gate is enforced at PR revie
 
 ---
 
-### C-284: `/data/historical/latest` serialises 28.4M rows into ~13 GB of Python objects — one request kills the service
+### C-284: no data route has a row bound — an unparameterised historical `subset` asks for 34.5 GB of Python objects
 
 | Field | Value |
 |-------|-------|
@@ -1509,7 +1509,37 @@ streaming the response instead of materialising it; or retiring the `/latest` ro
 the bulk parquet and the subset endpoints, which is what consumers actually use. The third is
 probably right and is the largest change.
 
+**Extended 2026-08-22 — `/latest` is not the worst case, and the worst case takes no arguments.**
+The `subset` routes were measured next, on the same real rows. Every filter defaults to `None`
+(meaning *no filter*), `with_metadata` defaults to `True`, and the only `limit=` anywhere in
+`managers/api.py` is on the `/files` listing. So `GET /pg/data/historical/subset` **with no query
+parameters at all** returns 28.4M rows x 12 columns — three feature columns plus the nine-column
+GAUL block — through the same `dataframe_to_dict`:
+
+| request | Python objects | JSON | build time |
+|---|---|---|---|
+| `/data/forecast/bulk` (the intended path) | — | **462 KB** | 62 s cold, 7.3 G peak — **safe** |
+| `/data/forecast/latest` | ~1.1 GB | ~0.1 GB | heavy, survivable |
+| `/data/historical/latest` | 12.9 GB | 1.1 GB | fatal |
+| `/data/historical/latest` *after a naive C-232 fix* | 15.9 GB | 2.5 GB | fatal |
+| **`/pg/data/historical/subset`, no parameters** | **34.5 GB** | **9.9 GB** | **13.5 min** — fatal |
+
+34.5 GB is more than the machine, by a factor of one and a half, for a URL with no query string.
+The request would spend thirteen minutes consuming everything on the box before dying.
+
+This reframes the entry: the defect is not one endpoint but **the absence of any row bound on any
+data route**, with the danger scaling by how much the route materialises. Exactly one served path
+is safe — `/data/forecast/bulk`, which streams a 462 KB parquet — and it is the one CRAF'd
+actually uses. Nothing in `README.md` or `docs/api/README.md` distinguishes it from the others;
+they are listed as peers.
+
+**What this makes urgent.** C-262's ceiling stops being housekeeping: with `MemoryMax=9G`
+installed, any of these requests kills crafdapi alone and it restarts (bounded by C-280). Without
+it — the state today — the kernel picks a victim on a shared box, and it may pick views-faoapi.
+The ceiling does not fix any of this; it decides who dies.
+
 Cross-refs: **C-232** (Tier 1, same routes — its remedy makes this worse, so they are one piece of
-work), **C-262** (the ceiling that would contain this), **C-236** (in-memory caches bounded by
-entry count, not bytes — the same "no byte-level bound anywhere" theme), **C-263** (the other
-28.4M-row memory event, resolved).
+work), **C-262** (the ceiling that decides whether this is a service outage or a box outage —
+now the most valuable open item because of this entry), **C-280** (bounds the restart that
+follows), **C-236** (in-memory caches bounded by entry count, not bytes — the same "no byte-level
+bound anywhere" theme), **C-263** (the other 28.4M-row memory event, resolved).
