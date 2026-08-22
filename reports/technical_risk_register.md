@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-22                                     |
-| Total Concerns    | 56                                             |
-| Open Concerns     | 51                                             |
+| Total Concerns    | 57                                             |
+| Open Concerns     | 52                                             |
 | Resolved Concerns | 5                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -1544,6 +1544,20 @@ consumer on the service**, and the number `MemoryMax=9G` was itself sized from. 
 of headroom over a single measurement of a single artifact shape. See **C-287** for why that
 measurement does not describe CRAF'd's path at all.
 
+**Two traps in the remedy, from views-faoapi #126 (2026-08-22) — both invalidate the obvious fix.**
+
+*A row-count cap does not bound anything.* Cost per row is not a constant: through
+`dataframe_to_dict` a historical row costs ~1,625 B and a forecast row ~7,731 B, because the second
+carries a posterior draw per sample per target — and **the sample width varies per delivery**. A
+row cap chosen against one artifact silently means something else against the next. faoapi bounded
+on **estimated bytes computed from dataset shape** instead, and that is the mechanism to copy, not
+the number.
+
+*A zero-column guard cannot catch C-232.* `get_subset_dataframe` joins geo metadata
+**unconditionally**, so a values-less dataset returns a *geography-only* frame rather than an empty
+one. `shape[1] == 0` is therefore `False`, and the route answers `200` with coordinates and no data
+— passing a guard written the obvious way. The guard has to count **value** columns specifically.
+
 **What this makes urgent.** C-262's ceiling stops being housekeeping: with `MemoryMax=9G`
 installed, any of these requests kills crafdapi alone and it restarts (bounded by C-280). Without
 it — the state today — the kernel picks a victim on a shared box, and it may pick views-faoapi.
@@ -1670,3 +1684,54 @@ a bulk request, or a `/data/forecast/bulk` call from a second key against a cold
 Cross-refs: **C-284** (whose bulk row this correction amends), **C-262** (the ceiling arithmetic
 that assumed one resident copy), **C-236** (caches bounded by entry count, not bytes — this is the
 concrete cost of that), **C-279** (the verification-gap shape).
+
+---
+
+### C-288: nothing detects a truncated cached artifact, and one route can only serve it
+
+| Field | Value |
+|-------|-------|
+| ID | C-288 |
+| Tier | 2 |
+| Source | views-faoapi #126 (their C-279), verified against this repo (2026-08-22) |
+| Trigger | Before any consumer is pointed at `/files/{bucket_id}/{file_id}/cached`, and immediately after any OOM kill, deploy restart or crash that could have landed mid-download — the cache cannot tell you whether it holds a whole file. Also when C-262's ceiling is finally installed: a cgroup kill mid-write is precisely the event that creates this state. |
+| Location | `src/views_crafdapi/managers/appwrite/file_cache.py:78-107` (`validate_cache`), `:123` (`size_bytes`), `src/views_crafdapi/managers/appwrite/manager.py:816`, `src/views_crafdapi/managers/api.py:965-1000` |
+
+Three independent gaps, which together mean a partially-downloaded artifact is indistinguishable
+from a complete one.
+
+**`validate_cache` never checks size.** It checks that the metadata entry exists, that the path
+exists, that the TTL has not lapsed, and that the remote `$updatedAt` is not newer
+(`file_cache.py:78-107`). Byte length is not among them. A file truncated at any point passes every
+gate.
+
+**The recorded size could not detect it anyway.** `add_to_cache` sets
+`size_bytes=file_path.stat().st_size` (`:123`) — it stats the file it has just written. Comparing a
+file against that later asks whether it is the size it was when measured, which is circular by
+construction. The number with authority is the one Appwrite declares (`sizeOriginal`), read
+**before** anything is cached. views-faoapi reached the same conclusion in their #433.
+
+**The write is truncate-in-place at the canonical path.** `manager.py:816` is
+`with open(cache_path, "wb") as f:`. A process killed mid-write — an OOM, a cgroup kill, a deploy
+restart — leaves a short file exactly where a complete one belongs. faoapi's own note is that the
+three OOM kills of 2026-08-14 are known to have left such files, and every check they had accepted
+them. Staging to a temporary name and `os.replace`-ing after `fsync` makes the state
+unrepresentable.
+
+**And one route can only serve the bad copy.** `/files/{bucket_id}/{file_id}/cached`
+(`api.py:965-1000`) calls `get_cached_file_path` and returns a `FileResponse` with no validation of
+any kind, and by design it never re-downloads. Where the other file routes would eventually refetch
+and self-heal, this one serves the truncated artifact permanently.
+
+Ours is a degree worse than the sibling's: theirs performed the circular size comparison, so at
+least the intent was expressed in code. Here `size_bytes` is recorded and never read for validation
+at all — a field that looks like a guard and is not wired to one.
+
+No consumer is currently known to use `/files/{bucket_id}/{file_id}/cached`. Tier 2 rather than 1
+on that basis: the corruption is silent and partner-facing in principle, but there is no evidence of
+a live consumer, and a truncated parquet fails loudly at the reader rather than producing plausible
+wrong numbers.
+
+Cross-refs: **C-286** (the other defect on the same file routes — that one is latency and
+resumability, this one is integrity), **C-262**/**C-280** (the kills that create this state),
+views-faoapi #126 and their PR #433.
