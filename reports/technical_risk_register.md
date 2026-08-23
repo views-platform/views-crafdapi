@@ -49,7 +49,7 @@ Consequently:
 | Field | Value |
 |-------|-------|
 | ID | C-232 |
-| Tier | 1 |
+| Tier | 3 (was 1 — see the correction below) |
 | Source | repo-assimilation (2026-08-10) |
 | Trigger | When serving or documenting `/data/{category}/latest`, assert that a response body contains at least one non-index column — and when the next consumer (CRAF'd, a notebook, or `CrafdApiClient`) is pointed at these endpoints, verify the payload carries values before treating an empty result as "no data upstream". |
 | Location | `src/views_crafdapi/managers/api.py:448-507`, `src/views_crafdapi/data/handlers/grid_dataset.py:200,223`, `src/views_crafdapi/managers/dataset_service.py:512`, `README.md:157-170`, `docs/api/README.md:80` |
@@ -1948,7 +1948,7 @@ redaction defect in `wandb/utils.py` — same vestigial corner), **C-284**/issue
 
 ---
 
-### C-293: the bulk `*_actual` columns carry no signal even when everything succeeds — and that is indistinguishable from C-248's failure
+### C-293 (CORRECTED, downgraded 1 -> 3): the bulk `*_actual` columns are undocumented, not broken
 
 | Field | Value |
 |-------|-------|
@@ -1957,6 +1957,40 @@ redaction defect in `wandb/utils.py` — same vestigial corner), **C-284**/issue
 | Source | route-by-route functionality probe against real artifacts (2026-08-23) |
 | Trigger | Before CRAF'd — or anyone — computes a forecast-vs-actual skill score from the bulk parquet. Also whenever a new forecast run shifts the window: check how many of its months overlap the historical series, and whether the overlap month carries data. |
 | Location | `src/views_crafdapi/forecast/serialize/bulk_parquet.py` (`build_bulk_table`, `_actual_by_admin1`), `src/views_crafdapi/managers/api.py` (`get_forecast_bulk_parquet`) |
+
+**CORRECTION 2026-08-23 — the original entry was wrong, and its Tier 1 rating with it.**
+
+I filed this as silent corruption on the delivery path. It is not. **`month_id` 559 is July 2026**
+(`month_id 1 = January 1980`, documented at `src/views_crafdapi/time.py` and
+`docs/api/data_dictionary.md:100` — both of which I failed to read before filing). The artifact
+`historical_dataset_20260814_203554.parquet` was cut **2026-08-14**. VIEWS historical fatalities lag
+one month: July's numbers reach views-datafactory around **20 August**.
+
+So the artifact was built **six days before July's data existed**. Month 559 is zero because it had
+not arrived. That is correct behaviour, and a fresh artifact cut after ~20 August carries it.
+
+The original entry inferred a defect from an empty month without once converting the month id to a
+date. Everything below the line is retained as written, so the error is visible rather than tidied
+away.
+
+**What survives the correction, and is why this stays open at Tier 3:**
+
+1. **`0.0` is not `null`.** An unobserved month and a month with genuinely zero fatalities are served
+   identically. A consumer computing a skill score cannot distinguish "not yet reported" from "no
+   conflict deaths", and nothing in the payload or the docs says which it is.
+2. **The overlap month is always the least-observed one.** History ends where the forecast begins,
+   so the single month of the 36 that can carry an `actual` is by construction the newest — the one
+   most likely to be unreported at the moment a run is cut. That is a real caveat for anyone using
+   these columns, not a bug.
+3. **None of this is documented.** `grep` finds no statement of the ingest lag, the history/forecast
+   overlap, or how `*_actual` should be read, anywhere in `docs/`. That absence is what turned an
+   expected empty month into a Tier 1 filing.
+
+The remedy is documentation plus a null/zero distinction — not a fix to the join.
+
+---
+
+Original entry, retained as filed:
 
 Measured on the real cached artifacts, with **both datasets loading successfully** — no fetch
 failure, no exception, no warning:

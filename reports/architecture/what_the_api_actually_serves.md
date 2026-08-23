@@ -22,7 +22,7 @@ But four things are wrong, and the worst of them is on the one route the consume
 
 | # | finding | severity |
 |---|---|---|
-| 1 | **`sb_actual` in the bulk artifact is structurally always zero** | the consumer-facing one |
+| 1 | ~~`sb_actual` in the bulk artifact is structurally always zero~~ **— CORRECTED, see §1: expected, not a defect** | withdrawn |
 | 2 | Both `/latest` routes serve rows with no values — confirmed on real data | C-232, now demonstrated |
 | 3 | `/pg/analysis/historical/hdi-map` returns **500** | unhandled `ValueError` |
 | 4 | Historical `hdi-map` serves zero-width "HDI" and 0/1 "probabilities" at four levels | semantically misleading |
@@ -50,6 +50,15 @@ behaviour is already measured under C-284 at 34.5 GB and was deliberately not re
 ---
 
 ## 1. The bulk `actual` columns are always zero
+
+> **CORRECTED 2026-08-23. This section's conclusion was wrong.** `month_id` 559 is **July 2026**
+> (`month_id 1 = January 1980`). The artifact was cut **2026-08-14**, and VIEWS historical fatalities
+> lag one month — July's data reaches views-datafactory around **20 August**. The month is empty
+> because it had not arrived yet: expected behaviour, not a defect. I inferred a delivery-path fault
+> from an empty month without converting the month id to a date, using a helper that ships in this
+> repo. What survives is narrower — `0.0` is served where the truth is "not yet observed", the
+> overlap month is by construction the least-observed one, and none of this is documented anywhere.
+> See the corrected **C-293**. The section is left standing below so the mistake is legible.
 
 This is the finding that matters, because `/data/forecast/bulk` is the route CRAF'd consumes.
 
