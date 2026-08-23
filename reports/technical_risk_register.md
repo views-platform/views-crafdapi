@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-23                                     |
-| Total Concerns    | 61                                             |
-| Open Concerns     | 56                                             |
+| Total Concerns    | 64                                             |
+| Open Concerns     | 59                                             |
 | Resolved Concerns | 5                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -54,7 +54,7 @@ Consequently:
 | Trigger | When serving or documenting `/data/{category}/latest`, assert that a response body contains at least one non-index column — and when the next consumer (CRAF'd, a notebook, or `CrafdApiClient`) is pointed at these endpoints, verify the payload carries values before treating an empty result as "no data upstream". |
 | Location | `src/views_crafdapi/managers/api.py:448-507`, `src/views_crafdapi/data/handlers/grid_dataset.py:200,223`, `src/views_crafdapi/managers/dataset_service.py:512`, `README.md:157-170`, `docs/api/README.md:80` |
 
-The ADR-030 §5 representation migration hard-drops both the `pred_*` sample columns (`grid_dataset.py:200`) and the historical scalar columns (`grid_dataset.py:223`) from `.dataframe`, moving them into `_sample_store` / `_feature_store`. `DatasetService.get_latest_dataframe` still returns `cache["data"].copy()` — that now index-only frame — and the two `/latest` route handlers serialize it directly. Verified empirically on the repo's own fixture: `ForecastDataset(make_fao_df()).dataframe.shape == (8, 0)` and `dataframe_to_dict(...)[0] == {'month_id': 600, 'priogrid_id': 100}`; the historical/feature path behaves identically. **The silent path is:** column drop → index-only `.dataframe` → `cache["data"].copy()` → `dataframe_to_dict` → HTTP 200 with `success: true` and `columns: []`, with no exception, no log line, and no `/health` degradation — while `README.md:157-170` and `docs/api/README.md:80` both document these endpoints as returning "the full latest dataframe". A consumer cannot distinguish "the artifact has no rows" from "this endpoint no longer carries data". Partially self-revealing (the envelope's `shape` and `columns` fields do expose the emptiness to a caller who inspects them), which is the only argument for Tier 2; Tier 1 is assigned because the deception is server-side, partner-facing, and unsignalled — precisely the "healthy-looking wrong answer" class ADR-033 exists to eliminate. Currently unmitigated and untested: `tests/test_api_endpoints.py:172-186` asserts only `status_code == 200`, `success is True`, `"dataframe" in body["data"]` and `category == "forecast"` — never that the payload carries values.
+The ADR-030 §5 representation migration hard-drops both the `pred_*` sample columns (`grid_dataset.py:200`) and the historical scalar columns (`grid_dataset.py:223`) from `.dataframe`, moving them into `_sample_store` / `_feature_store`. `DatasetService.get_latest_dataframe` still returns `cache["data"].copy()` — that now index-only frame — and the two `/latest` route handlers serialize it directly. Verified empirically on the repo's own fixture: `ForecastDataset(make_fao_df()).dataframe.shape == (8, 0)` and `dataframe_to_dict(...)[0] == {'month_id': 600, 'priogrid_id': 100}`; the historical/feature path behaves identically. **The silent path is:** column drop → index-only `.dataframe` → `cache["data"].copy()` → `dataframe_to_dict` → HTTP 200 with `success: true` and `columns: []`, with no exception, no log line, and no `/health` degradation — while `README.md:157-170` and `docs/api/README.md:80` both document these endpoints as returning "the full latest dataframe". A consumer cannot distinguish "the artifact has no rows" from "this endpoint no longer carries data". Partially self-revealing (the envelope's `shape` and `columns` fields do expose the emptiness to a caller who inspects them), which is the only argument for Tier 2; Tier 1 is assigned because the deception is server-side, partner-facing, and unsignalled — precisely the "healthy-looking wrong answer" class ADR-033 exists to eliminate. **Confirmed at production scale 2026-08-23** by loading the real cached artifacts and driving the real app offline: the served frames are `(2330712, 0)` and `(28421738, 0)` — zero columns in both. `/data/forecast/latest` returns **HTTP 200 with 88,357,820 bytes in 9.04 s**, 88 MB of rows carrying only `month_id` and `priogrid_id`, with the envelope reporting `"columns": []`. `/data/historical/latest` was not serialised (C-284 measured it at 12.9 GB) but its frame layer is equally empty. See `reports/architecture/what_the_api_actually_serves.md` §2. Currently unmitigated and untested: `tests/test_api_endpoints.py:172-186` asserts only `status_code == 200`, `success is True`, `"dataframe" in body["data"]` and `category == "forecast"` — never that the payload carries values.
 
 See also inherited `C-148`/`C-153`/`D-12` (the `.dataframe` seal — body not in this register), which govern the *internal* access rule; this concern is the un-revisited *served-contract* consequence of that seal. See also `C-243` (TESTING.md count drift). **Corrected 2026-08-23:** an earlier version of this line read "the test suite's shape-only assertions are why this went unseen", generalising from these two tests to the suite. Measurement refutes that — classifying every assertion in `tests/` gives 439 shape/status-only against 565 content/value (**56% content**), and `test_api_endpoints.py` alone is 68%. The suite is not shape-only. What is true is narrower and worse: these two tests are the *only* ones that touch `/data/{category}/latest`, they are named `*_returns_200`, and nothing anywhere asserts a `/latest` payload carries values. The gap is coverage of the most dangerous surface, not a weak testing culture — see `reports/architecture/measured_against_the_siblings.md` §5.
 
@@ -1677,6 +1677,8 @@ assumed one. Two active keys plausibly exceed `MemoryMax=9G` on their own, which
 ceiling kill the one endpoint CRAF'd actually uses. **This is why the committed 8G/9G ceiling was
 not installed on 2026-08-22** and the temporary 14 G `/run` drop-in was left in place.
 
+**Measured 2026-08-23:** `build_bulk_table` on the real artifacts takes **38.7 s at 10.47 GB peak RSS** — above the committed `MemoryMax=9G`, and matching ADR-030's recorded 10.5 GB local figure. This confirms directly that installing the ceiling as committed would kill the one endpoint CRAF'd uses. The decision to hold was correct.
+
 Settling it needs one of: an nginx access-log read showing whether CRAF'd's key has ever completed
 a bulk request, or a `/data/forecast/bulk` call from a second key against a cold partition with
 `systemctl status` read after. Both are on the box, so both wait for the operator.
@@ -1937,3 +1939,163 @@ anything that moves code between `data/` and `forecast/` under C-289.
 Cross-refs: **C-289** (the coupling half of the same structural picture), **C-238** (the other
 concern living in `model.py`, for a different reason), **C-273** (the dormant `wandb_alert`
 redaction defect in `wandb/utils.py` — same vestigial corner), **C-284**/issue **#125**.
+
+---
+
+### C-293: the bulk `*_actual` columns carry no signal even when everything succeeds — and that is indistinguishable from C-248's failure
+
+| Field | Value |
+|-------|-------|
+| ID | C-293 |
+| Tier | 1 |
+| Source | route-by-route functionality probe against real artifacts (2026-08-23) |
+| Trigger | Before CRAF'd — or anyone — computes a forecast-vs-actual skill score from the bulk parquet. Also whenever a new forecast run shifts the window: check how many of its months overlap the historical series, and whether the overlap month carries data. |
+| Location | `src/views_crafdapi/forecast/serialize/bulk_parquet.py` (`build_bulk_table`, `_actual_by_admin1`), `src/views_crafdapi/managers/api.py` (`get_forecast_bulk_parquet`) |
+
+Measured on the real cached artifacts, with **both datasets loading successfully** — no fetch
+failure, no exception, no warning:
+
+```
+sb_actual: non-null 2,432 / 87,552   nonzero 0
+ns_actual: non-null 2,432 / 87,552   nonzero 2
+os_actual: non-null 2,432 / 87,552   nonzero 3
+```
+
+Two independent causes compound.
+
+**Structural: the join can only ever reach one month in thirty-six.**
+
+```
+historical months 121..559 (n=439)
+forecast   months 559..594 (n=36)
+overlap: [559]
+```
+
+87,552 rows = 36 months x 2,432 admin-1 units, so **at most 2.8% of rows can carry an `actual`** by
+construction. That is inherent to comparing a forecast window against a history that ends where the
+forecast begins, and is not itself a defect — but nothing in the artifact or the documentation says
+so.
+
+**Empirical: that one month is empty.** Total `lr_ged_sb` by month at the tail of the historical
+series:
+
+```
+month 550: sum=13383   cells=64742
+month 551: sum= 4001   cells=64742
+ ...
+month 558: sum= 2974   cells=64742
+month 559: sum=    0   cells=64742
+```
+
+Months 550-558 each carry thousands of fatalities. Month 559 — the only month that reaches the bulk
+artifact — is exactly zero across all 64,742 cells.
+
+**Why this is Tier 1 and not a curiosity.** The columns are served as `0.0`, not `null`. A consumer
+scoring forecasts against outcomes gets a flat zero series and **no signal that the data is absent
+rather than genuinely zero**. This is the ADR-033 "healthy-looking wrong answer" class, on the one
+route CRAF'd actually consumes, with a valid 200 and 45 columns.
+
+**The interaction with C-248 is what makes it acute.** C-248 records that a *failed* historical
+fetch nulls every `*_actual`, and notes the signature `.sum() -> 0`. The healthy path measured here
+produces **the same `.sum() -> 0`**. So the failure mode C-248 warns about is not distinguishable
+from the success mode by the one check its own entry proposes. Any guard written against that
+signature would pass in both worlds.
+
+Not established here: whether month 559 is legitimately not-yet-observed (an intentional placeholder
+in the artifact) or whether the historical artifact's final month is truncated. Both produce the
+identical consumer experience; the distinction decides whether the fix belongs here or upstream, and
+it should be settled before anything is changed.
+
+Cross-refs: **C-248** (the failure path to the same outcome — read together, not separately),
+**C-287** (bulk verification from a warm operator partition), **C-244** (the served-column
+inventory), `reports/architecture/what_the_api_actually_serves.md` §1.
+
+---
+
+### C-294: the same historical `hdi-map` request 500s at one level and answers with degenerate intervals at four others
+
+| Field | Value |
+|-------|-------|
+| ID | C-294 |
+| Tier | 2 |
+| Source | route-by-route functionality probe against real artifacts (2026-08-23) |
+| Trigger | Before documenting or exposing `/{level}/analysis/historical/hdi-map` to any consumer, and before writing a client that reads `hdi*_lower`/`hdi*_upper`/`p_gt*` without checking the category. Also when the C-232/C-284 response bound is designed — the refusal semantics for "this request is not meaningful for this data" should be settled in the same change. |
+| Location | `src/views_crafdapi/data/handlers/grid_dataset.py:1255`, `src/views_crafdapi/data/handlers/forecast_dataset.py:685`, `src/views_crafdapi/managers/api.py` (`hdi_map_endpoint`) |
+
+Historical data is point observations — `is_prediction=False`, `sample_size=None`. There is no
+posterior to summarise. The five level-routes disagree about what to do about that.
+
+**At `pg` (`aggregate=False`) the request 500s.** Reproduced directly:
+
+```
+ValueError: HDI and MAP calculation only valid for prediction dataframes
+  grid_dataset.py:1255, via forecast_dataset.py:685
+```
+
+Refusing is correct. Surfacing it as an unhandled `ValueError` -> **HTTP 500** is not: a 500 asserts
+the server broke, when the truthful answer is that the request is not meaningful for this category —
+a 4xx.
+
+**At `country`, `gaul0`, `gaul1`, `gaul2` (`aggregate=True`) the identical request succeeds**, with
+36-40 columns. Measured across all 33 countries carrying non-zero values at month 540:
+
+```
+                 map   hdi50_lo  hdi50_hi  hdi90_lo  hdi90_hi  hdi95_lo  hdi95_hi  severe   p_gt25
+UKR (month 540) 2268.0   2268.0    2268.0    2268.0    2268.0    2268.0    2268.0   2268.0    1.0
+PSE              718.0    718.0     718.0     718.0     718.0     718.0     718.0    718.0    1.0
+```
+
+- HDI90 and HDI95 width: **max = 0** — every interval degenerate.
+- `MAP == hdi90_lower == hdi90_upper` exactly; `severe_scenario == map`.
+- `p_gt25` and `p_gt100` take only `0.0` or `1.0`.
+
+**The numbers are not fabricated, and the entry should not be read as saying they are.** MAP equals
+the observed value exactly — `max|diff| = 0` against an independent aggregation of the source. What
+is wrong is the served *contract*: a consumer reading `hdi90_lower`/`hdi90_upper` expects a credible
+interval and receives a point value repeated, and one reading `p_gt25 = 1.0` reads "certain" where
+the truth is "the single observed value exceeded 25". Tier 2 rather than 1 for exactly that reason —
+the values are right, the field names lie about what they are.
+
+The inconsistency is the sharpest part: one route refuses (badly), four answer (misleadingly), for
+the same data and the same question.
+
+Cross-refs: **C-232** (the other served-contract defect on the same handlers), **C-244** (column
+inventory and the `p_gt*` semantics), `reports/architecture/what_the_api_actually_serves.md` §3-4.
+
+---
+
+### C-295: the only guard that pins real served numbers has never run in this repository
+
+| Field | Value |
+|-------|-------|
+| ID | C-295 |
+| Tier | 3 |
+| Source | route-by-route functionality probe (2026-08-23) |
+| Trigger | Before relying on the test suite to catch a change in served numbers — and immediately, when re-pointing the fixture, since a real artifact is present on this machine today and the guard could be made live in one edit. |
+| Location | `tests/forecast/test_served_output_golden_real.py:29-36`, `apis/un_crafd/cache/datasets/`, `apis/un_crafd/cache/appwrite_cache/crafd_bucket/` |
+
+The test exists to pin "the *real* numbers FAO receives ... computed by the current (v2 tower)
+estimator on a deterministic slice of a real cached forecast artifact", as a complement to the
+synthetic golden. It skips:
+
+```
+SKIPPED tests/forecast/test_served_output_golden_real.py:71:
+  real forecast artifact absent (appwrite_cache/unfao_bucket/forecast_dataset_20260310_114703.parquet)
+```
+
+The path names an **`unfao_bucket`** — inherited from the ancestor repo. This repository's cache is
+`crafd_bucket`, and it holds 108 wire shards plus a 171.8 MB historical parquet, with both
+categories already materialised as value-dirs under
+`apis/un_crafd/cache/datasets/ba85fb086a35c37e_{forecast,historical}_value`.
+
+The test is designed to skip in CI by intent (no real data committed, per #123) — but it skips
+**locally too**, which is the only place it was ever meant to run. It has therefore never guarded
+anything here, and the served-numbers safety net is the synthetic golden alone.
+
+This matters more than it looks: the probe that produced C-293 and C-294 loaded those very
+value-dirs in under five seconds. The data needed to make this guard live has been on disk the whole
+time.
+
+Cross-refs: **C-241**/issue **#101** (inherited citations that resolve elsewhere — the same
+ancestry), **C-290** (the other absent gate), **C-243** (test-count drift),
+`reports/architecture/what_the_api_actually_serves.md` §7.
