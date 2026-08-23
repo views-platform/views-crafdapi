@@ -8,8 +8,6 @@ import time
 import logging
 
 from appwrite.services.databases import Databases
-from appwrite.role import Role
-from appwrite.permission import Permission
 from appwrite.exception import AppwriteException
 from appwrite.query import Query
 
@@ -182,6 +180,14 @@ class MetadataManager:
     def _create_single_attribute(
         self, database_id: str, collection_id: str, attr: Dict[str, Any]
     ):
+        # þing-01 #276: opt-in, default OFF. This writes through the same
+        # `databases.create_*_attribute` SDK calls as the gated `_create_attribute_by_type`,
+        # and is reached when `create_metadata_collection_if_not_exists` backfills the fixed
+        # schema onto an *existing* collection — a path that previously bypassed the gate.
+        # The caller skips keys that already exist, so this fires only for a genuinely missing
+        # attribute: the gate refuses exactly when schema would be created, and an upload
+        # against a fully-provisioned collection never reaches it.
+        _require_provisioning(f"attribute {attr['key']!r}")
         attr_creators = {
             "string": lambda: self.databases.create_string_attribute(
                 database_id, collection_id, attr["key"], attr["size"], attr["required"]
@@ -289,12 +295,17 @@ class MetadataManager:
                 database_id=db_id,
                 collection_id=coll_id,
                 name=coll_name,
-                permissions=[
-                    Permission.read(Role.any()),
-                    Permission.create(Role.any()),
-                    Permission.update(Role.any()),
-                    Permission.delete(Role.any()),
-                ],
+                # views-crafdapi#91 / #123: this previously granted read/create/update/delete
+                # to `Role.any()` — anyone holding the project id, which is not a secret. The
+                # identical shape left two production collections (`unfao`, 111 rows;
+                # `production_forecasts`, 461) anonymously readable AND writable until
+                # 2026-08-14. An empty permission list is the correct scoping here: this
+                # collection is only ever reached by a server-side API key, and an Appwrite API
+                # key bypasses collection permissions, so no role grant is required to serve.
+                # NOTE: Appwrite applies permissions at CREATION ONLY. This fixes what future
+                # provisioning creates; it does not remediate any collection already created
+                # with the open grant. See #91/#123 for that, which needs Appwrite access.
+                permissions=[],
                 document_security=False,
                 enabled=True,
             )

@@ -5,9 +5,9 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-23                                     |
-| Total Concerns    | 64                                             |
+| Total Concerns    | 65                                             |
 | Open Concerns     | 56                                             |
-| Resolved Concerns | 8                                              |
+| Resolved Concerns | 9                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -2105,3 +2105,55 @@ time.
 Cross-refs: **C-241**/issue **#101** (inherited citations that resolve elsewhere — the same
 ancestry), **C-290** (the other absent gate), **C-243** (test-count drift),
 `reports/architecture/what_the_api_actually_serves.md` §7.
+
+---
+
+### C-296 (RESOLVED): the provisioning gate was not total — one create leaf wrote without it
+
+| Field | Value |
+|-------|-------|
+| ID | C-296 |
+| Tier | 3 |
+| Source | pre-deletion safety audit of the write surface (2026-08-23) |
+| Trigger | When adding any new `create_*` leaf to `managers/appwrite/`, or when relying on "provisioning is opt-in and OFF" as an argument that a code path is inert — check the leaf actually calls `_require_provisioning`, because one did not. |
+| Location | `src/views_crafdapi/managers/appwrite/metadata.py` (`_create_single_attribute`), `src/views_crafdapi/managers/appwrite/provisioning.py` |
+
+`provisioning.py` implements þing-01 #276 / PLATFORM-001 D5: a missing or wrong coordinate on a
+serving path must **raise** rather than silently create phantom storage, so every `create_*` leaf
+calls `_require_provisioning` and refuses unless `CRAFDAPI_ALLOW_PROVISIONING` is explicitly set.
+
+**`_create_single_attribute` did not call it.** It writes through the same
+`databases.create_string_attribute` / `create_integer_attribute` / `create_datetime_attribute` SDK
+calls as its gated sibling `_create_attribute_by_type`, and reached them with no check. The path
+that gets there is `create_metadata_collection_if_not_exists`'s **existing-collection** branch,
+which backfills seven fixed schema attributes (`fileId`, `bucketId`, `filename`, `file_size`,
+`mime_type`, `uploaded_at`, `file_hash`) onto a collection that already exists — the one branch of
+that function the gate did not cover.
+
+**Scope of the fix, checked in review.** `_create_dynamic_attributes` first reads
+`list_attributes` and `continue`s past every key that already exists, so `_create_single_attribute`
+is reached **only for a genuinely missing attribute**. The gate therefore fires exactly when the
+code would create schema, and an upload against a fully-provisioned collection is unaffected — the
+loop skips every attribute before reaching it. `ProvisioningDisabledError` is a `RuntimeError`, not
+an `AppwriteException`, so the surrounding `except AppwriteException` that swallows "attribute
+already exists" does not swallow the refusal.
+
+The practical exposure was small: nothing on the serving path calls it, an invariant
+`tests/test_serving_isolation.py` enforces by AST-walking every serving module against a
+`PRODUCER_METHODS` frozenset. But the gate's whole value is being **total**; a leaf outside it makes
+"provisioning is off, so this path is inert" false in one place, and that argument was about to be
+used to justify a much larger deletion.
+
+**RESOLVED 2026-08-23.** `_require_provisioning(f"attribute {attr['key']!r}")` added to the leaf.
+Guarded by `tests/test_appwrite_manager.py::TestProvisioningGate::test_create_single_attribute_refuses_provisioning_by_default`,
+confirmed to fail (`DID NOT RAISE`) against the unfixed code before it was trusted.
+
+Two other ungated writers are recorded here deliberately and **not** changed: `update_file_metadata`
+and `delete_metadata_document` mutate documents rather than create infrastructure, which is outside
+what `_require_provisioning` was scoped to guard. Their safety comes from non-invocation, not the
+gate. Whether document mutation should also be gated is a design question, not a defect, and is left
+open.
+
+Cross-refs: **C-292** (the same file's size), issues **#91**/**#123** (the `Role.any()` grant in the
+sibling branch of the same function, fixed in the same change),
+`reports/architecture/what_to_subtract.md` Tier 2 (whose deletion case this audit refuted).
