@@ -1,6 +1,6 @@
 # ADR-025: FAO Output Schema and Column Naming
 
-**Status:** Accepted
+**Status:** Accepted — **§4 amended 2026-08-15** (ADR-034 §3 / register C-244): the served schema is **45** columns, not the 36 decided here; `schema.bulk_columns()` is the authority. The original §4 is retained as the record of what was decided.
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** ADR-024 (raw-count serving contract), ADR-023 (re-baselining governance), ADR-003 (declarations over inference), views-models ADR-012 (target scale/prefix), views-datafactory (`ged_*_best` naming), views-frames-summarize (`hdi_tower`, `tower_point`, `expected_shortfall`)
@@ -34,7 +34,7 @@ State-based (`sb`), non-state (`ns`), one-sided (`os`) — each forecast and rep
 
 No `ged_`, `lr_`, `ln_`, or `pred_` prefix appears in FAO output. Series stems are the bare `sb` / `ns` / `os`. This applies to the JSON output columns as well, going forward. (Internal input column names, whatever the producer sends, are a separate concern — faoapi consumes them but does not propagate their prefixes to FAO; ADR-024 / C-142.)
 
-### 4. Canonical column schema (36 columns)
+### 4. Canonical column schema (36 columns as decided; **45 as served** — see the amendment below)
 
 > **Amended 2026-08-15 (ADR-034 §3, register C-244).** The served schema is now **45** columns:
 > ADR-034 added three exceedance columns per series (`s_p_gt25`, `s_p_gt100`, `s_p_gt1000`),
@@ -50,7 +50,7 @@ No `ged_`, `lr_`, `ln_`, or `pred_` prefix appears in FAO output. Series stems a
 | Identity (6) | `month_id`, `admin1_code`, `admin1_name`, `country_code`, `country_name`, `country_iso3` |
 | Per series `s ∈ {sb, ns, os}` (10 × 3 = 30) | `s_map` · `s_hdi50_lower` · `s_hdi50_upper` · `s_hdi90_lower` · `s_hdi90_upper` · `s_hdi95_lower` · `s_hdi95_upper` · `s_severe_scenario` · `s_bimodality_flag` · `s_actual` |
 
-> **`s_bimodality_flag`** — the conservative 0/1 secondary-mode flag (§A.3 of FAO Pre-Release Note 06). Delivered as a per-series column (epic #222) — surfaced from the views-frames `bimodality` detector via `estimator.collapse`, so a materially-populated second mode is never silently collapsed to one number. This makes the served schema **36 columns** (the earlier 33-column draft omitted it as an open A.3 item; it is now built and testable).
+> **`s_bimodality_flag`** — the conservative 0/1 secondary-mode flag (§A.3 of FAO Pre-Release Note 06). Delivered as a per-series column (epic #222) — surfaced from the views-frames `bimodality` detector via `estimator.collapse`, so a materially-populated second mode is never silently collapsed to one number. This made the served schema **36 columns** at the time of this decision (the earlier 33-column draft omitted it as an open A.3 item). ADR-034 §3 has since taken it to **45**; see the §4 amendment.
 
 **Identity columns are grounded in the real upstream GAUL schema** (`views-postprocessing/unfao/gaul_schema.py`), not UN M49:
 - `admin1_code` / `admin1_name` — GAUL admin-1 (`gaul1_code` / `gaul1_name` upstream, renamed `admin1_gaul1_*` in the 9-column metadata contract).

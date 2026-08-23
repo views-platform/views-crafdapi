@@ -95,6 +95,29 @@ class PredictionStoreManager:
         
         return OperationResult(**upload_result)
 
+    def _require_consumer_name(self) -> str:
+        """Return this consumer's document name, or raise.
+
+        views-postprocessing#55 (held in #46): nothing else binds the *query* to the consumer-name
+        constant. `test_seam_contract_binding.py` binds the constant to the registry row, but a
+        falsy name used to be handled two different ways — `get_predictions_by_metadata` **omitted**
+        the filter, silently widening the query across every consumer's documents and returning a
+        non-empty result for the wrong consumer; `list_all_predictions` passed the falsy value
+        through as a literal filter. Both now refuse (ADR-003 fail-loud).
+
+        The two callers share this guard deliberately: the defect was that they disagreed, so the
+        check is the thing that must not be duplicated.
+        """
+        name = getattr(self.model_path, "model_name", None)
+        if not name:
+            raise ValueError(
+                "model_name is unset on the path manager, so this query cannot be bound to a "
+                "consumer. Refusing rather than querying without a name filter, which would "
+                "widen the selection across every consumer's documents and return another "
+                "consumer's data as if it were ours (views-postprocessing#55, ADR-003)."
+            )
+        return name
+
     def get_predictions_by_metadata(
         self, filters: Dict[str, Any] = None
     ) -> List[Dict[str, Any]]:
@@ -112,9 +135,7 @@ class PredictionStoreManager:
         if filters is None:
             filters = {}
         
-        # Add model name to filters if model_path has it
-        if hasattr(self.model_path, 'model_name') and self.model_path.model_name:
-            filters["name"] = self.model_path.model_name
+        filters["name"] = self._require_consumer_name()
 
         # ADR-013 §11.4 (Hop-B transition guard): a category selection that names no
         # explicit type is legacy selection — pin it to the legacy artifact type so it
@@ -452,8 +473,7 @@ class PredictionStoreManager:
         Returns:
             List of prediction metadata documents
         """
-        filters = {"name": self.model_path.model_name}
-        return self.get_predictions_by_metadata(filters=filters)
+        return self.get_predictions_by_metadata(filters={"name": self._require_consumer_name()})
     
     # Debug
     def list_all_predictions_unfiltered(self) -> List[Dict[str, Any]]:

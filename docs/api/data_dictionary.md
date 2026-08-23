@@ -114,8 +114,8 @@ GAUL = FAO's own **Global Administrative Unit Layers**. Country codes are GAUL a
 > (no `s_actual`).
 >
 > **The authority for this layout is the code**, `forecast/serialize/schema.py::bulk_columns()`.
-> ADR-025 §4 still describes the pre-ADR-034 36-column schema and ADR-034's own served-column
-> plan lists a different 36; neither is current (register C-244).
+> ADR-025 §4 decided 36 and now carries a dated amendment saying so and pointing here; ADR-034's
+> own served-column plan lists a different 36 and has not been reconciled (register C-244).
 >
 > **The 13th column, bulk-only:** `s_actual` — the historical **observed** value for that
 > unit-month, a count. It is `NaN` wherever no observation exists, which is **every forecast

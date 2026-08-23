@@ -343,7 +343,28 @@ Same family as `C-232` (served contract diverged from its documentation during a
 
 *Evidence note, corrected:* an earlier draft of this addendum cited the golden `served_hdi_map.json` as proving `s_actual` is absent from the JSON path. **That artifact cannot support the claim** — it is built from synthetic series-less vars (`conftest.py:41`), so its 36 keys are 12 identity/geo (including a stray `index` key the real API never emits) plus 2 *fixture* series × 12, unrelated to the real 3 × 12; the real `pg` response is 47 keys. No golden contains an `sb`/`ns`/`os` key, so none exercises `to_consumer_columns` at all. The claim is nonetheless true, on the correct evidence: `json_contract.series_value_column_names` returns 12 names and `actual` is not among them.
 
-**Still open — this entry does not close.** The title and the pre-2026-08-11 body above describe the state at registration; the *data dictionary* half is now done, everything else stands:
+**Substantially closed 2026-08-23 (epic #40 acceptance criterion).** All stale column totals are
+reconciled to **45**, and the repo no longer carries three different numbers. Fixed:
+`schema.py:5` (said 33), `test_bulk_parquet.py:1` (33), `CICs/README.md:58` (33),
+`CICs/forecast_package.md:50` (36), `CICs/BulkParquetWriter.md:6,69` (36), ADR-025's §4 heading and
+its `bimodality_flag` line (36), and the data dictionary's cross-reference. `methodology.py:20`
+needed no change — it already reads "It said 36 columns. It is **45**".
+
+ADR-025's **Status** line now records the amendment rather than reading as unqualified `Accepted`.
+That makes it the first ADR in this repo to carry one, which is one instance of **C-291**
+(38 ADRs, none ever marked superseded or amended).
+
+**What is deliberately NOT done, and why this entry stays open:**
+
+- **`METHODOLOGY_VERSION` is still `3`.** This entry argues the v2→v3 precedent — an additive
+  published column warrants a bump under ADR-023 — applies to the nine ADR-034 exceedance columns.
+  Bumping it changes a value CRAF'd reads, so it is a product decision for the operator, not one to
+  take inside a documentation reconciliation. Unbumped and stated, rather than bumped quietly.
+- **ADR-034 is still `Proposed`** and its thresholds are still placeholders whose confirmation would
+  *rename* the columns. Nothing here changes that; the trigger above still stands.
+- **ADR-034's own served-column plan still lists a different 36** and has not been reconciled.
+
+Original assessment at registration, retained:
 - **12 stale sites remain** (≈27 individual lines): `ADR-025 §4` (`:37,42,44`), `schema.py:5,88`, `methodology.py:15`, `client.py:138-139`, `json_contract.py:84-87`, `docs/ADRs/README.md:124`, `BulkParquetWriter.md`, `forecast_package.md`, `ForecastDataset.md`, `CICs/README.md:58` (which says **33**, a *third* total), `test_bulk_parquet.py:1`, `test_consumer_naming.py:80`. The repo therefore carries three different totals — 33, 36 and 45.
 - **The "raw fatality counts" absolute survives in five higher-traffic places** the dictionary fix did not reach: `docs/api/README.md:19` (the primary HTTP-consumer document, which never mentions `p_gt` anywhere), `notebooks/README.md:14`, `notebooks/01_quickstart.ipynb:23`, `notebooks/03_offline_demo.ipynb:58`, and `forecast/serialize/bulk_parquet.py:16` — the last self-contradictory, since the same docstring lists `s_p_gt{25,100,1000}` eight lines earlier. Notebooks 01 and 03 render `hdi_map` frames that now carry those columns under that header.
 - **ADR-025 is the dangerous one and is untouched.** It declares itself canonical and ADR-003 makes declarations authoritative, so a contributor reconciling code to it would still *delete* nine live served columns. The §4a amendment with an explicit "MUST NOT remove" imperative is unwritten.

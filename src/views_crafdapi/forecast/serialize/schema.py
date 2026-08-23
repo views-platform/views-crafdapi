@@ -2,7 +2,7 @@
 
 One module owns everything about *what the served columns are called*: the credible masses,
 the internal-target → consumer-series (``sb``/``ns``/``os``) map, the identity-column mapping
-(GAUL admin-1/admin-0 + ISO3), and the per-series + full 33-column name contract. Both the
+(GAUL admin-1/admin-0 + ISO3), and the per-series + full 45-column name contract (6 identity + 3 series x 13; 36 until ADR-034 §3 added the three exceedance columns per series — register C-244). Both the
 JSON serializer (epic #222 / S4) and the admin-1 bulk parquet writer (#222 / S6) build their
 columns from here, so a column name lives in exactly one place (Common Closure) — the old hazard
 of the name contract being spelled in both ``json_contract.py`` and an inline handler dict is
