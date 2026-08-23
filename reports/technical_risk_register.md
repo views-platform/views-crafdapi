@@ -1983,6 +1983,17 @@ away.
    block of zeros (measured: `month 559: sum=0, cells=64742`) rather than absent. The join cannot
    distinguish that from a genuinely conflict-free month. A consumer scoring forecasts reads
    "no fatalities" where the truth is "not reported yet".
+
+   **Raised upstream as views-datafactory#476 (2026-08-23).** Verified before filing that the zeros
+   are *not* ours: our streaming ingest does not densify, and the raw source parquet already carries
+   month 559 complete and zero — `RAW month 557: rows=64742 sum=3705.0` / `558: 64742 / 2974.0` /
+   `559: 64742 / 0.0`. Candidate mechanism named there:
+   `datafactory_compilation/compilation_config.py:71` (`fill_value: float = 0.0`). The issue also
+   carries a redirect — per ADR-028 the artifact is written by the **views-postprocessing `un_crafd`**
+   post-processor, which pulls from datafactory, so the densification may belong there instead; that
+   could not be determined from a consumer's vantage point. Cheapest ask made of them: fill the
+   `update lag` slot their own `docs/ADRs/033_data_source_catalog.md:95` template already has, which
+   would let us compute the boundary ourselves.
 2. **The overlap month is always the least-observed one.** History ends where the forecast begins,
    so the single month of the 36 that can carry an `actual` is by construction the newest — the one
    most likely to be unreported at the moment a run is cut. That is a real caveat for anyone using
