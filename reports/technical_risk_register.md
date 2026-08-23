@@ -2130,6 +2130,14 @@ which backfills seven fixed schema attributes (`fileId`, `bucketId`, `filename`,
 `mime_type`, `uploaded_at`, `file_hash`) onto a collection that already exists — the one branch of
 that function the gate did not cover.
 
+**Scope of the fix, checked in review.** `_create_dynamic_attributes` first reads
+`list_attributes` and `continue`s past every key that already exists, so `_create_single_attribute`
+is reached **only for a genuinely missing attribute**. The gate therefore fires exactly when the
+code would create schema, and an upload against a fully-provisioned collection is unaffected — the
+loop skips every attribute before reaching it. `ProvisioningDisabledError` is a `RuntimeError`, not
+an `AppwriteException`, so the surrounding `except AppwriteException` that swallows "attribute
+already exists" does not swallow the refusal.
+
 The practical exposure was small: nothing on the serving path calls it, an invariant
 `tests/test_serving_isolation.py` enforces by AST-walking every serving module against a
 `PRODUCER_METHODS` frozenset. But the gate's whole value is being **total**; a leaf outside it makes

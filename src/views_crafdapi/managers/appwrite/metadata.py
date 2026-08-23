@@ -184,6 +184,9 @@ class MetadataManager:
         # `databases.create_*_attribute` SDK calls as the gated `_create_attribute_by_type`,
         # and is reached when `create_metadata_collection_if_not_exists` backfills the fixed
         # schema onto an *existing* collection — a path that previously bypassed the gate.
+        # The caller skips keys that already exist, so this fires only for a genuinely missing
+        # attribute: the gate refuses exactly when schema would be created, and an upload
+        # against a fully-provisioned collection never reaches it.
         _require_provisioning(f"attribute {attr['key']!r}")
         attr_creators = {
             "string": lambda: self.databases.create_string_attribute(
