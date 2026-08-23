@@ -11,6 +11,18 @@ shares the **same Better Stack account**; each API adds its `/ping` as one more 
 | Monitor | Checks | Auth | Interval | An alert means |
 |---------|--------|------|----------|----------------|
 | **crafdapi /ping (liveness)** | `GET https://crafdapi.viewsforecasting.org/ping` returns 200 | none | 3 min | the **service** is down (outage) |
+| **`data-freshness.yml`** (GitHub Actions, not Better Stack) | `GET /health` and reads its verdict — `status`, `appwrite_connected`, `forecast_freshness.is_stale` | `X-API-Key: $APPWRITE_DATASTORE_API_KEY` (GitHub repo secret of the same name) | daily 07:15 UTC | the **data** is stale — a monthly delivery was missed. Opens one self-closing issue |
+
+**Two questions, two mechanisms, deliberately kept apart.** `/ping` answers *is the service up?*;
+`data-freshness.yml` answers *is what it serves still current?* Neither alerts on the other's
+failure — if `/health` is unreachable the workflow logs a notice and opens nothing, because that is
+an availability event Better Stack has already alarmed on within three minutes. A duplicate alarm
+for one event teaches people to ignore both.
+
+The freshness half is a workflow rather than a Better Stack monitor for the same reason
+views-datafactory's is: Better Stack's free tier cannot inspect a response *body*, and `/health`
+deliberately returns **200 with `status: "degraded"`** when the data is stale — HTTP status stays
+about service health. See `deployment/MONTHLY_REFRESH.md` for what to do when it fires.
 
 - **Created:** 2026-08-06 (crafdapi v0.1.0 deploy).
 - **SSL/TLS verification:** on (catches an expired/broken cert on the public path).

@@ -16,6 +16,7 @@ _ROOT = Path(__file__).parent.parent
 _UNIT = (_ROOT / "deployment" / "views-crafdapi.service").read_text()
 _GATE = (_ROOT / "scripts" / "checkout-deploy-tag.sh").read_text()
 _BOOTSTRAP = (_ROOT / "deployment" / "bootstrap.sh").read_text()
+_FRESHNESS = (_ROOT / ".github" / "workflows" / "data-freshness.yml").read_text()
 
 
 class TestSystemdUnit:
@@ -291,3 +292,53 @@ class TestMemoryCeiling:
             f"MemoryMax={mx}G takes more than 60% of the {self.BOX_G} GiB box, leaving too "
             f"little for views-faoapi, the OS and page cache"
         )
+
+
+# The keys `data-freshness.yml` reads out of the `/health` body. Renaming one in
+# `api.py` without renaming it here leaves the monitor parsing a field that no longer
+# exists — it would report healthy forever while inspecting nothing, which is the exact
+# failure the workflow's own comment warns about.
+_HEALTH_KEYS_THE_MONITOR_READS = ("status", "appwrite_connected", "forecast_freshness", "is_stale")
+
+
+class TestDataFreshnessMonitor:
+    """The daily poller that answers "is the served data still current?" — the question
+    Better Stack's /ping monitor cannot. It has no tests of its own (it is YAML GitHub
+    runs), so what is pinned here is the one thing that would silently disable it:
+    drift between the keys it parses and the keys `/health` emits."""
+
+    def test_the_monitor_polls_health_not_ping(self):
+        assert "https://crafdapi.viewsforecasting.org/health" in _FRESHNESS
+        assert "/ping" not in _FRESHNESS, (
+            "this workflow must not duplicate Better Stack's liveness check — two alarms "
+            "for one event teach people to ignore both"
+        )
+
+    def test_it_runs_on_a_schedule_and_can_be_triggered_by_hand(self):
+        assert "schedule:" in _FRESHNESS and "cron:" in _FRESHNESS
+        assert "workflow_dispatch:" in _FRESHNESS
+
+    def test_it_does_not_open_an_issue_when_the_fetch_fails(self):
+        """An unreachable service is an availability problem Better Stack already owns."""
+        assert "fetched=false" in _FRESHNESS
+        assert "if: steps.fetch.outputs.fetched == 'true'" in _FRESHNESS
+
+    def test_it_sends_the_api_key_and_refuses_to_run_without_it(self):
+        """`/health` requires X-API-Key. Polling it without one returns 422, which carries no
+        `status` — a monitor that carried on regardless would open a false alarm every day
+        until muted, which is worse than no monitor. It fails the run instead."""
+        assert "X-API-Key: ${KEY}" in _FRESHNESS
+        assert "secrets.APPWRITE_DATASTORE_API_KEY" in _FRESHNESS
+        assert 'exit 1' in _FRESHNESS
+
+    def test_gh_repo_is_set_because_there_is_no_checkout(self):
+        """views-datafactory's equivalent failed 10 runs out of 10 without this."""
+        assert "GH_REPO:" in _FRESHNESS
+        assert "actions/checkout" not in _FRESHNESS
+
+    @pytest.mark.parametrize("key", _HEALTH_KEYS_THE_MONITOR_READS)
+    def test_the_workflow_names_every_health_key_it_depends_on(self, key):
+        assert f'"{key}"' in _FRESHNESS or f"'{key}'" in _FRESHNESS or f"`{key}`" in _FRESHNESS
+
+    # The binding half — that `/health` actually emits these — lives in
+    # test_api_endpoints.py, where the `app_client` fixture already is.

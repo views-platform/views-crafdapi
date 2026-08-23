@@ -1,0 +1,202 @@
+name: Data freshness
+
+# Answers "is the data we serve still current?" — the question Better Stack's
+# liveness monitor cannot answer, and the one nothing has been asking.
+#
+# WHY THIS EXISTS
+# `/health` deliberately returns HTTP 200 with `status: "degraded"` when the
+# served forecast is past its SLA. api.py says why, in as many words: HTTP status
+# stays about *service* health, and data staleness surfaces in the body "so an
+# external monitor" can see it. That monitor did not exist. Better Stack watches
+# liveness only — a stale bucket returns 200 forever.
+#
+# The delivery that refreshes the data is MANUAL (see deployment/MONTHLY_REFRESH.md):
+# a human runs two launchers each month. A missed month had no alarm on either end.
+#
+# DIVISION OF LABOUR — deliberate, do not blur it
+#   Better Stack liveness "is the service up?"                (3 min, email)
+#   this workflow         "is what it serves still current?"  (daily, opens an issue)
+# Two questions, two mechanisms. Neither should alert on the other's failure.
+#
+# BORROWED SCARS, from views-datafactory's serving-freshness.yml
+#   - GH_REPO + no checkout: without it `gh` dies with "failed to run git: fatal:
+#     not a git repository". Theirs failed 10 runs out of 10 from the day it was
+#     added (their C-351). Cheaper to inherit the fix than to rediscover it.
+#   - A failed fetch opens NOTHING. That is availability, and Better Stack alerts
+#     within three minutes. Their words: "a duplicate alarm for one event teaches
+#     people to ignore both."
+
+on:
+  schedule:
+    # 07:15 UTC daily. Staleness is a slow failure — the delivery is monthly — so
+    # daily is ample, and a quiet check is one nobody learns to ignore. Offset from
+    # datafactory's 07:00 purely so two unrelated alarms never arrive as one blur.
+    - cron: "15 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: data-freshness
+  cancel-in-progress: false
+
+env:
+  # `gh` infers the repo from the git remote; this job has no checkout, by design.
+  GH_REPO: ${{ github.repository }}
+  HEALTH_URL: https://crafdapi.viewsforecasting.org/health
+
+jobs:
+  freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to run blind if the key is missing
+        env:
+          KEY: ${{ secrets.APPWRITE_DATASTORE_API_KEY }}
+        run: |
+          set -euo pipefail
+          # `/health` requires X-API-Key. Without it the endpoint answers 422, which carries
+          # no `status` field — a monitor that shrugged and carried on would read that as
+          # unhealthy and open a false alarm EVERY DAY until someone muted it, which is worse
+          # than no monitor. Fail the run instead: a red workflow is visible and honest.
+          if [ -z "${KEY}" ]; then
+            echo "::error::Secret APPWRITE_DATASTORE_API_KEY is not set. /health requires X-API-Key; without it this check cannot read a verdict. Set the secret in repo settings. Failing rather than polling blind."
+            exit 1
+          fi
+
+      - name: Fetch /health
+        id: fetch
+        env:
+          KEY: ${{ secrets.APPWRITE_DATASTORE_API_KEY }}
+        run: |
+          set -uo pipefail
+          if curl -fsS --max-time 30 -H "X-API-Key: ${KEY}" "$HEALTH_URL" -o health.json; then
+            echo "fetched=true" >> "$GITHUB_OUTPUT"
+            echo "Fetched $(wc -c < health.json) bytes."
+          else
+            echo "fetched=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Could not fetch $HEALTH_URL. That is an AVAILABILITY problem and Better Stack owns it (3-minute checks). Not opening an issue here — a duplicate alarm for one event teaches people to ignore both."
+          fi
+
+      - name: Assess
+        id: assess
+        if: steps.fetch.outputs.fetched == 'true'
+        run: |
+          set -uo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+
+          problems = []
+          try:
+              h = json.load(open("health.json", encoding="utf-8"))
+          except Exception as e:
+              print(f"age_days=-1")
+              print("degraded=true")
+              print("problems<<EOF")
+              print(f"- `/health` did not return parseable JSON ({type(e).__name__}), so its "
+                    f"verdict cannot be read at all")
+              print("EOF")
+              raise SystemExit(0)
+
+          status = h.get("status")
+          if status != "healthy":
+              problems.append(f"`/health` reports `status: {status!r}` rather than `healthy`")
+
+          if h.get("appwrite_connected") is not True:
+              problems.append(
+                  f"`appwrite_connected` is {h.get('appwrite_connected')!r} — the service cannot "
+                  f"reach its datastore"
+              )
+
+          # The SLA is the service's to own (CRAFDAPI_FORECAST_FRESHNESS_SLA_DAYS, default 45).
+          # Read its verdict; do not recompute it here and create a second source of truth.
+          fr = h.get("forecast_freshness")
+          age = -1.0
+          if fr is None:
+              # api.py computes this best-effort: on any exception the key is simply ABSENT and
+              # `status` stays "healthy". A monitor reading only `status` would sit quiet while
+              # the check feeding it silently does nothing. Treated as a problem for the reason
+              # views-datafactory wrote down: a check that silently inspects nothing is worse
+              # than no check.
+              problems.append(
+                  "`forecast_freshness` is absent from the response — the freshness check itself "
+                  "failed (it is best-effort in api.py and swallows its own errors), so staleness "
+                  "is currently unmeasured rather than fine"
+              )
+          else:
+              age = float(fr.get("age_days", -1))
+              if fr.get("is_stale"):
+                  problems.append(
+                      f"the served forecast is {age:.1f} days old, past its "
+                      f"{fr.get('sla_days')}-day SLA (created {fr.get('created_at')})"
+                  )
+
+          print(f"age_days={age:.1f}")
+          print(f"degraded={'true' if problems else 'false'}")
+          print("problems<<EOF")
+          for p in problems:
+              print(f"- {p}")
+          print("EOF")
+          PY
+
+      - name: Open or update the tracking issue
+        if: steps.assess.outputs.degraded == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBLEMS: ${{ steps.assess.outputs.problems }}
+          AGE: ${{ steps.assess.outputs.age_days }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TITLE="Served data is stale or degraded"
+          BODY=$(cat <<EOF
+          The service is up — Better Stack is quiet and \`/health\` answered. What it *reports* is not healthy.
+
+          ${PROBLEMS}
+
+          Source: ${HEALTH_URL}
+
+          ## This is a DATA problem, not an outage
+
+          Do not restart the service. The forecast endpoints will keep answering; they are just
+          serving something old. The question is why a monthly delivery has not landed.
+
+          The refresh is **manual** — two launchers a human runs, documented in
+          \`deployment/MONTHLY_REFRESH.md\`. Most likely one of them was not run this month.
+
+          Start there, then check what is actually live:
+
+          \`\`\`bash
+          curl -s https://crafdapi.viewsforecasting.org/health | python3 -m json.tool
+          curl -s -H "X-API-Key: \$KEY" https://crafdapi.viewsforecasting.org/provenance/forecast | python3 -m json.tool
+          \`\`\`
+
+          Detected by [data-freshness](${RUN_URL}). One issue is reused rather than duplicated, and
+          it closes itself once the data is fresh again.
+          EOF
+          )
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+                       --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Still degraded — served forecast is ${AGE} days old. [run](${RUN_URL})"
+            echo "Updated existing issue #${EXISTING}"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi
+
+      - name: Close the tracking issue if freshness recovered
+        if: steps.assess.outputs.degraded == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGE: ${{ steps.assess.outputs.age_days }}
+        run: |
+          set -euo pipefail
+          TITLE="Served data is stale or degraded"
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+                       --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" \
+              --comment "Recovered — \`/health\` is healthy and the served forecast is ${AGE} days old, inside its SLA. Closed automatically."
+            echo "Closed #${EXISTING}"
+          fi
