@@ -13,7 +13,6 @@ See risk register: C-77 (hardcoded credential), and the GAUL-data-redistribution
 import pathlib
 import re
 
-import pytest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -31,16 +30,14 @@ def test_no_hardcoded_appwrite_key_in_any_tracked_notebook():
     assert not offenders, f"hardcoded Appwrite key found in: {offenders}"
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="NEW blocker: bundled FAO GAUL 2024 shapefiles (src/views_crafdapi/shapefiles/) "
-    "are third-party data with no bundled license/terms. A public flip would redistribute "
-    "them and the repo-root MIT LICENSE would purport to relicense data we do not own. "
-    "GAUL has redistribution restrictions — verify FAO terms before public.",
-)
 def test_no_unlicensed_thirdparty_data_bundled_for_public_release():
     """Bundled third-party geodata must ship with explicit license/terms clearing
     redistribution, or not be in the public tree at all."""
+    # Was xfail until 2026-08-23: `src/views_crafdapi/shapefiles/` bundled FAO GAUL 2024
+    # with no license or terms, which would have made a public flip redistribute data we
+    # do not own under the repo-root MIT LICENSE. The directory was code-dead (C-239 — the
+    # only `gpd.read_file` fetches Natural Earth from a URL) and was deleted, which removed
+    # the blocker rather than documenting it. The guard stays live so re-bundling fails.
     shp_dir = REPO / "src" / "views_crafdapi" / "shapefiles"
     if not shp_dir.exists():
         return  # nothing bundled -> fine

@@ -18,8 +18,6 @@ from views_crafdapi.forecast.serialize.json_contract import (
 from views_crafdapi.forecast.summarize.estimator import collapse, tower_collapse
 
 from pathlib import Path
-from joblib import Parallel
-from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
@@ -263,25 +261,6 @@ class _GridDataset:
         register C-137).
         """
         return copy.deepcopy(self)
-
-    @staticmethod
-    @contextmanager
-    def tqdm_joblib(tqdm_object):
-        """Context manager to patch joblib to report into tqdm progress bar"""
-
-        def tqdm_print_progress(self):
-            if self.n_completed_tasks > tqdm_object.n:
-                n = self.n_completed_tasks - tqdm_object.n
-                tqdm_object.update(n=n)
-
-        original_print_progress = Parallel.print_progress
-        Parallel.print_progress = tqdm_print_progress
-
-        try:
-            yield tqdm_object
-        finally:
-            Parallel.print_progress = original_print_progress
-            tqdm_object.close()
 
     def _rebuild_index_mappings(self) -> None:
         """Create sorted index mappings for tensor alignment using pandas Index."""
