@@ -1176,6 +1176,49 @@ class TestProvisioningGate:
                 assert helper not in text, f"{mod} calls provisioning helper {helper} on a serving path"
 
 
+    def test_create_single_attribute_refuses_provisioning_by_default(
+        self, mock_databases, api_key_config, monkeypatch
+    ):
+        """The gate must be total. `_create_single_attribute` writes the seven fixed schema
+        attributes via the same `databases.create_*_attribute` SDK calls its gated sibling
+        `_create_attribute_by_type` uses, but reached the SDK with no provisioning check —
+        so backfilling attributes onto an *existing* collection bypassed þing-01 #276."""
+        monkeypatch.delenv("CRAFDAPI_ALLOW_PROVISIONING", raising=False)
+        manager = MetadataManager(mock_databases, api_key_config)
+
+        with pytest.raises(ProvisioningDisabledError, match=r"attribute 'fileId'"):
+            manager._create_single_attribute(
+                "db", "coll", {"key": "fileId", "type": "string", "size": 255, "required": True}
+            )
+
+        mock_databases.create_string_attribute.assert_not_called()
+
+
+    def test_metadata_collection_is_not_created_world_open(
+        self, mock_databases, api_key_config, monkeypatch
+    ):
+        """views-crafdapi#91 / #123 ratchet: the metadata collection must never be created with
+        a `Role.any()` grant. The identical shape left two production collections anonymously
+        readable and writable until 2026-08-14. A server-side Appwrite API key bypasses
+        collection permissions, so an empty grant list is sufficient to serve."""
+        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")
+        mock_databases.list.return_value = _sdk_result(databases=[{"$id": "db", "name": "db"}])
+        mock_databases.list_collections.return_value = _sdk_result(collections=[])
+        mock_databases.create_collection.return_value = _sdk_result(
+            **{"$id": "coll", "name": "coll"}
+        )
+        manager = MetadataManager(mock_databases, api_key_config)
+
+        manager.create_metadata_collection_if_not_exists(
+            collection_name="coll", collection_id="coll", database_id="db"
+        )
+
+        mock_databases.create_collection.assert_called_once()
+        granted = mock_databases.create_collection.call_args.kwargs["permissions"]
+        assert granted == [], f"metadata collection created with grants: {granted}"
+        assert not any("any" in str(g) for g in granted)
+
+
 class TestCredentialRedaction:
     """þing-01 #277 / PLATFORM-001 redaction clause: no credential in any carrier reaches a log line."""
 
