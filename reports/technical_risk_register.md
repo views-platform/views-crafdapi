@@ -1975,9 +1975,14 @@ away.
 
 **What survives the correction, and is why this stays open at Tier 3:**
 
-1. **`0.0` is not `null`.** An unobserved month and a month with genuinely zero fatalities are served
-   identically. A consumer computing a skill score cannot distinguish "not yet reported" from "no
-   conflict deaths", and nothing in the payload or the docs says which it is.
+1. **We serve `0.0` where ADR-025 mandates `NaN` — this is the one genuine defect here.** ADR-025 §4
+   is explicit: `s_actual` is *"the historical observed count... `NaN` for months with no actuals"*.
+   Measured: of 87,552 rows, **85,120 are correctly `NaN`** (the forecast horizon) and **2,432 are
+   non-null `0.0`** — exactly one month x 2,432 admin-1 units, the overlap month. The cause is
+   upstream: the historical grid is **dense**, so a not-yet-reported month is present as a full
+   block of zeros (measured: `month 559: sum=0, cells=64742`) rather than absent. The join cannot
+   distinguish that from a genuinely conflict-free month. A consumer scoring forecasts reads
+   "no fatalities" where the truth is "not reported yet".
 2. **The overlap month is always the least-observed one.** History ends where the forecast begins,
    so the single month of the 36 that can carry an `actual` is by construction the newest — the one
    most likely to be unreported at the moment a run is cut. That is a real caveat for anyone using
