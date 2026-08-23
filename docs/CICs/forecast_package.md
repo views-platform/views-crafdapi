@@ -47,7 +47,7 @@ This is a consolidated, brief contract for the package; the facade contract is `
   API/bulk boundary. (`map_dataframe`/`hdi_dataframe` remain for the legacy single-HDI shape.)
   *One reason: the output column shape/names (ADR-025).*
 - **`bulk_parquet`** — the ADR-025 admin-1 bulk artifact: `build_bulk_table(forecast_ds, historical_ds)` /
-  `write_bulk_parquet(...)` produce the 36-column wide parquet (33 base + per-series bimodality_flag) (forecast quantities + historical
+  `write_bulk_parquet(...)` produce the 45-column wide parquet (6 identity + 3 series x 13) (forecast quantities + historical
   `actual` summed to admin-1). Its own contract: `BulkParquetWriter.md`. *One reason: the bulk product.*
 
 ## `conformance.py` — assert the leaf's published contracts on real faoapi frames (#91)

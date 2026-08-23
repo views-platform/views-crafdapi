@@ -1,4 +1,8 @@
-"""S6 (#222): the ADR-025 admin-1 bulk parquet writer (33 columns, incl. historical `actual`)."""
+"""S6 (#222): the ADR-025 admin-1 bulk parquet writer (45 columns, incl. historical `actual`).
+
+33 at S6, 36 once `bimodality_flag` landed, 45 since ADR-034 §3 added three exceedance columns
+per series. `schema.bulk_columns()` is the authority (register C-244).
+"""
 
 import numpy as np
 import pandas as pd

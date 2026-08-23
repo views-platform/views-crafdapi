@@ -3,7 +3,7 @@
 **Status:** Active
 **Owner:** Project maintainers
 **Last reviewed:** 2026-07-24
-**Related ADRs:** ADR-025 (FAO output schema — the 36-column admin-1 bulk artifact (33 base + bimodality_flag)), ADR-024 (raw counts), ADR-006 (this contract), views-postprocessing ADR-013 (the wire run this consumes)
+**Related ADRs:** ADR-025 (FAO output schema — the admin-1 bulk artifact; **45 columns** as served, §4 amended — register C-244), ADR-024 (raw counts), ADR-006 (this contract), views-postprocessing ADR-013 (the wire run this consumes)
 **Source:** epic #222 / S6 (#228)
 
 ---
@@ -66,6 +66,6 @@ ADR-025 columns; 33 base + per-series bimodality_flag = **36**). `build_bulk_tab
 
 ## 8. Test Alignment
 
-- `tests/forecast/test_bulk_parquet.py` — 36-column schema (incl. bimodality_flag), one row per `(month_id, admin1_code)`,
+- `tests/forecast/test_bulk_parquet.py` — 45-column schema (incl. bimodality_flag and the three ADR-034 exceedance columns per series), one row per `(month_id, admin1_code)`,
   consumer identity, `actual` == admin-1 sum, `NaN` without history, nested HDIs, parquet
   round-trip, both fail-loud guards, and the `GET /data/forecast/bulk` endpoint.

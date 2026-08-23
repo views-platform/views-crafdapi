@@ -960,3 +960,29 @@ class TestMethodologyVersionInProvenance:
         prov = prediction_store.get_latest_provenance(filters={"category": "forecast"})
         assert prov.methodology_version == METHODOLOGY_VERSION
         assert prov.to_dict()["methodology_version"] == METHODOLOGY_VERSION
+
+
+class TestConsumerNameIsBoundToTheQuery:
+    """views-postprocessing#55, held in #46 (D6): nothing binds the *query* to the consumer-name
+    constant. This API could change how it selects, leave the constant alone, pass every check on
+    both sides, and serve an empty endpoint while uploads succeed and are billed.
+
+    Decision recorded on #55: both query paths become strict and fail loud on a falsy
+    `model_name`, rather than one silently widening the query and the other passing the falsy
+    value through as a literal filter (ADR-003 fail-loud)."""
+
+    def test_get_predictions_by_metadata_refuses_a_falsy_consumer_name(
+        self, prediction_store
+    ):
+        """A falsy name must not OMIT the name filter — that widens the query across every
+        consumer's documents and returns a non-empty result for the wrong consumer."""
+        prediction_store.model_path.model_name = ""
+        with pytest.raises(ValueError, match="model_name"):
+            prediction_store.get_predictions_by_metadata()
+
+    def test_list_all_predictions_refuses_a_falsy_consumer_name(self, prediction_store):
+        """The sibling path had no guard at all — it passed the falsy value straight through as
+        `filters={"name": ""}`. The two paths disagreed; now both refuse."""
+        prediction_store.model_path.model_name = None
+        with pytest.raises(ValueError, match="model_name"):
+            prediction_store.list_all_predictions()
