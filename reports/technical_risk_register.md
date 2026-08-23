@@ -6,8 +6,8 @@
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-23                                     |
 | Total Concerns    | 64                                             |
-| Open Concerns     | 59                                             |
-| Resolved Concerns | 5                                              |
+| Open Concerns     | 56                                             |
+| Resolved Concerns | 8                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -228,7 +228,9 @@ journal for an unrelated reason to notice.
 
 ---
 
-### C-239: Bundled GAUL shapefiles are code-dead, LFS-tracked against their ADR's rationale, and a public-release licensing blocker
+### C-239 (RESOLVED): Bundled GAUL shapefiles are code-dead, LFS-tracked against their ADR's rationale, and a public-release licensing blocker
+
+**RESOLVED 2026-08-23 by deletion.** `src/views_crafdapi/shapefiles/` (672 KB) removed. The entry's own finding — that no source path reads them, the only `gpd.read_file` being `plotting.py:58` fetching Natural Earth from a URL — was re-verified before deleting. This also cleared the public-release blocker: `tests/test_falsify_path_to_public.py::test_no_unlicensed_thirdparty_data_bundled_for_public_release` was `xfail` on exactly this and is now a **live passing guard**, so re-bundling third-party geodata without terms fails the suite.
 
 | Field | Value |
 |-------|-------|
@@ -1058,7 +1060,9 @@ Cross-refs: **C-243** (the same shape — a documented behaviour with no test th
 
 ---
 
-### C-271: Three runtime dependencies are imported by `src/` but never declared; two more are declared dev-only
+### C-271 (RESOLVED): Three runtime dependencies are imported by `src/` but never declared; two more are declared dev-only
+
+**RESOLVED 2026-08-23 — and the predicted trigger fired first.** This entry's trigger read *"when a transitive dependency stops requiring one of these — e.g. `wandb` dropping `PyYAML`"*. Removing `wandb` did exactly that: the suite went to **30 collection errors** with `ModuleNotFoundError: No module named 'yaml'`, on the production boot path this entry named (`LoggingModule._setup_logging`). `PyYAML`, `requests` and `pydantic` are now declared explicitly in `[project] dependencies` with a comment recording why. The dev-only half (`geopandas`/`matplotlib` imported at module scope by `plotting.py`) is **not** addressed here and remains open — see the residual note below.
 
 | Field | Value |
 |-------|-------|
@@ -1098,7 +1102,9 @@ Cross-refs: **C-233** (same root, different surface), **C-254**, **C-269**, ADR-
 
 ---
 
-### C-273: `wandb_alert` redacts the literal string `"None"` when no path is supplied
+### C-273 (RESOLVED): `wandb_alert` redacts the literal string `"None"` when no path is supplied
+
+**RESOLVED 2026-08-23 by deletion.** The entry recorded that this was dormant — `wandb_notifications` is `False` on every construction path. Investigation confirmed the only caller was `APIManager.run()`, which is **never invoked**: the production entry point is `uvicorn views_crafdapi.managers.api:create_app --factory`. `src/views_crafdapi/wandb/`, `APIManager.run()`, the `wandb_notifications` parameter threaded through three constructors, `tests/test_wandb_redaction.py`, and the `wandb==0.18.7` dependency (53 MB) were all removed.
 
 | Field | Value |
 |-------|-------|

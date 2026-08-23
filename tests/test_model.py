@@ -255,10 +255,9 @@ class TestConfigsProperty:
 
 class TestModelManagerInit:
 
-    @patch("views_crafdapi.managers.model.ModelManager._ModelManager__ascii_splash")
     @patch("views_crafdapi.managers.model.ModelManager._ModelManager__load_config")
     @patch("views_crafdapi.managers.model.LoggingModule")
-    def test_init_loads_three_configs(self, mock_logging_cls, mock_load_config, mock_splash):
+    def test_init_loads_three_configs(self, mock_logging_cls, mock_load_config):
         mock_logging_cls.return_value.get_logger.return_value = MagicMock()
         mock_load_config.side_effect = [
             {"host": "0.0.0.0"},
@@ -270,17 +269,16 @@ class TestModelManagerInit:
         mock_path.get_scripts.return_value = {}
 
         ModelManager.__instances__ = 0
-        mgr = ModelManager(model_path=mock_path, wandb_notifications=False)
+        mgr = ModelManager(model_path=mock_path)
 
         assert mock_load_config.call_count == 3
         assert mgr._config_deployment == {"host": "0.0.0.0"}
         assert mgr._config_hyperparameters == {"lr": 0.01}
         assert mgr._config_meta == {"name": "test"}
 
-    @patch("views_crafdapi.managers.model.ModelManager._ModelManager__ascii_splash")
     @patch("views_crafdapi.managers.model.ModelManager._ModelManager__load_config")
     @patch("views_crafdapi.managers.model.LoggingModule")
-    def test_init_handles_missing_configs(self, mock_logging_cls, mock_load_config, mock_splash):
+    def test_init_handles_missing_configs(self, mock_logging_cls, mock_load_config):
         mock_logging_cls.return_value.get_logger.return_value = MagicMock()
         mock_load_config.return_value = None
         mock_path = MagicMock(spec=ModelPathManager)
