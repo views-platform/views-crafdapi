@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-23                                     |
-| Total Concerns    | 58                                             |
-| Open Concerns     | 53                                             |
+| Total Concerns    | 61                                             |
+| Open Concerns     | 56                                             |
 | Resolved Concerns | 5                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -56,7 +56,7 @@ Consequently:
 
 The ADR-030 §5 representation migration hard-drops both the `pred_*` sample columns (`grid_dataset.py:200`) and the historical scalar columns (`grid_dataset.py:223`) from `.dataframe`, moving them into `_sample_store` / `_feature_store`. `DatasetService.get_latest_dataframe` still returns `cache["data"].copy()` — that now index-only frame — and the two `/latest` route handlers serialize it directly. Verified empirically on the repo's own fixture: `ForecastDataset(make_fao_df()).dataframe.shape == (8, 0)` and `dataframe_to_dict(...)[0] == {'month_id': 600, 'priogrid_id': 100}`; the historical/feature path behaves identically. **The silent path is:** column drop → index-only `.dataframe` → `cache["data"].copy()` → `dataframe_to_dict` → HTTP 200 with `success: true` and `columns: []`, with no exception, no log line, and no `/health` degradation — while `README.md:157-170` and `docs/api/README.md:80` both document these endpoints as returning "the full latest dataframe". A consumer cannot distinguish "the artifact has no rows" from "this endpoint no longer carries data". Partially self-revealing (the envelope's `shape` and `columns` fields do expose the emptiness to a caller who inspects them), which is the only argument for Tier 2; Tier 1 is assigned because the deception is server-side, partner-facing, and unsignalled — precisely the "healthy-looking wrong answer" class ADR-033 exists to eliminate. Currently unmitigated and untested: `tests/test_api_endpoints.py:172-186` asserts only `status_code == 200`, `success is True`, `"dataframe" in body["data"]` and `category == "forecast"` — never that the payload carries values.
 
-See also inherited `C-148`/`C-153`/`D-12` (the `.dataframe` seal — body not in this register), which govern the *internal* access rule; this concern is the un-revisited *served-contract* consequence of that seal. See also `C-243` (the test suite's shape-only assertions are why this went unseen).
+See also inherited `C-148`/`C-153`/`D-12` (the `.dataframe` seal — body not in this register), which govern the *internal* access rule; this concern is the un-revisited *served-contract* consequence of that seal. See also `C-243` (TESTING.md count drift). **Corrected 2026-08-23:** an earlier version of this line read "the test suite's shape-only assertions are why this went unseen", generalising from these two tests to the suite. Measurement refutes that — classifying every assertion in `tests/` gives 439 shape/status-only against 565 content/value (**56% content**), and `test_api_endpoints.py` alone is 68%. The suite is not shape-only. What is true is narrower and worse: these two tests are the *only* ones that touch `/data/{category}/latest`, they are named `*_returns_200`, and nothing anywhere asserts a `/latest` payload carries values. The gap is coverage of the most dangerous surface, not a weak testing culture — see `reports/architecture/measured_against_the_siblings.md` §5.
 
 **Do not fix this alone — see C-284 (2026-08-22).** The obvious remedy, restoring the dropped
 columns to the served frame, makes a second and worse defect worse still: `/data/historical/latest`
@@ -1795,3 +1795,145 @@ with — a source-walking gate over an allowlist that may only shrink — so the
 pointed at a second contract, not new machinery.
 
 Cross-refs: **C-236**, `reports/architecture/measured_against_the_siblings.md`, issue **#90**.
+
+---
+
+### C-290: CI runs no linter and no type checker, and `[tool.ruff]` selects nothing
+
+| Field | Value |
+|-------|-------|
+| ID | C-290 |
+| Tier | 3 |
+| Source | comparative architecture audit against the sibling repos (2026-08-23) |
+| Trigger | Before trusting a green `/ship-it` or a green CI run as evidence that a change is clean — neither currently checks anything beyond the four default ruff rules and the test suite. Also when adding the ruleset: stage it, because turning it on at once produces 3,718 findings and an unreviewable diff. |
+| Location | `.github/workflows/run_pytest.yml`, `.github/workflows/codeql.yml`, `.github/workflows/prevent_merge_when_branch_behind.yml`, `pyproject.toml` (`[tool.ruff]`) |
+
+Every `run:` step across all three workflows is `uv sync`, `pytest`, a coverage summary, `nbmake`,
+three shell steps of branch topology, and CodeQL. **No lint step and no type check.**
+
+`[tool.ruff]` contains an `extend-exclude` and nothing else. With no `lint.select`, ruff runs its
+four default rule groups (`E4`, `E7`, `E9`, `F`) and reports `All checks passed!` — which is what
+`/ship-it` has been reading as a lint gate.
+
+Under `select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM"]` with `line-length = 88` — the
+selection **views-frames and views-bayesian use character for character, and views-datafactory uses
+with one added ignore** — the same tree reports **3,718 findings**. Three of four platform repos
+agree on that ruleset, so this repo is outside the house standard by omission rather than by choice.
+
+The number is not 3,718 problems. **3,034 are `E501`** against a default line length nobody chose.
+Excluding it leaves ~684, of which 506 are auto-fixable (`UP006`/`UP045` typing modernisation,
+`I001` import order). The substantive remainder is small and specific:
+
+- **22 × `B904`** — `raise` without `from` inside `except`, eight of them in `managers/api.py`.
+  Drops `__cause__` when wrapping into `HTTPException`.
+- **9 × `B905`** — `zip()` without `strict=`. All nine were read: **none is a live bug**, lengths
+  are provably equal at each site. But silent truncation to the shorter iterable is the exact
+  failure class this register is otherwise full of, and `strict=True` costs nothing.
+- **14 × `B008`** — FastAPI `Depends()`/`Query()`. Idiomatic; must be ignored, not fixed.
+
+`mypy` is installed (1.19.1) and unconfigured; at non-strict it reports **62 errors in 14 files**.
+Two (`api.py:664,730`) are `parsed_entity_ids` holding `list[str]` in the `level == "country"`
+branch and `list[int]` otherwise, undeclared — not a defect today, but sitting exactly on the
+country-vs-PGM split that issue #82 already tracks. views-frames and views-bayesian both run
+`strict = true`.
+
+Tier 3: no correctness property depends on this today, but it is on the path of every future change
+and it makes the existing gates read as stronger than they are.
+
+Cross-refs: **C-289** (the other unenforced architectural property), issue **#101** (the
+`[tool.ruff]` comment claiming "CI lints src/ and tests/ only" cites a views-faoapi entry and
+describes that repo's CI), issue **#82**.
+
+---
+
+### C-291: governance records accumulate and are never retired — 9% of the register is closed, and no ADR has ever been superseded
+
+| Field | Value |
+|-------|-------|
+| ID | C-291 |
+| Tier | 4 |
+| Source | comparative architecture audit against the sibling repos (2026-08-23) |
+| Trigger | When planning work from this register — the open count cannot currently be used to size a backlog, because it does not separate "actionable now" from "blocked on the operator" from "blocked on a measurement that needs the box". Also when an ADR is functionally replaced (ADR-030 replaced much of the representation model): mark the superseded one rather than leaving both reading as current. |
+| Location | `reports/technical_risk_register.md` (header), `docs/ADRs/active/` (36 ADRs) |
+
+Register convergence, read from each repo's own header:
+
+| repo | assigned | open | resolved | resolved |
+|---|---|---|---|---|
+| views-frames | 94 | 10 | 84 | 89% |
+| views-datafactory | 354 | 43 | 308 | 87% |
+| views-bayesian | 20 | 8 | 12 | 60% |
+| **views-crafdapi** | **58** | **53** | **5** | **9%** |
+
+The two repos that converge have machinery this one lacks. views-datafactory strikes resolved
+entries through in place — `| ~~C-253~~ | ~~1~~ | ~~...~~ | Resolved 2026-06-09 (commit 975b401...)`
+— and moves them to a separate archive, keeping the active register readable. views-frames added a
+`Status: actionable | awaiting — <precondition>` field in 2026-07 for precisely this problem, its
+own note being that a raw open-count had stopped being informative.
+
+Neither is a large change. The absence of both is why 53 open entries carry no signal about which
+can be worked today.
+
+The ADR side is the same shape. 38 ADRs, 36 under `docs/ADRs/active/`, with status values
+`Accepted` (26, in two spellings), `Implemented` (5), `Proposed` (3), `Active` (1). **None is
+marked Superseded or Deprecated** — the only occurrence of either word is the template's own
+placeholder line — across a period that included the entire ADR-030 representation migration. There
+is an `active/` directory with no counterpart, so nothing has ever been retired. views-frames
+retains superseded ADRs in place and marks them (*"Accepted — superseded in part by ADR-028
+(2026-08-18); see Amendment"*), and its ADR-002 carries a dated in-body amendment recording that its
+declared dependency direction had been wrong and was corrected to match the code.
+
+Tier 4: nothing incorrect is served because of this, and no reliability property depends on it. It
+is registered because it is the mechanism by which the other 53 entries stay hard to act on.
+
+Cross-refs: **C-241**/issue **#101** (citation drift in the same records), issue **#84** (legacy
+triage — the same "which of these is still live?" question).
+
+---
+
+### C-292: five source files are larger than any file in any sibling repo, and one is named for something it is not
+
+| Field | Value |
+|-------|-------|
+| ID | C-292 |
+| Tier | 3 |
+| Source | comparative architecture audit against the sibling repos (2026-08-23) |
+| Trigger | Before adding another route to `managers/api.py` or another responsibility to `dataset_service.py` — and when the C-232/C-284 fix lands, since bounding 23 routes inside a single 1,288-line `_register_routes` method is where that change has to go. Also before anyone reads `managers/model.py` expecting forecasting models. |
+| Location | `src/views_crafdapi/data/handlers/grid_dataset.py` (1,405), `src/views_crafdapi/managers/api.py` (1,288), `src/views_crafdapi/managers/appwrite/manager.py` (1,077), `src/views_crafdapi/managers/dataset_service.py` (1,043), `src/views_crafdapi/data/handlers/forecast_dataset.py` (966), `src/views_crafdapi/managers/model.py` (819), `src/views_crafdapi/wandb/utils.py` |
+
+| | src LOC | files | largest file | `utils.py` |
+|---|---|---|---|---|
+| **views-crafdapi** | 12,813 | 66 | **1,405** | **1** |
+| views-frames | 3,843 | 36 | 383 | none |
+| views-bayesian | 12,602 | 62 | 548 | none |
+| views-datafactory | 16,587 | 89 | 743 | none |
+
+The five largest files here are **each larger than any file in any sibling**, and the gap is not a
+function of repo size — views-datafactory has 30% more source across 89 files and its largest is
+743 lines.
+
+`managers/api.py` is not one concept at a readable grain: **14 route decorators and 17 nested
+function definitions, all inside a single `_register_routes` method.** For contrast, views-frames'
+largest file is 383 lines and holds solely `SpatioTemporalIndex`.
+
+This repo is also the only one of the four with a `utils.py` (`wandb/utils.py`). The siblings'
+near-misses are instructive rather than hypocritical: views-datafactory's only match is
+`sources/_ucdp_common.py` — 36 lines, underscore-private, one validator shared by three UCDP
+harvesters, with a docstring explaining why it exists; views-frames' is `_common.py` at 22 lines
+and two functions.
+
+**The specific instance worth naming** is `managers/model.py` (819 lines). `api.py:1` imports
+`APIManager, APIPathManager` from it, so it is firmly on the serving path — but it also holds
+`ModelPathManager`, model-directory scaffolding inherited from the training-pipeline ancestor, and
+it is why `wandb==0.18.7` is a declared dependency of a **read-only** API that trains nothing. A
+file called `model.py` in a forecast-serving API that turns out to be path management is the
+screaming-architecture failure in its plainest form, and it is a live source of confusion rather
+than a hypothetical one.
+
+Tier 3: no correctness or reliability property depends on file size. It is registered because it
+sits on the path of the two largest pieces of work now queued — the C-232/C-284 response bound, and
+anything that moves code between `data/` and `forecast/` under C-289.
+
+Cross-refs: **C-289** (the coupling half of the same structural picture), **C-238** (the other
+concern living in `model.py`, for a different reason), **C-273** (the dormant `wandb_alert`
+redaction defect in `wandb/utils.py` — same vestigial corner), **C-284**/issue **#125**.

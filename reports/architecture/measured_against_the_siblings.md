@@ -38,6 +38,9 @@ demonstration.
 | views-bayesian | 20 | 8 | 12 | 60% |
 | **views-crafdapi** | **57** | **52** | **5** | **9%** |
 
+*(crafdapi's figures are as measured before this audit; it filed four entries of its own — C-289 to
+C-292 — taking it to 61/56/5. The ratio is unmoved, which is the point.)*
+
 Read individually from each register header, not from one grep.
 
 The siblings work theirs down. Ours does not. And the two that converge have machinery for it that
@@ -217,7 +220,14 @@ declaration itself checked?"* — **no, no, and no.**
 ## 5. Where the criticism I expected turned out to be wrong
 
 I went in expecting to find that our tests assert shape and status and never look inside the
-payload, because **C-243** and **C-232** both say so. Classified across the whole suite:
+payload. **Where that expectation came from is worth being exact about, because I first stated it
+too loosely.** C-232's *body* is precise and correct — it names `tests/test_api_endpoints.py:172-186`
+and exactly what those two tests assert. C-243 is about `TESTING.md` count drift and makes no claim
+about assertion quality at all. The blanket version lives in one sentence: C-232's closing
+cross-reference, which read *"the test suite's shape-only assertions are why this went unseen"* —
+generalising from two tests to the suite.
+
+Classified across the whole suite:
 
 ```
 shape/status-only asserts:  439
@@ -248,7 +258,7 @@ def test_forecast_latest_returns_200(self, app_client):
 Named `*_returns_200`, and that is precisely all they check. **No test anywhere asserts that a
 `/latest` payload carries values.** So the problem is not test culture — it is that the single
 most dangerous served surface is the one left untested. That is a more specific and more actionable
-finding than "the tests are weak", and C-243 should be narrowed to say it.
+finding than "the tests are weak" — and C-232's cross-reference has been corrected to say so.
 
 ---
 
