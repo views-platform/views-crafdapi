@@ -4,9 +4,9 @@
 |-------------------|------------------------------------------------|
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
-| Last Updated      | 2026-08-18                                     |
-| Total Concerns    | 53                                             |
-| Open Concerns     | 48                                             |
+| Last Updated      | 2026-08-22                                     |
+| Total Concerns    | 57                                             |
+| Open Concerns     | 52                                             |
 | Resolved Concerns | 5                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -1518,7 +1518,7 @@ GAUL block — through the same `dataframe_to_dict`:
 
 | request | Python objects | JSON | build time |
 |---|---|---|---|
-| `/data/forecast/bulk` (the intended path) | — | **462 KB** | 62 s cold, 7.3 G peak — **safe** |
+| `/data/forecast/bulk` (the intended path) | — | **462 KB** | 62 s cold, 7.3 G peak — *see the 2026-08-22 correction below* |
 | `/data/forecast/latest` | ~1.1 GB | ~0.1 GB | heavy, survivable |
 | `/data/historical/latest` | 12.9 GB | 1.1 GB | fatal |
 | `/data/historical/latest` *after a naive C-232 fix* | 15.9 GB | 2.5 GB | fatal |
@@ -1528,10 +1528,35 @@ GAUL block — through the same `dataframe_to_dict`:
 The request would spend thirteen minutes consuming everything on the box before dying.
 
 This reframes the entry: the defect is not one endpoint but **the absence of any row bound on any
-data route**, with the danger scaling by how much the route materialises. Exactly one served path
-is safe — `/data/forecast/bulk`, which streams a 462 KB parquet — and it is the one CRAF'd
-actually uses. Nothing in `README.md` or `docs/api/README.md` distinguishes it from the others;
-they are listed as peers.
+data route**, with the danger scaling by how much the route materialises. One served path is
+materially better — `/data/forecast/bulk`, which streams a 462 KB parquet and never touches
+`dataframe_to_dict` — and it is the one CRAF'd actually uses. Nothing in `README.md` or
+`docs/api/README.md` distinguishes it from the others; they are listed as peers.
+
+**Correction, 2026-08-22 — the table above called bulk "safe" and that was wrong.** 462 KB is the
+*response* size, not the memory cost, and the two are unrelated here. Bulk's measured peak is
+**7.3 G cold / 6.0 G warm**, because it holds *both* datasets resident: the forecast run (~4 GiB,
+guarded by `_guard_run_capacity`) and the full historical grid (3.7-7.3 GB, **not** guarded —
+`_guard_run_capacity` covers wire-run assembly only), while `_actual_by_admin1`
+(`forecast/serialize/bulk_parquet.py:58-72`) reads the entire historical `_sample_array(target)[:, 0]`
+for every target. So bulk is not the safe outlier in this table — it is the **largest legitimate
+consumer on the service**, and the number `MemoryMax=9G` was itself sized from. That leaves 1.7 GB
+of headroom over a single measurement of a single artifact shape. See **C-287** for why that
+measurement does not describe CRAF'd's path at all.
+
+**Two traps in the remedy, from views-faoapi #126 (2026-08-22) — both invalidate the obvious fix.**
+
+*A row-count cap does not bound anything.* Cost per row is not a constant: through
+`dataframe_to_dict` a historical row costs ~1,625 B and a forecast row ~7,731 B, because the second
+carries a posterior draw per sample per target — and **the sample width varies per delivery**. A
+row cap chosen against one artifact silently means something else against the next. faoapi bounded
+on **estimated bytes computed from dataset shape** instead, and that is the mechanism to copy, not
+the number.
+
+*A zero-column guard cannot catch C-232.* `get_subset_dataframe` joins geo metadata
+**unconditionally**, so a values-less dataset returns a *geography-only* frame rather than an empty
+one. `shape[1] == 0` is therefore `False`, and the route answers `200` with coordinates and no data
+— passing a guard written the obvious way. The guard has to count **value** columns specifically.
 
 **What this makes urgent.** C-262's ceiling stops being housekeeping: with `MemoryMax=9G`
 installed, any of these requests kills crafdapi alone and it restarts (bounded by C-280). Without
@@ -1543,3 +1568,170 @@ work), **C-262** (the ceiling that decides whether this is a service outage or a
 now the most valuable open item because of this entry), **C-280** (bounds the restart that
 follows), **C-236** (in-memory caches bounded by entry count, not bytes — the same "no byte-level
 bound anywhere" theme), **C-263** (the other 28.4M-row memory event, resolved).
+
+---
+
+### C-285: every heavy request blocks the event loop, and `/ping` is on the other side of it
+
+| Field | Value |
+|-------|-------|
+| ID | C-285 |
+| Tier | 2 |
+| Source | cross-repo assessment against views-faoapi (2026-08-22) |
+| Trigger | Before adding any endpoint whose work is measured in tens of seconds, and before tuning the Better Stack `/ping` monitor's timeout or interval to stop a flapping alert — the flap may be a long legitimate request, not a sick service. Also when C-284's remedy is designed: a row bound also bounds this. |
+| Location | `src/views_crafdapi/managers/api.py` (every handler in `_register_routes`, all `async def`), `deployment/views-crafdapi.service:42` (uvicorn ExecStart, no `--workers`), `reports/ops/betterstack_monitoring.md:13` |
+
+Every route handler in `api.py` is `async def`, and every one of them calls synchronous,
+CPU-bound pandas/pyarrow work directly — no `run_in_executor`, no `anyio.to_thread`. FastAPI runs
+an `async def` handler **on the event loop thread**, so that work blocks the loop. The unit's
+`ExecStart` sets no `--workers`, so uvicorn runs **one** worker (`api.py:195` also defaults
+`workers` to 1, and `appwrite/manager.py:69` documents the assumption). `grep -rn
+"Semaphore\|asyncio.Lock\|threading.Lock\|limiter"` across `src/` returns no concurrency primitive
+of any kind.
+
+The consequence is that a single long request makes the whole service unresponsive, including the
+unauthenticated `/ping` liveness route. Measured durations for `/data/forecast/bulk`: **25.8 s**
+(v0.4.0, warm), **62.1 s** (v0.5.1, cold), and **501 s** before the ADR-030 S7 fix (#79, which
+surfaced as a 504 at the proxy). Better Stack polls `/ping` every **3 min** with immediate
+confirmation (`reports/ops/betterstack_monitoring.md:13`), and an alert on that monitor is
+defined there as meaning "the **service** is down (outage)". A request in the 501 s class blocks
+liveness across multiple poll intervals; the 62 s class is within one interval but past a typical
+HTTP client timeout.
+
+There is one accidental benefit worth stating so it is not mistaken for a design: because the
+handlers block, concurrent heavy requests **serialise** rather than running in parallel, so
+memory does not multiply across simultaneous callers. Fixing the blocking without adding a
+concurrency limit would remove that protection and make C-284's numbers additive. The two changes
+belong together.
+
+Not yet attributed to any real incident. The August outages are documented as deploy-gate
+failures (see `reports/ops/declared_vs_in_effect.md`), and this entry does not claim otherwise —
+it records a mechanism that was never considered when those incidents were diagnosed.
+
+Cross-refs: **C-284** (a bounded response also bounds the block), **C-262**/**C-280** (what
+happens after a kill), **C-237** (the shutdown path a mid-request kill takes).
+
+---
+
+### C-286: the file-download route streams a `BytesIO` line by line — a 294× penalty measured next door
+
+| Field | Value |
+|-------|-------|
+| ID | C-286 |
+| Tier | 3 |
+| Source | views-faoapi C-272, checked against this repo (2026-08-22) |
+| Trigger | Before pointing any consumer at `/files/{bucket_id}/{file_id}/download` for a large artifact, and before recording that route anywhere as a working large-payload channel — which is precisely the mistake views-faoapi made and had to retract. |
+| Location | `src/views_crafdapi/managers/api.py:949,955` |
+
+Both branches of the download handler return `StreamingResponse(io.BytesIO(file_bytes), ...)`.
+Starlette routes a non-async iterable through `iterate_in_threadpool` and **iterates it**, and
+iterating a `BytesIO` yields **lines** — it splits on `0x0A` wherever that byte happens to fall in
+binary content. views-faoapi measured exactly this on a real 171,292,294-byte artifact:
+**680,848 chunks averaging 251.6 bytes, 54.3 s**, against **0.185 s** for `FileResponse` — a
+**294×** penalty. Their fix (`2ed9a21`) dropped the chunk count to 2,614 and added a real
+`Content-Length`, `ETag` and `Accept-Ranges`.
+
+Our historical artifact is ~164 MB, the same order. Two further consequences beyond the latency:
+`file_bytes` is fully resident before the response begins, so the route also holds a whole-file
+copy in memory; and without `Accept-Ranges` a client that loses the connection restarts from zero.
+
+The repo already uses `FileResponse` correctly elsewhere — `api.py:597` (bulk) and `api.py:993`
+(the cached-file route) — so this is an inconsistency within one file rather than a missing
+capability. Tier 3 rather than 2: it is a performance and resumability defect on a route no
+current consumer is known to use for a large object, not a correctness or memory-ceiling risk.
+
+Cross-refs: **C-285** (a 54 s response also blocks the loop for 54 s), views-faoapi **C-272**.
+
+---
+
+### C-287: the dataset cache is partitioned per API key, so verification from the operator's key proves nothing about CRAF'd — and two keys hold two copies
+
+| Field | Value |
+|-------|-------|
+| ID | C-287 |
+| Tier | 2 |
+| Source | views-faoapi C-270/C-274, checked against this repo (2026-08-22) |
+| Trigger | Whenever a route is recorded as "verified working" — state which API key and which cache partition produced the measurement, and treat a warm operator-key result as saying nothing about a cold consumer-key one. Also before installing any `MemoryMax`: the ceiling must budget for as many resident historical datasets as there are active keys, not one. |
+| Location | `src/views_crafdapi/managers/dataset_service.py:176-189` (`api_key_hash` partitioning), `:234-240` and `:275-278` (the two cache gates), `deployment/views-crafdapi.service` (`MemoryHigh`/`MemoryMax`) |
+
+`DatasetService` keys its warm cache `self._dataframe_cache[api_key_hash][category]`
+(`dataset_service.py:181-189`), and the disk-cache check is likewise
+`self._disk_cache.check_file_id(api_key_hash, category, ...)` (`:273`). The partition is per key
+by design — it is how one key's credentials never serve another key's data — but it has two
+consequences that were not being accounted for.
+
+**First, it invalidates a class of verification.** Every production measurement of
+`/data/forecast/bulk` in this repo was taken from the box, with the operator's key, against a warm
+partition. That describes one partition's behaviour. A consumer on a different key hits a **cold**
+partition on its first request after each `ttl=4*3600` expiry, paying the full download + ingest —
+the 62 s / 7.3 G path — every time. views-faoapi hit the consequence directly: their
+`/data/forecast/bulk`, named in a release note as the recommended path, returned **200 from the
+box and 504 to every external caller**, and their register's trigger now reads *"Any 'verified
+working' claim made from the box[:] ask which API key and which cache partition produced it.
+Reproduce with a fresh key against a cold partition, or the verification proves nothing."*
+
+**Second, it multiplies resident memory.** `_dataframe_cache` is a `TTLCache(maxsize=50,
+ttl=4*3600)` keyed by `api_key_hash`, so *N* active keys hold up to *N* resident historical
+datasets — ~4 GB each. The C-262 ceiling arithmetic (7.3 G peak + faoapi's 5.9 G against 22 GiB)
+assumed one. Two active keys plausibly exceed `MemoryMax=9G` on their own, which would make the
+ceiling kill the one endpoint CRAF'd actually uses. **This is why the committed 8G/9G ceiling was
+not installed on 2026-08-22** and the temporary 14 G `/run` drop-in was left in place.
+
+Settling it needs one of: an nginx access-log read showing whether CRAF'd's key has ever completed
+a bulk request, or a `/data/forecast/bulk` call from a second key against a cold partition with
+`systemctl status` read after. Both are on the box, so both wait for the operator.
+
+Cross-refs: **C-284** (whose bulk row this correction amends), **C-262** (the ceiling arithmetic
+that assumed one resident copy), **C-236** (caches bounded by entry count, not bytes — this is the
+concrete cost of that), **C-279** (the verification-gap shape).
+
+---
+
+### C-288: nothing detects a truncated cached artifact, and one route can only serve it
+
+| Field | Value |
+|-------|-------|
+| ID | C-288 |
+| Tier | 2 |
+| Source | views-faoapi #126 (their C-279), verified against this repo (2026-08-22) |
+| Trigger | Before any consumer is pointed at `/files/{bucket_id}/{file_id}/cached`, and immediately after any OOM kill, deploy restart or crash that could have landed mid-download — the cache cannot tell you whether it holds a whole file. Also when C-262's ceiling is finally installed: a cgroup kill mid-write is precisely the event that creates this state. |
+| Location | `src/views_crafdapi/managers/appwrite/file_cache.py:78-107` (`validate_cache`), `:123` (`size_bytes`), `src/views_crafdapi/managers/appwrite/manager.py:816`, `src/views_crafdapi/managers/api.py:965-1000` |
+
+Three independent gaps, which together mean a partially-downloaded artifact is indistinguishable
+from a complete one.
+
+**`validate_cache` never checks size.** It checks that the metadata entry exists, that the path
+exists, that the TTL has not lapsed, and that the remote `$updatedAt` is not newer
+(`file_cache.py:78-107`). Byte length is not among them. A file truncated at any point passes every
+gate.
+
+**The recorded size could not detect it anyway.** `add_to_cache` sets
+`size_bytes=file_path.stat().st_size` (`:123`) — it stats the file it has just written. Comparing a
+file against that later asks whether it is the size it was when measured, which is circular by
+construction. The number with authority is the one Appwrite declares (`sizeOriginal`), read
+**before** anything is cached. views-faoapi reached the same conclusion in their #433.
+
+**The write is truncate-in-place at the canonical path.** `manager.py:816` is
+`with open(cache_path, "wb") as f:`. A process killed mid-write — an OOM, a cgroup kill, a deploy
+restart — leaves a short file exactly where a complete one belongs. faoapi's own note is that the
+three OOM kills of 2026-08-14 are known to have left such files, and every check they had accepted
+them. Staging to a temporary name and `os.replace`-ing after `fsync` makes the state
+unrepresentable.
+
+**And one route can only serve the bad copy.** `/files/{bucket_id}/{file_id}/cached`
+(`api.py:965-1000`) calls `get_cached_file_path` and returns a `FileResponse` with no validation of
+any kind, and by design it never re-downloads. Where the other file routes would eventually refetch
+and self-heal, this one serves the truncated artifact permanently.
+
+Ours is a degree worse than the sibling's: theirs performed the circular size comparison, so at
+least the intent was expressed in code. Here `size_bytes` is recorded and never read for validation
+at all — a field that looks like a guard and is not wired to one.
+
+No consumer is currently known to use `/files/{bucket_id}/{file_id}/cached`. Tier 2 rather than 1
+on that basis: the corruption is silent and partner-facing in principle, but there is no evidence of
+a live consumer, and a truncated parquet fails loudly at the reader rather than producing plausible
+wrong numbers.
+
+Cross-refs: **C-286** (the other defect on the same file routes — that one is latency and
+resumability, this one is integrity), **C-262**/**C-280** (the kills that create this state),
+views-faoapi #126 and their PR #433.
