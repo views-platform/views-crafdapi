@@ -763,3 +763,21 @@ class TestProvenanceEndpoint:
         assert resp.status_code == 200
         state = resp.json()["data"]["serving_state"]
         assert state["degraded"] is True and state["reason"] == "ingest_failed"
+
+
+class TestHealthKeysTheFreshnessMonitorParses:
+    """`.github/workflows/data-freshness.yml` polls `/health` daily and opens an issue when
+    the served data goes stale — the question Better Stack's `/ping` monitor cannot answer.
+
+    It parses these keys out of the body. Renaming one here without renaming it there leaves
+    the monitor inspecting a field that no longer exists: it would report healthy forever
+    while checking nothing. `forecast_freshness` is the dangerous one, because api.py builds
+    it best-effort and swallows its own errors, so its absence is silent by design."""
+
+    def test_health_emits_the_keys_the_monitor_reads(self, app_client):
+        client, _, _ = app_client
+        body = client.get("/health", headers=HEADERS).json()
+        assert "status" in body
+        assert "appwrite_connected" in body
+        assert "forecast_freshness" in body
+        assert "is_stale" in body["forecast_freshness"]
