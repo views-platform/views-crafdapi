@@ -53,7 +53,7 @@ jobs:
     steps:
       - name: Refuse to run blind if the key is missing
         env:
-          KEY: ${{ secrets.CRAFDAPI_HEALTH_KEY }}
+          KEY: ${{ secrets.APPWRITE_DATASTORE_API_KEY }}
         run: |
           set -euo pipefail
           # `/health` requires X-API-Key. Without it the endpoint answers 422, which carries
@@ -61,14 +61,14 @@ jobs:
           # unhealthy and open a false alarm EVERY DAY until someone muted it, which is worse
           # than no monitor. Fail the run instead: a red workflow is visible and honest.
           if [ -z "${KEY}" ]; then
-            echo "::error::Secret CRAFDAPI_HEALTH_KEY is not set. /health requires X-API-Key; without it this check cannot read a verdict. Set the secret in repo settings. Failing rather than polling blind."
+            echo "::error::Secret APPWRITE_DATASTORE_API_KEY is not set. /health requires X-API-Key; without it this check cannot read a verdict. Set the secret in repo settings. Failing rather than polling blind."
             exit 1
           fi
 
       - name: Fetch /health
         id: fetch
         env:
-          KEY: ${{ secrets.CRAFDAPI_HEALTH_KEY }}
+          KEY: ${{ secrets.APPWRITE_DATASTORE_API_KEY }}
         run: |
           set -uo pipefail
           if curl -fsS --max-time 30 -H "X-API-Key: ${KEY}" "$HEALTH_URL" -o health.json; then

@@ -328,7 +328,7 @@ class TestDataFreshnessMonitor:
         `status` — a monitor that carried on regardless would open a false alarm every day
         until muted, which is worse than no monitor. It fails the run instead."""
         assert "X-API-Key: ${KEY}" in _FRESHNESS
-        assert "secrets.CRAFDAPI_HEALTH_KEY" in _FRESHNESS
+        assert "secrets.APPWRITE_DATASTORE_API_KEY" in _FRESHNESS
         assert 'exit 1' in _FRESHNESS
 
     def test_gh_repo_is_set_because_there_is_no_checkout(self):

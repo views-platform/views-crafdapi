@@ -11,7 +11,7 @@ shares the **same Better Stack account**; each API adds its `/ping` as one more 
 | Monitor | Checks | Auth | Interval | An alert means |
 |---------|--------|------|----------|----------------|
 | **crafdapi /ping (liveness)** | `GET https://crafdapi.viewsforecasting.org/ping` returns 200 | none | 3 min | the **service** is down (outage) |
-| **`data-freshness.yml`** (GitHub Actions, not Better Stack) | `GET /health` and reads its verdict — `status`, `appwrite_connected`, `forecast_freshness.is_stale` | `X-API-Key` (repo secret `CRAFDAPI_HEALTH_KEY`) | daily 07:15 UTC | the **data** is stale — a monthly delivery was missed. Opens one self-closing issue |
+| **`data-freshness.yml`** (GitHub Actions, not Better Stack) | `GET /health` and reads its verdict — `status`, `appwrite_connected`, `forecast_freshness.is_stale` | `X-API-Key: $APPWRITE_DATASTORE_API_KEY` (GitHub repo secret of the same name) | daily 07:15 UTC | the **data** is stale — a monthly delivery was missed. Opens one self-closing issue |
 
 **Two questions, two mechanisms, deliberately kept apart.** `/ping` answers *is the service up?*;
 `data-freshness.yml` answers *is what it serves still current?* Neither alerts on the other's
