@@ -4,9 +4,9 @@
 |-------------------|------------------------------------------------|
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
-| Last Updated      | 2026-08-22                                     |
-| Total Concerns    | 57                                             |
-| Open Concerns     | 52                                             |
+| Last Updated      | 2026-08-23                                     |
+| Total Concerns    | 58                                             |
+| Open Concerns     | 53                                             |
 | Resolved Concerns | 5                                              |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -1735,3 +1735,63 @@ wrong numbers.
 Cross-refs: **C-286** (the other defect on the same file routes — that one is latency and
 resumability, this one is integrity), **C-262**/**C-280** (the kills that create this state),
 views-faoapi #126 and their PR #433.
+
+---
+
+### C-289: `data` and `forecast` import each other, and nothing declares or checks the topology
+
+| Field | Value |
+|-------|-------|
+| ID | C-289 |
+| Tier | 3 |
+| Source | comparative architecture audit against views-frames / views-bayesian / views-datafactory (2026-08-23) |
+| Trigger | Before moving anything else between `data/` and `forecast/` — the ADR-030 migration is still in progress and each slice adds edges to a graph nobody is measuring. Also when answering #90, and before packaging or lifting either subpackage out. |
+| Location | `src/views_crafdapi/data/handlers/grid_dataset.py:6-18`, `src/views_crafdapi/forecast/ingestion/historical_stream.py:59`, `src/views_crafdapi/forecast/ingestion/wire_reader.py:48-49` |
+
+AST-walking every import in `src/` gives this subpackage graph:
+
+```
+(root)    -> data, forecast
+data      -> forecast
+forecast  -> data          <-- cycle
+managers  -> (root), data, forecast, wandb
+```
+
+The forward edge is heavy and expected: ADR-030 moved the compute core into `forecast/`, so
+`data/handlers/grid_dataset.py` imports eight modules from it (`frames.builder`,
+`ingestion.dense_grid`, `ingestion.parquet_reader`, `ingestion.plausibility`, `serialize.schema`,
+`serialize.json_contract`, `summarize.estimator`) and `forecast_dataset.py` imports
+`aggregate.cross_level`.
+
+The back edge is three imports and that is all of it:
+
+```
+forecast/ingestion/historical_stream.py:59: from views_crafdapi.data.value_format import _VALUE_SCHEMA_VERSION
+forecast/ingestion/wire_reader.py:48:       from views_crafdapi.data.value_format import _VALUE_SCHEMA_VERSION
+forecast/ingestion/wire_reader.py:49:       from views_crafdapi.data.handlers import ForecastDataset
+```
+
+Two of the three are one constant. `_VALUE_SCHEMA_VERSION` is a leaf value that could sit anywhere;
+`wire_reader` importing `ForecastDataset` is a constructor call that could be inverted by returning
+data and letting the caller construct. So the cycle is breakable deliberately rather than by
+refactor — which is the reason this is Tier 3 and not higher.
+
+**What makes it worth an entry is not the cycle but the absence of any check.** All three sibling
+repos are acyclic and enforce it, by three different mechanisms: views-frames declares
+`[tool.importlinter]` contracts and runs `lint-imports` as its own CI job *plus* a deliberately
+duplicated stricter pytest; views-datafactory AST-walks every file against an
+`ALLOWED_INTERNAL_IMPORTS` dict and additionally asserts **the declared graph itself is acyclic**,
+guarding the case where the declaration is wrong rather than the code; views-bayesian hand-writes
+per-layer AST tests with each `__init__.py` docstring declaring its own may-import/must-not-import
+list. Here the topology is neither declared in prose nor checked by anything, so each ADR-030 slice
+adds edges to a graph no one is looking at.
+
+This is the direct answer to issue **#90** ("is the import topology declared, enforced, and is the
+declaration itself checked?"): no, no, and no.
+
+No defect is attributed to the cycle. It is an unguarded property, not an incident.
+`tests/test_pandas_ratchet.py` already demonstrates the enforcement shape this repo is comfortable
+with — a source-walking gate over an allowlist that may only shrink — so the remedy is that idea
+pointed at a second contract, not new machinery.
+
+Cross-refs: **C-236**, `reports/architecture/measured_against_the_siblings.md`, issue **#90**.
