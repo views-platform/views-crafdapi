@@ -114,8 +114,8 @@ GAUL = FAO's own **Global Administrative Unit Layers**. Country codes are GAUL a
 > (no `s_actual`).
 >
 > **The authority for this layout is the code**, `forecast/serialize/schema.py::bulk_columns()`.
-> ADR-025 §4 still describes the pre-ADR-034 36-column schema and ADR-034's own served-column
-> plan lists a different 36; neither is current (register C-244).
+> ADR-025 §4 decided 36 and now carries a dated amendment saying so and pointing here; ADR-034's
+> own served-column plan lists a different 36 and has not been reconciled (register C-244).
 >
 > **The 13th column, bulk-only:** `s_actual` — the historical **observed** value for that
 > unit-month, a count. It is `NaN` wherever no observation exists, which is **every forecast
@@ -126,6 +126,27 @@ GAUL = FAO's own **Global Administrative Unit Layers**. Country codes are GAUL a
 > download still returns HTTP 200. The discriminator is the **dtype** — a real join yields a
 > numeric column (`float32`), a failed one yields `object`. Note `.sum()` on the failed column
 > returns `0`, not `NaN` (register C-248).
+>
+> **How many months can ever carry an actual: one.** `month_id 1 = January 1980`, and the bulk
+> artifact spans the 36 forecast months. History ends where the forecast begins, so exactly **one
+> month of the 36** — the first, and the newest in the historical series — overlaps at all. The
+> other 35 are the forecast horizon and are `NaN` by design. A worked example: a run covering
+> `month_id` 559–594 is **July 2026 – June 2029**, and history runs to 559, so only July 2026 can
+> carry an observation.
+>
+> **And that one month is usually not observed yet.** VIEWS historical fatalities lag one month —
+> July's numbers reach views-datafactory around **20 August**. An artifact cut before that date has
+> the month present but unreported.
+>
+> **The trap: unreported is served as `0.0`, not `NaN`.** The historical grid is *dense* — every
+> `(month, cell)` exists — so a not-yet-reported month arrives as a full block of zeros rather than
+> as absent rows. The join cannot tell that apart from a genuinely conflict-free month, and emits
+> `0.0`. ADR-025 §4 specifies `NaN` "for months with no actuals"; for the overlap month this is
+> **not currently honoured**, and the cause is upstream in the artifact, not in the join.
+>
+> **So: do not read `s_actual == 0.0` as "no fatalities".** For the overlap month it may mean "not
+> reported yet". Check the artifact's cut date against the ~20th-of-the-following-month arrival
+> before scoring forecasts against it. Tracked as register **C-293**.
 
 ## Aggregation levels
 

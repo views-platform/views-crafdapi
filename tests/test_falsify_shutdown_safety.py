@@ -82,3 +82,64 @@ def test_runbook_release_block_does_not_hardcode_a_real_looking_tag():
         f"silently deploys the wrong version. Use a placeholder such as `TAG=vX.Y.Z` so an "
         f"unedited paste fails at the deploy gate instead of succeeding wrongly."
     )
+
+
+# ── Every runbook block that needs the box must say so ────────────────────────────────
+# The recurring release block labelled which USER to be (`as your own user`, `as the deploy
+# user`) and never which HOST. Run from a laptop it fails with `sudo: unknown user
+# views-crafdapi-deploy` — safe, but only after the reader has been told to paste it. This is
+# the third defect of the same shape after C-265 and C-266: runbook text that reads correctly
+# and misleads in use.
+
+
+def test_runbook_blocks_naming_the_deploy_user_say_they_run_on_the_box():
+    """`views-crafdapi-deploy` exists only on the box, so any block invoking it must say so."""
+    text = RUNBOOK.read_text()
+    lines = text.splitlines()
+    # Only lines that INVOKE the account, not prose that mentions it — `sudo -u` / `sudo -iu`.
+    invokes = ("sudo -u views-crafdapi-deploy", "sudo -iu views-crafdapi-deploy")
+    unmarked = []
+    for i, line in enumerate(lines):
+        if not any(tok in line for tok in invokes):
+            continue
+        # look back for a host marker inside the enclosing block / its preamble
+        window = "\n".join(lines[max(0, i - 25):i])
+        if "ON THE BOX" not in window:
+            unmarked.append((i + 1, line.strip()[:80]))
+    assert not unmarked, (
+        "RELEASE_RUNBOOK.md invokes the deploy user without an 'ON THE BOX' marker within the "
+        f"preceding lines: {unmarked}. A reader pasting that on a laptop gets "
+        "`sudo: unknown user views-crafdapi-deploy`."
+    )
+
+
+def test_runbook_verifies_the_deploy_tag_before_restarting():
+    """C-281, fourth instance. A pasted block left command text in the deploy-tag file, and
+    `/version` reported `deployed_tag: "sudo systemctl restart views-crafdapi5"`.
+
+    A corrupted tag normally fails loudly at the gate — `refs/tags/<junk>` does not resolve. The
+    case worth guarding is the quiet one, where corruption spells a DIFFERENT REAL TAG and the
+    wrong version deploys with every check green (C-266's failure, new cause). So the tag file's
+    content must be confirmed between writing it and restarting.
+    """
+    text = RUNBOOK.read_text()
+    write_at = text.find(".views-crafdapi-deploy-tag")
+    restart_at = text.find("systemctl restart views-crafdapi", write_at)
+    assert write_at != -1 and restart_at != -1, "release block not found"
+    between = text[write_at:restart_at]
+    assert "od -c" in between, (
+        "RELEASE_RUNBOOK.md restarts the service without confirming what landed in the "
+        "deploy-tag file. Paste corruption has put command text there once already; a "
+        "verification step between the write and the restart is what makes it visible."
+    )
+
+
+def test_runbook_paste_warning_is_not_scoped_to_read_alone():
+    """The warning said `read` swallows the next line. `sudo`'s password prompt does too, and
+    `sudo` is in every one of these blocks — the warning was right about the hazard and wrong
+    about its extent."""
+    text = RUNBOOK.read_text()
+    assert "not specific to `read`" in text, (
+        "the paste-corruption warning is still scoped to `read -rsp`; any prompting command in "
+        "a pasted block can consume the buffered remainder, and `sudo` prompts in all of them"
+    )

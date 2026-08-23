@@ -59,6 +59,44 @@ RestartSec=5
 # measured 3 s start — generous enough never to fire on a healthy deploy, and the only thing
 # that converts a hang into a countable failure.
 TimeoutStartSec=180
+
+# Memory ceiling (C-262 / #99). Derived from a MEASURED cold start, not a steady state — that
+# distinction is the whole of C-263: crafd's steady state is 3.7 G and its cold start is 7.3 G,
+# so a ceiling sized from the former kills the service on every restart. Measured 2026-08-21 on
+# v0.5.1, with the historical value-dirs cleared first so the streamed ingest actually ran
+# (without that the disk cache serves the previous value-dir and the number is meaningless —
+# C-282):
+#
+#     cold-start peak 7.3 G   steady 3.7 G   box 22 GiB   views-faoapi 4.8 G observed
+#
+# The box is **22 GiB with no swap** (`free -g`, 2026-08-21), and views-faoapi's unit declares
+# MemoryMax=11G. That is the binding constraint, not our own headroom: 11 + 11 = 22 GiB is the
+# whole machine with nothing for the OS, nginx or page cache, and with zero swap, reaching it is
+# an immediate OOM rather than a slowdown. views-faoapi#368 sized its pair from "24 GB - 2 GB OS
+# = 22 GB -> 11 GB each"; the box is 22 GiB, so that reserve does not exist.
+#
+# So the pair has to sum to ~20 GiB, and crafd takes the smaller share because crafd is the one
+# with a MEASURED number: 7.3 G cold, against faoapi's believed ~10 G which is still unmeasured
+# (views-faoapi#432).
+#
+#     crafd 9G + faoapi 11G = 20 GiB, leaving 2 GiB for the OS and page cache
+#
+# MemoryMax=9G is 23% above the measured 7.3 G peak. MemoryHigh=8G is 10% above — narrow, and
+# deliberately so: High only applies reclaim pressure, and crafd's peak is dominated by
+# file-backed pages (the mmap'd value store) that the kernel can drop cheaply. A hard cap is the
+# thing that must not be tight; a soft one this close costs some reclaim on a cold start and
+# nothing else.
+#
+# This REPLACES a temporary `systemctl set-property --runtime views-crafdapi MemoryMax=14G` set as
+# a seatbelt during the measurement. That drop-in lives in /run and takes precedence over this
+# file until it is removed — see RELEASE_RUNBOOK.md. A ceiling in a file nobody can read from the
+# repo is the thing this is fixing.
+#
+# NOT the whole of #99: views-faoapi shares this box and has no ceiling. Its 4.8 G is an OBSERVED
+# resident figure, not a measured cold start, and sizing its ceiling from that would repeat C-263
+# on the neighbour. It needs its own measurement (views-faoapi#418).
+MemoryHigh=8G
+MemoryMax=9G
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=views-crafdapi

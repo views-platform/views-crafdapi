@@ -322,3 +322,42 @@ Nothing here changes its representation, so the scoping is not violated in subst
 written before the cold-start measurement existed, and the leg has now acquired a streaming
 assembler that looks a great deal like the one §5/§6 built for the forecast leg. Whether §8 should
 be amended is a governance question for the operator, not something this change decides.
+
+### Verified in production, 2026-08-21 (v0.5.1)
+
+The number this addendum said did not exist until someone took it on the box. Taken with the
+historical value-dirs cleared first, so the streamed ingest actually ran — without that step the
+disk cache serves the previous value-dir and the measurement is of the old path (register
+**C-282**).
+
+| | v0.4.0 (before) | v0.5.1 (measured) |
+|---|---|---|
+| cold-start peak RSS | **16.8 G** | **7.3 G** |
+| steady after the request | 6.0 G | 3.7 G |
+| `/data/forecast/bulk` | HTTP 200, 461,991 bytes, 25.8 s *(warm disk)* | HTTP 200, **461,991 bytes**, 62.1 s *(cold, incl. the full ingest)* |
+
+**A 9.5 GB reduction, 2.3x** — and better than the ~11 G the local rig predicted, because the
+prediction extrapolated a local baseline rather than the deployed one.
+
+The streamed path is confirmed to have executed, not inferred:
+
+```
+historical_stream.py:339 - Streamed historical value-dir: 28421738 rows, 439 months x 64742 cells, 3 target(s)
+dataset_service.py:625  - Streamed historical value-dir: 28421738 rows, targets=['lr_ged_sb','lr_ged_ns','lr_ged_os'] (C-263 low-memory path)
+```
+
+439 x 64,742 = 28,421,738, the exact grid the loader's precondition asserts.
+
+**Byte-identity, confirmed in production.** The served bulk artifact is **461,991 bytes** — the
+same byte count ADR-030 recorded for the v0.4.0 production run above. The local proof was
+manifest/index/float64-block equality plus served-output equality on 1.55M rows; this is the same
+table, end to end, through the deployed service, across the change.
+
+The 62.1 s wall is the cold path including the whole ingest, against 25.8 s for a warm-disk bulk
+build — consistent with the ~38% streaming overhead measured locally, plus the ingest itself. It
+is a once-per-restart cost.
+
+A temporary `MemoryMax=14G` (`systemctl set-property --runtime`) was in effect as a seatbelt in
+case the streamed path silently fell back to the ~12 GB in-memory one. Peak never approached it,
+so there was no reclaim pressure and the figure is unaffected. It is runtime-only and does not
+survive a reboot; sizing both units properly is **#99**, which this measurement unblocks.

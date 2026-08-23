@@ -1,6 +1,6 @@
 [project]
 name = "views-crafdapi"
-version = "0.5.1"
+version = "0.6.0"
 description = ""
 authors = [
     {name = "Dylan Pinheiro", email = "52908667+smellycloud@users.noreply.github.com"},
@@ -12,7 +12,6 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11,<3.15"
 dependencies = [
-    "wandb==0.18.7",
     "fastapi==0.136.3",
     # Security floor for the transitive starlette dep (fastapi only requires
     # >=0.46.0, which would otherwise keep an older vulnerable version pinned).
@@ -22,15 +21,18 @@ dependencies = [
     "uvicorn==0.37.0",
     "appwrite==19.2.0",
     "dotenv==0.9.9",
-    "art==6.4",
     "pyprojroot==0.3.0",
-    "joblib==1.5.2",
     "pandas==2.3.3",
     "numpy==2.3.4",
-    "fastparquet==2024.11.0",
     "pyarrow==23.0.1",
-    "tqdm==4.67.1",
     "cachetools==6.2.1",
+    # C-271: imported directly by src/ and previously present only as a transitive of
+    # `wandb`, which was removed 2026-08-23. `yaml` is on the production boot path
+    # (LoggingModule._setup_logging), `requests` is imported by the package __init__ via
+    # client.py, and `pydantic` normalizes every Appwrite SDK response in sdk_compat.
+    "PyYAML>=6.0,<7",
+    "requests>=2.32,<3",
+    "pydantic>=2.9,<3",
     "filelock>=3.20.3",
     # Runtime: the validated MAP/HDI estimator (tower_point/hdi_tower) + frame transport.
     "views-frames>=1.10.2,<2",

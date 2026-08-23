@@ -199,14 +199,20 @@ faoapi (`views-faoapi` on :8000) is untouched throughout. Then tell the agent wh
 
 ## Every future release, forever after
 
+**Every command in this section runs ON THE BOX.** SSH in first. None of it works from a
+laptop — `views-crafdapi-deploy` does not exist there, so the first line fails with
+`sudo: unknown user views-crafdapi-deploy`. That failure is safe (nothing is changed) and it
+has happened, because the block below labels *which user* and never labelled *which host*.
+
 ```bash
-# --- as your own user ---
+# === ON THE BOX (ssh first) — as your own user ===
 TAG=vX.Y.Z   # <-- the ONLY line to change. Set it to the tag you are deploying.
 echo $TAG | sudo -u views-crafdapi-deploy tee /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
+sudo od -c /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag   # <-- CHECK: exactly your tag, then \n
 sudo systemctl restart views-crafdapi
 curl -s https://crafdapi.viewsforecasting.org/version     # expect version AND deployed_tag = $TAG
 
-# --- then as the deploy user: the checkout is 0750, so `cd` into it fails for you ---
+# === still ON THE BOX — now as the deploy user: the checkout is 0750, so `cd` fails for you ===
 sudo -iu views-crafdapi-deploy
 cd views-crafdapi
 read -rsp "caller key: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
@@ -218,6 +224,20 @@ Three things that have each cost a release: the deploy checkout is **not readabl
 user**, so `cd` into it fails and `sudo cd` cannot work (`cd` is a shell builtin) — use
 `sudo -iu`. `read -rs` prints **no prompt**, so it looks like a hang; `-rsp` gives it one. And
 paste those two lines **separately** — pasted together, `read` swallows the next line as the key.
+
+**That hazard is not specific to `read`.** Any command in a pasted block that prompts — `read`,
+and `sudo` asking for a password — is reading the terminal while the rest of your paste is still
+buffered, and can consume it. On 2026-08-21 a pasted release block left the deploy-tag file
+containing `sudo systemctl restart views-crafdapi5`, and a later line in the same paste came out
+as `sudo cp <src> /etsudo cp <src> /etc/systemd/system/` — a command containing a fragment of
+itself. **Paste one line at a time, or run the block over `ssh -t <box> '...'` as a single
+command.**
+
+That is why `od -c` on the tag file sits between writing it and restarting. A corrupted tag
+usually fails loudly at the deploy gate (`refs/tags/<junk>` does not resolve) — but the case
+worth guarding is the quiet one, where the corruption happens to spell a *different real tag*
+and the service deploys the wrong version while every check looks fine. That is C-266's failure
+with a new cause.
 
 Inside that shell `sudo` prompts for *the service account's* password, which does not exist.
 `exit` first for anything needing sudo.
@@ -271,8 +291,8 @@ value-dir a row group at a time instead of being decoded whole; peak 12.2 → 3.
 locally, served output byte-identical. Tagged but **never deployed** — superseded by v0.5.1), **v0.5.1** (the streamed
 ingest above, plus a bounded restart loop: the deploy gate's refusals are deterministic and were
 being retried forever, which is what the 47-minute incident on 2026-08-15 actually was.
-**The production cold-start peak is the number this release exists to obtain — take it during
-the deploy, per the section below.**).
+Deployed 2026-08-21: **cold-start peak 16.8 G -> 7.3 G measured**, served
+bulk artifact byte-count unchanged at 461,991 B, streamed ingest confirmed in the journal).
 
 
 ## Taking a cold-start memory measurement
@@ -302,8 +322,8 @@ measured never runs. `from_value(mmap=True)` returns the cached dataset in about
 process peaks near the steady state, and the number looks wonderful while measuring nothing.
 
 ```bash
-# as the deploy user. These are caches — removing them costs one cold rebuild, which is the
-# thing being measured. There is one partition per API key (a salted HMAC of the key hash),
+# ON THE BOX, as the deploy user. These are caches — removing them costs one cold rebuild,
+# which is the thing being measured. There is one partition per API key (a salted HMAC of the key hash),
 # so clear all of them rather than guessing which key the request will use.
 sudo -u views-crafdapi-deploy bash -c \
   'rm -rf /home/views-crafdapi-deploy/views-crafdapi/apis/un_crafd/cache/datasets/*_historical_value \
@@ -316,6 +336,7 @@ until they restart (#341).
 ### The measurement
 
 ```bash
+# === ON THE BOX ===
 sudo systemctl restart views-crafdapi
 curl -s -o /dev/null -w '%{http_code} %{size_download} %{time_total}\n' \
      -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
@@ -329,11 +350,27 @@ outage"* below.
 
 ### Reference points
 
-All measured before v0.5.0: cold start **16.8 G**, steady state **6.0 G**, `views-faoapi`
-resident **5.9 G**, box total **22 GiB**. Local prediction for the streamed path is ~**11 G**
-cold; #98's criterion is "comfortably under ~14 G". Record what you actually see on **C-263** and
-in the ADR-030 addendum either way — a disappointing number is the useful one, because it means
-the fix is not done.
+| | crafd cold | crafd steady | + faoapi 5.9 G | of 22 GiB |
+|---|---|---|---|---|
+| v0.4.0 | 16.8 G | 6.0 G | 22.7 G | **does not fit** |
+| **v0.5.1** (2026-08-21) | **7.3 G** | 3.7 G | **13.2 G** | 8.8 GiB headroom |
+
+Record what you actually see on **C-263** and in the ADR-030 addendum either way — a
+disappointing number is the useful one, because it means the fix is not done. v0.5.1 came in
+below its own ~11 G prediction, so treat a figure from a local rig as a direction, not a number.
+
+**The clearing step above is not optional.** Skip it and the disk cache serves the previous
+value-dir: the request returns in about a second, the peak sits near the steady state, and the
+result looks excellent while measuring code that never ran (register **C-282**). Confirm which
+path executed before believing any figure:
+
+```bash
+sudo journalctl -u views-crafdapi --since "-10 min" --no-pager \
+  | grep -iE "Streamed historical|Successfully loaded historical"
+```
+
+`Streamed historical value-dir: … (C-263 low-memory path)` is the new path.
+`Successfully loaded historical dataframe with 28421738 rows` is the old one.
 
 ## A restart is not an outage — and a long 502 is not a slow restart
 
@@ -361,6 +398,7 @@ right to refuse, but nothing bounds the retry, so the service 502s indefinitely 
 Diagnosis, in order:
 
 ```bash
+# === ON THE BOX ===
 systemctl status views-crafdapi --no-pager -l      # active(running) + ExecStartPre status=0/SUCCESS?
 sudo journalctl -u views-crafdapi -n 60 --no-pager  # `deploy-gate: serving tag ...` or a FATAL line
 ```
@@ -370,3 +408,43 @@ that is a permissions artefact, not a silent service. The gate prints exactly on
 success and a `FATAL deploy-gate:` naming the cause on failure; that line is the whole diagnosis.
 
 Rollback is the `TAG=` block with the previous tag.
+
+
+## Memory ceilings, and removing the temporary one
+
+`deployment/views-crafdapi.service` declares `MemoryHigh=8G` / `MemoryMax=9G`, derived from the
+**measured cold start** of 7.3 G (2026-08-21, v0.5.1) — not from the 3.7 G steady state, which is
+the distinction C-263 exists for: a ceiling sized from the steady state kills the service on every
+restart and looks generous until it does.
+
+A temporary `MemoryMax=14G` was set during that measurement with
+`systemctl set-property --runtime`. **It takes precedence over the unit file**, so installing the
+new unit is not enough — the runtime drop-in has to go:
+
+```bash
+# === ON THE BOX ===
+systemctl show views-crafdapi -p MemoryMax -p MemoryHigh        # what is actually in effect
+sudo rm -f /run/systemd/system.control/views-crafdapi.service.d/50-MemoryMax.conf
+sudo rmdir --ignore-fail-on-non-empty /run/systemd/system.control/views-crafdapi.service.d
+sudo systemctl daemon-reload
+systemctl show views-crafdapi -p MemoryMax -p MemoryHigh        # expect 9G / 8G from the unit
+```
+
+Do **not** use `systemctl revert views-crafdapi` to clear it. `revert` removes overrides in both
+`/run` *and* `/etc` — and this unit lives in `/etc/systemd/system/`, so it would delete the unit
+file itself.
+
+The values take effect on the next restart. Confirm with `systemctl show` rather than by reading
+the unit file, because that is exactly the gap the runtime drop-in created.
+
+**The box is 22 GiB with no swap** (`free -g`, 2026-08-21) — not the 24 GB views-faoapi#368
+assumed when it sized its pair at 11G each. 11 + 11 is the whole machine, and with no swap,
+reaching it is an immediate OOM rather than a slowdown. The pair has to sum to ~20 GiB, so crafd
+takes 9G and faoapi keeps 11G: crafd is the one with a measured number (7.3 G) and can afford the
+tighter cap.
+
+**views-faoapi still has no ceiling**, and that is the other half of #99. Its 4.8 G is an
+*observed* resident figure, not a measured cold start — the same kind of number crafd's own
+steady state was, and crafd's cold start turned out to be 2x it. Take faoapi's cold start with
+the procedure above before sizing anything: restart it, clear its cached value-dirs, one heavy
+request, read the peak. Sizing it from 4.8 G would repeat C-263 on the neighbour.

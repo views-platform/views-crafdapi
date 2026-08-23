@@ -7,7 +7,6 @@ import logging
 import importlib
 import hashlib
 from pathlib import Path
-import random
 
 from abc import abstractmethod
 from views_crafdapi.managers.log import LoggingModule
@@ -514,7 +513,6 @@ class ModelManager:
     def __init__(
         self,
         model_path: ModelPathManager,
-        wandb_notifications: bool = False,
     ) -> None:
         """
         Initializes the ModelManager with the given model path.
@@ -528,7 +526,6 @@ class ModelManager:
         self._entity = "views_pipeline"
 
         self._model_path = model_path
-        self._wandb_notifications = wandb_notifications
         self._logger = LoggingModule(logging_path=self._model_path.logging).get_logger()
 
         self._script_paths = self._model_path.get_scripts()
@@ -539,21 +536,6 @@ class ModelManager:
             "config_hyperparameters.py", "get_hp_config"
         )
         self._config_meta = self.__load_config("config_meta.py", "get_meta_config")
-        if self.__class__.__instances__ == 1:
-            self.__ascii_splash()
-
-    def __ascii_splash(self) -> None:
-        from art import text2art
-
-        text = text2art(
-            f"{self._model_path.model_name.replace('-', ' ')}", font="random-medium"
-        )
-
-        colored_text = "".join(
-            [f"\033[{random.choice(range(31, 37))}m{char}\033[0m" for char in text]
-        )
-        print(colored_text)
-
     @staticmethod
     def _validate_config_ast(script_path: str) -> bool:
         """Check a config file's AST for dangerous constructs before execution."""
@@ -733,19 +715,14 @@ class APIManager(ModelManager):
     def __init__(
         self,
         model_path: APIPathManager,
-        wandb_notifications: bool = False,
     ) -> None:
         """
         Initializes the APIManager with the given API path.
 
         Args:
             model_path (APIPathManager): The path manager for the API.
-            wandb_notifications (bool, optional): Enable or disable Weights & Biases notifications. Defaults to False.
         """
-        super().__init__(
-            model_path=model_path,
-            wandb_notifications=wandb_notifications,
-        )
+        super().__init__(model_path=model_path)
         
         # Load API-specific configurations
         self._api_server = None
@@ -772,49 +749,3 @@ class APIManager(ModelManager):
         """Perform maintenance tasks on the API."""
         pass
 
-    def run(self):
-        """
-        Main entry point for API lifecycle management.
-        Reads the action from self.configs to determine what operation to perform.
-        """
-        import wandb
-        from views_crafdapi.wandb.utils import wandb_alert
-
-        action = self.configs.get('action')
-
-        if not action:
-            logger.error("No action specified in configs for API management")
-            return
-
-        action = action.lower()
-
-        with wandb.init(
-            project=f"{self.configs['name']}_api", 
-            entity=self._entity, 
-            job_type=f"api_{action}"
-        ):
-            try:
-                if action == "start":
-                    self._startup()
-                    self._is_running = True
-                elif action == "stop":
-                    self._shutdown()
-                    self._is_running = False
-                elif action == "health":
-                    self._health_check()
-                elif action == "maintenance":
-                    self._maintenance()
-                else:
-                    logger.warning(f"Unknown action: {action}")
-                    
-            except Exception as e:
-                logger.error(f"Error during API {action}: {e}")
-                self._shutdown()
-                wandb_alert(
-                    title=f"API {action} failed.",
-                    text=f"Error details: {e}",
-                    wandb_notifications=self._wandb_notifications,
-                    models_path=self._model_path.models
-                )
-            finally:
-                wandb.finish()

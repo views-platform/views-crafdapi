@@ -165,8 +165,19 @@ class TestF5_NormalizationContractUnverified:
 # ============================================================
 
 class TestF6_PredictionManagerMutationGaps:
-    """api.py calls upload_predictions(), update_prediction_metadata(),
-    delete_prediction(), list_all_predictions(). None are integration-tested."""
+    """Mutation methods on `PredictionStoreManager` and their integration coverage.
+
+    Corrected 2026-08-23: this docstring previously read "api.py calls upload_predictions(),
+    update_prediction_metadata(), delete_prediction(), list_all_predictions()". **api.py calls
+    none of them.** It calls exactly two methods on the prediction manager —
+    `get_latest_manifest()` (api.py:1062) and `get_latest_provenance()` (api.py:1067), both
+    reads. The producer methods are unreachable from every serving module, an invariant
+    `tests/test_serving_isolation.py` enforces by AST-walking them against `PRODUCER_METHODS`.
+
+    The claim mattered because it reads as authoritative and inverts the risk: it describes a
+    read-only API as routinely writing, which is the opposite of what the isolation guard
+    proves. The coverage gap it records is real — these methods are integration-tested only,
+    behind `-m integration` — but they are not on any served path."""
 
     @pytest.mark.skip(reason="Superseded by test_integration_appwrite_write.py::TestPredictionManagerMutations::test_upload_predictions_with_file_path")
     def test_upload_predictions_exists(self, prediction_manager, appwrite_config):

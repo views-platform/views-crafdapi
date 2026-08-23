@@ -123,19 +123,14 @@ class CrafdApiManager(APIManager):
     def __init__(
         self,
         model_path: APIPathManager,
-        wandb_notifications: bool = False,
     ) -> None:
         """
         Initializes the CrafdApiManager.
 
         Args:
             model_path (APIPathManager): The path manager for the API.
-            wandb_notifications (bool, optional): Enable or disable Weights & Biases notifications. Defaults to False.
         """
-        super().__init__(
-            model_path=model_path,
-            wandb_notifications=wandb_notifications,
-        )
+        super().__init__(model_path=model_path)
 
         logger.info(f"{str(self._model_path.dotenv)}")
         load_dotenv(dotenv_path=self._model_path.dotenv)

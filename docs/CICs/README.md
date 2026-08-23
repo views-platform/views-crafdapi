@@ -55,7 +55,7 @@ Contracts must be clear enough that:
 - [`CrafdApiManager`](CrafdApiManager.md) — FastAPI service orchestration, multi-tier caching, endpoint routing
 - [`AppWriteFileManager`](AppWriteFileManager.md) — Appwrite-backed file storage, metadata management, and caching
 - [`PredictionStoreManager`](PredictionStoreManager.md) — prediction-specific file CRUD with metadata validation
-- [`BulkParquetWriter`](BulkParquetWriter.md) — the ADR-025 admin-1 bulk artifact (33-column wide parquet; forecast quantities + historical `actual`)
+- [`BulkParquetWriter`](BulkParquetWriter.md) — the ADR-025 admin-1 bulk artifact (45-column wide parquet; forecast quantities + historical `actual`)
 
 ## Superseded Contracts
 
