@@ -10,7 +10,7 @@ consumer call afterwards is fast instead of timing out.
 
 Run from the deploy shell (with a caller/read-scoped key exported):
 
-    APPWRITE_DATASTORE_API_KEY=<caller key> .venv/bin/python scripts/smoke.py --expect-tag vX.Y.Z
+    APPWRITE_DATASTORE_API_KEY=<the key> .venv/bin/python scripts/smoke.py --expect-tag vX.Y.Z
     # or:  python -m views_crafdapi.smoke --expect-tag vX.Y.Z
 
 Exits non-zero if any check fails. Warms only the key it runs with (per-key cache, ADR-027 §2).

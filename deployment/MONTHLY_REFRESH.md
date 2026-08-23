@@ -71,7 +71,7 @@ Both are in views-models, and both must be cleared before a real delivery.
 
 ## Verifying afterwards
 
-Same checks that closed #46. `/health` and the data routes need the caller key; `/version` does not.
+Same checks that closed #46. `/health` and the data routes need `APPWRITE_DATASTORE_API_KEY` in the `X-API-Key` header; `/version` does not.
 
 ```bash
 curl -s -H "X-API-Key: $KEY" https://crafdapi.viewsforecasting.org/provenance/forecast | python3 -m json.tool
@@ -92,7 +92,7 @@ Then, on the box, the fuller check:
 ```bash
 sudo -iu views-crafdapi-deploy
 cd views-crafdapi
-read -rsp "caller key: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
+read -rsp "APPWRITE_DATASTORE_API_KEY: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
 .venv/bin/python scripts/smoke.py --expect-tag "$(curl -s https://crafdapi.viewsforecasting.org/version | python3 -c 'import sys,json; print(json.load(sys.stdin)["deployed_tag"])')"
 ```
 

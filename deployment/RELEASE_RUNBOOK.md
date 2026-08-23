@@ -37,8 +37,8 @@ to see it flip to serving real data.
       first; DNS can take time to propagate. `dig +short crafdapi.viewsforecasting.org`
       should return the box IP before you start Step 5.)*
 - [ ] You can SSH into the box and use `sudo`.
-- [ ] You have the **CRAF'd** read-scoped serve key in your password manager
-      (`CRAFD_CALLER_API_KEY` / the crafd datastore-serve key — issued in S9). It is
+- [ ] You have **`APPWRITE_DATASTORE_API_KEY`** in your password manager — CRAF'd's
+      read-scoped key, issued in S9. This is the *only* key this repo uses; it is
       **not** faoapi's key.
 
 ## The session
@@ -79,7 +79,7 @@ the **CRAF'd** coordinates (`APPWRITE_CRAFD_*`). The **one secret** is supplied 
 **you**, in the environment — never from anyone's `.env`:
 
 ```bash
-export APPWRITE_DATASTORE_API_KEY='<the CRAF'd serve key, from the password manager>'
+export APPWRITE_DATASTORE_API_KEY='<from the password manager>'
 bash /tmp/crafd-bootstrap.sh part2
 ```
 
@@ -215,7 +215,7 @@ curl -s https://crafdapi.viewsforecasting.org/version     # expect version AND d
 # === still ON THE BOX — now as the deploy user: the checkout is 0750, so `cd` fails for you ===
 sudo -iu views-crafdapi-deploy
 cd views-crafdapi
-read -rsp "caller key: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
+read -rsp "APPWRITE_DATASTORE_API_KEY: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
 .venv/bin/python scripts/smoke.py --expect-tag "$TAG"   # verify + warm
 exit
 ```
@@ -269,7 +269,7 @@ twice. For the smoke test and any `x-api-key` call you want the **caller** key:
 
 | filed as | env var | used by |
 |---|---|---|
-| `Appwrite caller key — CRAF'd` (password manager) | `APPWRITE_DATASTORE_API_KEY` | `smoke.py`, notebooks, any consumer call — sent as the `X-API-Key` header |
+| `APPWRITE_DATASTORE_API_KEY` (password manager) | `APPWRITE_DATASTORE_API_KEY` | `smoke.py`, notebooks, any consumer call — sent as the `X-API-Key` header |
 
 The password manager entry is the source of truth. Verify it before pasting it anywhere, without
 printing it:
