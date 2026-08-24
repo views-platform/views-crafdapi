@@ -17,6 +17,7 @@ from views_crafdapi.managers import freshness
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.version import version_info
 from views_crafdapi.seam_contract import CONSUMER_DOCUMENT_NAME
+from views_crafdapi.managers.serialization import estimate_records_bytes
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import FileResponse, StreamingResponse
@@ -37,6 +38,87 @@ class StalenessResult:
     is_stale: bool
     age_hours: float
     threshold_hours: float
+
+
+# The estimated rendering size above which a subset or hdi-map route refuses (C-284).
+#
+# A BYTE budget, not a row count, and the reason is measured: a historical row costs ~1,625 B
+# through `dataframe_to_dict` and a forecast row ~7,731 B, because the second carries a posterior
+# draw per sample per target -- and the sample width varies per delivery, so a 32-draw run and a
+# 1000-draw run differ by another factor of thirty. No single row number is right for both
+# categories, let alone for two runs of one. `estimate_records_bytes` carries the calibration.
+#
+# 512 MiB is the figure already measured for THIS box against this same serializer, by the
+# sibling API it co-hosts: 22 GiB total, shared between the two services, against a multi-GiB
+# warm baseline. It admits ~320,000 historical rows and ~65,000 rows of a 32-draw forecast.
+# Holding both co-tenants to one number is the point -- it stops each assuming the whole machine.
+#
+# This bounds a RENDERING, not the data. Every table stays retrievable in full by the paths the
+# refusal names, which are the ones CRAF'd already uses.
+_DEFAULT_MAX_RESPONSE_BYTES = 512 * 1024 ** 2
+
+
+def _max_response_bytes() -> int:
+    """The active budget, overridable per deployment.
+
+    An env var rather than a constant because the box is shared and its headroom is a
+    deployment fact, not a property of this code -- and because a bound that cannot be raised
+    in an incident is one an operator will comment out instead.
+    """
+    raw = os.getenv("CRAFDAPI_MAX_RESPONSE_BYTES")
+    if not raw:
+        return _DEFAULT_MAX_RESPONSE_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(
+            "CRAFDAPI_MAX_RESPONSE_BYTES=%r is not an integer; using the %d byte default",
+            raw, _DEFAULT_MAX_RESPONSE_BYTES,
+        )
+        return _DEFAULT_MAX_RESPONSE_BYTES
+    if value <= 0:
+        logger.warning(
+            "CRAFDAPI_MAX_RESPONSE_BYTES=%d is not positive; using the %d byte default",
+            value, _DEFAULT_MAX_RESPONSE_BYTES,
+        )
+        return _DEFAULT_MAX_RESPONSE_BYTES
+    return value
+
+
+def _human_bytes(n: float) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if abs(n) < 1024 or unit == "GiB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} B"
+        n /= 1024
+    return f"{n:.1f} GiB"
+
+
+def _too_large_detail(category: str, n_rows: int, estimated: int, budget: int) -> str:
+    """The body of the 413.
+
+    Prose, and separate from the serving path for that reason. The two categories need
+    genuinely different advice rather than one message with a substituted noun: forecast has a
+    single-call parquet route, historical does not and has to be fetched as a stored file.
+
+    A refusal that does not say what to do instead is an outage with better manners.
+    """
+    detail = (
+        f"This {category} selection is {n_rows:,} rows and would need about "
+        f"{_human_bytes(estimated)} to render as JSON, above this endpoint's "
+        f"{_human_bytes(budget)} limit. "
+        "Narrow it with the time_ids, entity_ids, features or sample_idx filters"
+    )
+    if category == "forecast":
+        return detail + (
+            ", or fetch the whole forecast in one call as parquet: "
+            "GET /data/forecast/bulk, which returns one row per admin-1 unit per month "
+            "carrying every target."
+        )
+    return detail + (
+        ", or fetch the complete table as a single stored file: GET /provenance/historical "
+        "for `bucket_id` and `artifact_id`, then "
+        "GET /files/{bucket_id}/{artifact_id}/download."
+    )
 
 
 _REQUIRED_APPWRITE_ENV_VARS = [
@@ -610,6 +692,29 @@ class CrafdApiManager(APIManager):
                         parsed_entity_ids = parse_list_param(entity_ids)
                     
                     dataset = self._get_latest_dataset(manager, x_api_key, category, force_refresh)
+
+                    # C-284: decide before materialising. `served_payload_shape` takes the SAME
+                    # filters as the call below and reads index levels and array shapes only, so
+                    # the guard costs nothing -- which is the point. A guard that has to build
+                    # the payload in order to judge whether building it is affordable has
+                    # already lost. Filters are passed because they are what CRAF'd uses: a
+                    # bound computed on the full table would refuse every narrow request.
+                    n_rows, n_keyed, n_elements = dataset.served_payload_shape(
+                        time_ids=parsed_time_ids,
+                        features=parsed_features,
+                        sample_idx=parsed_sample_idx,
+                        entity_ids=parsed_entity_ids,
+                        with_metadata=with_metadata,
+                        level=level,
+                        aggregate=aggregate,
+                    )
+                    estimated = estimate_records_bytes(n_rows, n_keyed, n_elements)
+                    budget = _max_response_bytes()
+                    if estimated > budget:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=_too_large_detail(category, n_rows, estimated, budget),
+                        )
                     
                     subset_df = dataset.get_subset_dataframe(
                         time_ids=parsed_time_ids,
@@ -676,6 +781,29 @@ class CrafdApiManager(APIManager):
                         parsed_entity_ids = parse_list_param(entity_ids)
                     
                     dataset = self._get_latest_dataset(manager, x_api_key, category, force_refresh)
+
+                    # C-284: decide before materialising. `served_payload_shape` takes the SAME
+                    # filters as the call below and reads index levels and array shapes only, so
+                    # the guard costs nothing -- which is the point. A guard that has to build
+                    # the payload in order to judge whether building it is affordable has
+                    # already lost. Filters are passed because they are what CRAF'd uses: a
+                    # bound computed on the full table would refuse every narrow request.
+                    n_rows, n_keyed, n_elements = dataset.served_payload_shape(
+                        time_ids=parsed_time_ids,
+                        features=parsed_features,
+                        sample_idx=parsed_sample_idx,
+                        entity_ids=parsed_entity_ids,
+                        with_metadata=with_metadata,
+                        level=level,
+                        aggregate=aggregate,
+                    )
+                    estimated = estimate_records_bytes(n_rows, n_keyed, n_elements)
+                    budget = _max_response_bytes()
+                    if estimated > budget:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=_too_large_detail(category, n_rows, estimated, budget),
+                        )
                     
                     hdi_map_df = dataset.calculate_hdi_map(
                         alpha=alpha,

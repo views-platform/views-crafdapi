@@ -6,8 +6,8 @@
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-24                                     |
 | Total Concerns    | 65                                             |
-| Open Concerns     | 55                                             |
-| Resolved Concerns | 10                                             |
+| Open Concerns     | 22                                             |
+| Resolved Concerns | 43                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -1522,13 +1522,14 @@ step that was documented but wrong), ADR-023 §"the gate is enforced at PR revie
 
 ---
 
-### C-284: no data route has a row bound — an unparameterised historical `subset` asks for 34.5 GB of Python objects
+### C-284 (RESOLVED): no data route has a row bound — an unparameterised historical `subset` asks for 34.5 GB of Python objects
 
 | Field | Value |
 |-------|-------|
 | ID | C-284 |
 | Tier | 2 |
 | Source | operator question, measured 2026-08-22 |
+| Status | **RESOLVED 2026-08-24** — a byte bound now refuses above 512 MiB, before materialising. See the resolution at the end of this entry. |
 | Trigger | Before pointing **any** consumer at `/data/historical/latest` — CRAF'd, a notebook, `CrafdApiClient`, or a curl from the README — and **before fixing C-232 by restoring the dropped columns**, which makes this strictly worse. Also when reviewing whether the C-262 ceilings can wait: this is the concrete request that turns an unbounded service into a box-wide outage. |
 | Location | `src/views_crafdapi/managers/api.py` (`get_latest_historical_dataframe`, `get_latest_forecast_dataframe`), `src/views_crafdapi/managers/serialization.py::dataframe_to_dict` + `convert_numpy_types`, documented at `README.md:121,211` and `docs/api/README.md` |
 
@@ -1630,6 +1631,67 @@ work), **C-262** (the ceiling that decides whether this is a service outage or a
 now the most valuable open item because of this entry), **C-280** (bounds the restart that
 follows), **C-236** (in-memory caches bounded by entry count, not bytes — the same "no byte-level
 bound anywhere" theme), **C-263** (the other 28.4M-row memory event, resolved).
+
+---
+
+**RESOLVED 2026-08-24 — an estimated-byte bound, computed from shape before anything is built.**
+
+The remedy is the one this entry argued for, and it kept both traps it named.
+
+*It bounds bytes, not rows.* `serialization.estimate_records_bytes(n_rows, n_keyed, n_elements)`
+carries two calibrated constants — 120 B per keyed value, 32 B per sample element — rounded **up**,
+because an over-estimate refuses slightly early and an under-estimate lets through exactly what the
+guard exists to stop. Checked against the two `tracemalloc` measurements quoted above: it returns
+160.2 MiB for the 155.0 MiB historical case and 102.3 MiB for the 96.7 MiB forecast case, 3.4% and
+5.8% high.
+
+*It decides before materialising.* `ForecastDataset.served_payload_shape()` returns
+`(rows, keyed_columns, sample_elements_per_row)` from index levels and array shapes only. A guard
+that must build the payload to judge whether building it is affordable has already lost.
+
+**What is new here, and is not in the sibling implementation this borrowed from.** That one guards
+a single route that takes no arguments, so it can read the whole index. Every route bounded here
+takes filters, and those filters are what CRAF'd uses — so `served_payload_shape` takes the **same
+filter arguments** as the call it guards and reuses `_subset_mask` and `_get_pg_cells` rather than
+reimplementing selection. A bound computed on the full table would have refused every narrow
+request the service exists to answer. `test_a_narrow_selection_is_still_admitted` pins exactly that:
+one budget between the two estimates, unfiltered refused and filtered served.
+
+`aggregate=True` deliberately does **not** reduce the estimate. Aggregation runs in
+`get_subset_dataframe` *after* the pg-grain frame is built and joined, so the pg-grain frame is the
+peak and is what the bound must be computed against. The same reasoning covers the `hdi-map`
+routes, whose reduction also runs on a frame that has to exist first — which is why one helper
+correctly guards all 20.
+
+**The budget.** 512 MiB, overridable per deployment via `CRAFDAPI_MAX_RESPONSE_BYTES`; an unset,
+unparseable or non-positive value falls back to the default and logs. The figure is the one already
+measured for this box against this same serializer by the API it co-tenants with — 22 GiB total,
+shared, against a multi-GiB warm baseline. Holding both services to one number is deliberate: it
+stops each assuming the whole machine. It admits ~320,000 historical rows and ~65,000 rows of a
+32-draw forecast.
+
+**Cost of the guard itself, measured not assumed.** The mask is computed twice — once in the guard,
+once in the call it guards. On a 27,950,000-row index (the C-263 grid size): **0.014 s unfiltered,
+0.23 s filtered**. Against a request that would otherwise spend minutes and tens of GB, free.
+Threading the mask through `get_subset_dataframe` would buy a fifth of a second at the cost of a
+wider signature on the hottest method in the class; not taken.
+
+**The refusal names a way through**, per category: forecast → `GET /data/forecast/bulk`;
+historical → `GET /provenance/historical` then the file download. Nothing became unreachable — this
+bounds one rendering, not the data.
+
+**Guards.** `tests/test_response_size_bound.py` (12) and `TestResponseSizeBound` in
+`tests/test_api_endpoints.py` (6). The drift test materialises the real frame and compares it with
+the estimate across eight filter combinations, so the mirrored column-selection branch cannot drift
+silently; it was mutation-tested four ways (dropped geo columns, ignored `time_ids`, ignored
+`sample_idx`, post-aggregation rows) and caught all four. The route tests were confirmed failing
+against the ungated code — 5 of 6, the sixth being the regression guard that ordinary requests
+still return 200, which correctly passes either way.
+
+Cross-refs: **C-232** (resolved 2026-08-24 by retiring `/latest`; these were one piece of work and
+are now both closed), **C-285** (a byte bound also bounds how long the event loop is blocked, but
+does not fix that), **C-262** (the ceiling that decides service-outage vs box-outage — still open,
+and still the thing that decides who dies if this bound is ever raised too far).
 
 ---
 
