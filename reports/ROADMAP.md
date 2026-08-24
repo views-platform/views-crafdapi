@@ -217,7 +217,12 @@ communication* question: if CRAF'd was calling `/latest`, they have been receivi
 should be told. It is no longer a precondition. Nothing this repo ships called it — not
 `CrafdApiClient`, not `smoke.py`, not any notebook.
 
-**Done 2026-08-24 — C-284 is resolved too, so Step 3 is complete.** The 20 `subset` and `hdi-map`
+**Deployed 2026-08-24 as v0.7.0 — Step 3 is complete and live in production.** Verified on the
+running service: both `/latest` routes return `404`, `/pg/data/historical/subset` still returns
+`422` (so the 404s are the retirement, not an outage), the root catalog no longer advertises the
+retired routes, and `smoke.py --expect-tag v0.7.0` reports ALL PASS.
+
+**C-284 is resolved too.** The 20 `subset` and `hdi-map`
 routes now estimate the size of the response *before building it* and refuse above **512 MiB** with
 a `413` that names the way through. The 34.5 GB unparameterised request — the worst case, and the
 one that took no arguments — is refused in 0.014 s instead of spending thirteen minutes eating the
