@@ -56,18 +56,25 @@ Appwrite calls.
 Hop B ships whatever the newest manifested run on the shelf is, and clips the historical leg to the
 producer's observed boundary. So *when* you run it determines *what* you get.
 
-## Blockers as of 2026-08-23
+## Blockers — cleared 2026-08-23/24
 
-Both are in views-models, and both must be cleared before a real delivery.
+Both were in views-models. Both are now resolved, and verified from this side rather than taken on
+trust:
 
-1. **views-models#399 is unmerged.** `deliveries/un_crafd.py` on `development` still declares
-   `intent = paused(...)`, with a reason that is now false — *"crafdapi's first delivery has not
-   been executed"*, when it has. `paused` is a real interlock, not a comment: it derives
-   `wire_upload_enabled=False` and the manager makes no store calls. **A run today would be a dry
-   run.**
-2. **views-models#403 is open.** Both launchers are still pinned to `views-postprocessing 1.1.0`,
-   which carries the download fail-open that broke the first CRAF'd delivery on 2026-08-13. `1.1.1`
-   fixes it.
+1. **views-models#399 — merged.** `deliveries/un_crafd.py` now declares
+   `intent = live(since=date(2026, 8, 14))`, backdated to when the first delivery actually ran
+   rather than to the merge. The interlock chain is intact end to end: `live` →
+   `status.upload_armed()` → `config_meta.py`'s `"wire_upload_enabled"` → the manager's upload gate.
+   A run now delivers.
+2. **views-models#403 — closed.** Both launchers pin `views-postprocessing 1.1.1`. **Both** matters:
+   they share one conda prefix, so moving only `un_crafd` would have left the armed FAO leg on the
+   defect. views-models verified the sequencing before merging #399 — with both armed on `1.1.1`
+   the pin-safety guards pass 6/6; on `1.1.0` they fail 4/6, which is why #403 had to land first.
+
+The launcher also verifies what pip *actually* installed, by reading `direct_url.json` and comparing
+it to the pin (views-models#385, after a version-string pin silently no-opped a reinstall). One soft
+spot worth knowing: if that file cannot be read the launcher **warns and continues** rather than
+stopping, so a silent no-op reinstall is still possible in that narrow case.
 
 ## Verifying afterwards
 
