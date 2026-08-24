@@ -169,26 +169,23 @@ class TestCacheStatsEndpoint:
 # ============================================================
 
 
-class TestLatestDataEndpoints:
+class TestLatestDataEndpointsAreRetired:
+    """`/data/{category}/latest` was retired 2026-08-24 (register C-232).
 
-    def test_historical_latest_returns_200(self, app_client):
-        client, _, _ = app_client
-        resp = client.get("/data/historical/latest", headers=HEADERS)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert "dataframe" in body["data"]
+    It answered 200 with rows carrying no values, and these two tests were the only ones that
+    touched it — named `*_returns_200`, asserting exactly that and nothing about the payload.
+    They are the reason a Tier 1 defect sat open from 2026-08-10 behind a green suite."""
 
-    def test_forecast_latest_returns_200(self, app_client):
+    @pytest.mark.parametrize("category", ["historical", "forecast"])
+    def test_latest_is_gone(self, app_client, category):
         client, _, _ = app_client
-        resp = client.get("/data/forecast/latest", headers=HEADERS)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["data"]["category"] == "forecast"
+        assert client.get(f"/data/{category}/latest", headers=HEADERS).status_code == 404
 
     def test_missing_api_key_returns_422(self, app_client):
+        """Re-pointed off `/latest` at a surviving keyed route — the behaviour under test is
+        FastAPI's missing-header handling, which was never specific to that endpoint."""
         client, _, _ = app_client
-        resp = client.get("/data/historical/latest")
+        resp = client.get("/pg/data/historical/subset")
         assert resp.status_code == 422
 
 
@@ -348,8 +345,11 @@ class TestOperationResultDataConsumers:
         mock_pm.get_latest_file_id.return_value = OperationResult(
             success=True, data={"file_id": "file_001"}
         )
+        # Re-pointed off the retired `/latest` onto a subset route: the behaviour under test is
+        # the INGEST error path (`download_prediction` returning data with no `file_bytes`), which
+        # every route reaches via `get_latest_dataset` → `get_latest_dataframe`.
         resp = client.get(
-            "/data/historical/latest",
+            "/pg/data/historical/subset",
             params={"force_refresh": "true"},
             headers=HEADERS,
         )

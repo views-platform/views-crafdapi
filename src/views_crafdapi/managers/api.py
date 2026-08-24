@@ -443,7 +443,6 @@ class CrafdApiManager(APIManager):
             "note": "Include 'X-API-Key' header with your Appwrite API key in all requests",
             "endpoints": {
                 # Historical endpoints by level
-                "historical_latest": "/data/historical/latest",
                 "historical_pg_subset": "/pg/data/historical/subset",
                 "historical_country_subset": "/country/data/historical/subset",
                 "historical_gaul0_subset": "/gaul0/data/historical/subset",
@@ -451,7 +450,6 @@ class CrafdApiManager(APIManager):
                 "historical_gaul2_subset": "/gaul2/data/historical/subset",
                 
                 # Forecast endpoints by level
-                "forecast_latest": "/data/forecast/latest",
                 "forecast_bulk": "/data/forecast/bulk",
                 "forecast_pg_subset": "/pg/data/forecast/subset",
                 "forecast_country_subset": "/country/data/forecast/subset",
@@ -504,66 +502,19 @@ class CrafdApiManager(APIManager):
             return version_info()
 
         # Historical data endpoints
-        @self.app.get("/data/historical/latest")
-        async def get_latest_historical_dataframe(
-            force_refresh: bool = Query(False, description="Force refresh the cache"),
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: PredictionStoreManager = Depends(self._get_prediction_manager)
-        ):
-            """Get the latest historical dataframe from the prediction bucket."""
-            try:
-                df = self._get_latest_dataframe(manager, x_api_key, "historical", force_refresh)
-                api_key_hash = self._get_api_key_hash(x_api_key)
-                cache = self._dataframe_cache[api_key_hash]["historical"]
-                
-                result = {
-                    "success": True,
-                    "data": {
-                        "dataframe": dataframe_to_dict(df),
-                        "shape": df.shape,
-                        "columns": df.columns.tolist(),
-                        "file_id": cache["file_id"],
-                        "timestamp": cache["timestamp"],
-                        "category": "historical"
-                    }
-                }
-                
-                return result
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-        
-        # Forecast data endpoints
-        @self.app.get("/data/forecast/latest")
-        async def get_latest_forecast_dataframe(
-            force_refresh: bool = Query(False, description="Force refresh the cache"),
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: PredictionStoreManager = Depends(self._get_prediction_manager)
-        ):
-            """Get the latest forecast dataframe from the prediction bucket."""
-            try:
-                df = self._get_latest_dataframe(manager, x_api_key, "forecast", force_refresh)
-                api_key_hash = self._get_api_key_hash(x_api_key)
-                cache = self._dataframe_cache[api_key_hash]["forecast"]
-                
-                result = {
-                    "success": True,
-                    "data": {
-                        "dataframe": dataframe_to_dict(df),
-                        "shape": df.shape,
-                        "columns": df.columns.tolist(),
-                        "file_id": cache["file_id"],
-                        "timestamp": cache["timestamp"],
-                        "category": "forecast"
-                    }
-                }
-                
-                return result
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
+        # `/data/{category}/latest` was RETIRED here (2026-08-24). It answered HTTP 200 with rows
+        # carrying no values — the ADR-030 §5 store migration moved samples and scalars out of
+        # `.dataframe`, and the handlers served that index-only frame directly (register C-232,
+        # Tier 1, open since 2026-08-10). Measured live before removal: 88,357,820 bytes in 9.04 s
+        # for `/data/forecast/latest`, every row carrying only `month_id` and `priogrid_id`.
+        #
+        # Retired rather than bounded because the fix and the defect pointed the same way: nothing
+        # this repo ships ever called it (not the client, not smoke.py, not a notebook), and anyone
+        # who DID call it was already receiving a successful-looking empty answer. A 404 tells a
+        # caller to stop; a valueless 200 does not.
+        #
+        # `_get_latest_dataframe` survives deliberately: `get_latest_dataset` calls it, so it is the
+        # ingest entry point for every remaining route, and ~30 tests use it as that seam.
 
         @self.app.get("/data/forecast/bulk")
         async def get_forecast_bulk_parquet(

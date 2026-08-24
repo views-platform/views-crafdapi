@@ -4,10 +4,10 @@
 |-------------------|------------------------------------------------|
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
-| Last Updated      | 2026-08-23                                     |
+| Last Updated      | 2026-08-24                                     |
 | Total Concerns    | 65                                             |
-| Open Concerns     | 56                                             |
-| Resolved Concerns | 9                                              |
+| Open Concerns     | 55                                             |
+| Resolved Concerns | 10                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -44,7 +44,36 @@ Consequently:
 
 ## Open Concerns
 
-### C-232: `/data/{category}/latest` serves rows with no data columns behind HTTP 200
+### C-232 (RESOLVED): `/data/{category}/latest` serves rows with no data columns behind HTTP 200
+
+**RESOLVED 2026-08-24 by retirement.** Both routes removed, along with their entries in the root
+endpoint catalog (`api.py`), `README.md`, `docs/api/README.md`, and ADR-026 §  (amended in place).
+
+**Retired rather than fixed, and the reasoning is the part worth keeping.** The obvious remedy —
+restore the dropped columns — made C-284 strictly worse: 12.9 GB to 15.9 GB, 35 s to 157 s. The
+decision turned instead on who was affected. Nothing this repo ships ever called these routes:
+not `CrafdApiClient`, not `smoke.py`, not any notebook. And a caller who *did* follow the
+documented curl was already receiving a successful-looking empty answer — so the branch where
+someone used it is the branch that argues hardest for removal, not against it:
+
+| | before | after |
+|---|---|---|
+| nobody calls it | harmless | harmless |
+| someone calls it | **silent wrong answer** | loud 404 |
+
+A 404 tells a caller to stop; a valueless 200 does not. Measured live before removal:
+`/data/forecast/latest` returned **88,357,820 bytes in 9.04 s**, every row carrying only
+`month_id` and `priogrid_id`.
+
+**The two tests that covered it were the defect's own cover.** Named `*_returns_200`, asserting
+status and a key's presence and nothing about the payload — which is how a Tier 1 entry stayed
+open from 2026-08-10 behind a green suite. They are replaced by a guard that the routes are gone.
+
+`_get_latest_dataframe` deliberately survives: `get_latest_dataset` calls it, so it remains the
+ingest entry point for every route that stayed, and ~30 tests use it as that seam.
+
+Not closed by this: whether any caller was ever affected. That is an nginx access-log question and
+a partner-communication one, not a code one — see the note on **C-284**.
 
 | Field | Value |
 |-------|-------|
@@ -1535,6 +1564,12 @@ Named options, none taken here: a row cap with an explicit 413 or a documented `
 streaming the response instead of materialising it; or retiring the `/latest` routes in favour of
 the bulk parquet and the subset endpoints, which is what consumers actually use. The third is
 probably right and is the largest change.
+
+**Scope reduced 2026-08-24.** `/data/{category}/latest` was retired (C-232), so the two worst rows in
+the table below no longer exist. What remains is the 20 `subset` and `hdi-map` routes, which still
+have no bound of any kind — including the 34.5 GB unparameterised case, which was always the worst
+one. The retirement removed the *hollow* endpoints; the *unbounded* problem is untouched and is
+still the whole of this entry.
 
 **Extended 2026-08-22 — `/latest` is not the worst case, and the worst case takes no arguments.**
 The `subset` routes were measured next, on the same real rows. Every filter defaults to `None`

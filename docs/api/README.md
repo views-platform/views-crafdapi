@@ -77,7 +77,6 @@ The levelled surface follows `/{level}/{kind}/{category}/{operation}` (ADR-026):
 |---------------|---------|
 | `GET /{level}/data/{category}/subset` | Rows of the latest dataframe at `level`, filtered by query params. |
 | `GET /{level}/analysis/{category}/hdi-map` | MAP + HDI summaries at `level`. |
-| `GET /data/{category}/latest` | The full latest dataframe of a category (non-levelled, PRIO-GRID grain). |
 
 `pg` is the native PRIO-GRID grain; `country`/`gaul0`/`gaul1`/`gaul2` are aggregation levels (pass `aggregate=true` to roll up). Forecast aggregation uses the conservation-correct joint-sum (`HDI(Σ) ≠ ΣHDI`).
 
@@ -140,7 +139,7 @@ Latest forecast (full, PRIO-GRID grain):
 
 ```bash
 curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
-  https://crafdapi.viewsforecasting.org/data/forecast/latest
+  "https://crafdapi.viewsforecasting.org/pg/data/forecast/subset?time_ids=559"
 ```
 
 Forecast HDI + MAP aggregated to GAUL admin-1, 90% HDI, for two months:
