@@ -4,10 +4,28 @@
 
 > **CRAF'd receives forecasts worth citing, every month, without anyone remembering to.**
 
+**What "worth citing" means here — specced 2026-08-24, and it is narrower than it sounds.** It does
+**not** mean the forecasts are accurate or that they beat a baseline; forecast skill is somebody
+else's responsibility and is deliberately outside this goal. It means CRAF'd receives output that
+can be *attributed and used*: we can name which pgm and cm ensembles produced it, all the conflict
+targets are present, and every one of them comes back out of the API with the correct columns. A
+placeholder ensemble fails that test only because nobody can point at what made it.
+
 *Set 2026-08-24, after the previous definition of done — EPIC #40, "CRAF'd can actually use this
-API, proven with real data" — was completed and closed. This document is deliberately unfinished:
-the four steps are agreed, the **hard specs are not**, and every place one is missing is marked
-`SPEC NEEDED` rather than papered over with a plausible-sounding sentence.*
+API, proven with real data" — was completed and closed.*
+
+*The four steps are agreed and most specs are now written down. **Four things are still open**, each
+marked in place rather than papered over with a plausible-sounding sentence:*
+
+| | what | whose |
+|---|---|---|
+| **`DECISION NEEDED`** | how multi-target composition works across pgm and cm | design, upstream |
+| **`NEEDS YOUR NOD`** | retire `/latest` rather than bound it | partner-facing call |
+| **`SPEC NEEDED`** | who runs the first real delivery, on what machine | operator |
+| **`SPEC NEEDED`** | who owns the cron entry and the heartbeat account | operator |
+
+*Everything else marked "Decided" below was decided by me, with the reasoning stated, and is open to
+being overruled.*
 
 ---
 
@@ -28,43 +46,98 @@ each maps to a step below.
 
 ---
 
-## Step 1 — Replace the placeholder ensemble
+## Step 1 — Name what feeds the bucket, and get all of it out
 
-**The only step that changes what CRAF'd actually receives.** Modelling work, not plumbing; the one
-step no amount of engineering here substitutes for.
+**Specced 2026-08-24 with the operator. This is not about model quality.** Beating a baseline is
+someone else's responsibility and is explicitly *not* part of this definition of done.
 
-Today `rusty_bucket` is eight clones of the `heavy_strider` datafactory baseline.
+What step 1 actually requires:
 
-- `SPEC NEEDED` — **What replaces it?** A named ensemble, or a named model.
-- `SPEC NEEDED` — **What makes a forecast "worth citing"?** This is the load-bearing phrase in the
-  whole definition of done and it currently means nothing testable. Candidates, none chosen: a skill
-  score against a stated baseline over a stated evaluation window; a named person's sign-off;
-  passing an existing evaluation harness. Until this is written down, step 1 cannot be declared done
-  by anyone but you, on the day, by opinion.
-- `SPEC NEEDED` — **Who decides, and against what evidence?**
-- `SPEC NEEDED` — **Does ADR-034 have to be Accepted first?** It is still `Proposed` — *"awaiting
-  CRAF'd/product sign-off on the target list"* — and its exceedance thresholds
-  (`p_gt25`/`p_gt100`/`p_gt1000`) are placeholders whose confirmation would **rename** those served
-  columns. Shipping a real forecast under placeholder thresholds is a decision, not an oversight.
+1. **We can say which pgm ensembles and which cm ensembles produce the forecast in the bucket.**
+   Named, not inferred.
+2. **All three conflict targets are present** — `lr_ged_sb`, `lr_ged_ns`, `lr_ged_os`. More targets
+   will follow.
+3. **All of it comes back out through the API** — all historical data and all forecasts, with the
+   correct columns.
 
-**Not blocked by anything in this repo.**
+The columns are already settled: `schema.bulk_columns()` is the authority — 45 columns, 6 identity
++ 3 series × 13 — documented in `docs/api/data_dictionary.md` and reconciled across the repo on
+2026-08-23 (**C-244**, which had the repo carrying three different totals). Nothing more to decide
+there.
+
+### The hard part: more than one target, across models that disagree about how many they produce
+
+The operator's words: *"we have models such as hydranet which can forecast multiple targets at once,
+but we have no cm models that can do that for ensembles. And this becomes more messy when more
+models with new targets enter. So we need to figure that out."*
+
+**`DECISION NEEDED` — how multi-target composition works.** A pgm model may emit several targets in
+one run; cm ensembles emit one at a time; the set of targets grows over time. There is no design for
+composing those into one delivery today.
+
+The stated constraint on the answer, which rules a lot out: **simple, robust, working, and it should
+make sense. Not complicated, and not especially flexible — flexibility can come later.** So the bar
+is a design that handles today's three targets and admits a fourth without a rewrite; it is *not* a
+general target-algebra.
+
+This decision is upstream of the delivery, not inside this repo. It should be settled before step 2
+runs, because it determines what a delivery even contains.
+
+### The cm half is already an epic, and it is blocked
+
+**#81** (`epic`, `blocked`, `needs-decision`) holds it, and is worth reading before any work starts.
+Its own summary: *"the pgm+cm two-ensemble delivery does not exist anywhere in the platform."*
+
+Four blockers in this repo — the wire manifest cannot distinguish two levels of analysis; there is
+no LOA dimension in any cache key, so two runs would collide; `ForecastDataset` hard-raises on a
+non-`priogrid_id` index; and the 9-column GAUL sidecar requirement is meaningless at country level.
+
+And upstream: the wire contract needs an `loa` field ⇒ `contract_version` **1.6**, which this build
+currently **refuses** — and the ordering is unforgiving, *"the consumer must ship 1.6 capability
+before any producer emits it, or the delivery is refused on arrival."* Also: **no cm baseline
+ensemble exists to deliver**, and ADR-013 lists cm as an explicit non-goal.
+
+#81 also names a risk that is easy to miss and would surface as a partner complaint: with cm
+authoritative at `/country` and pgm aggregated at `/gaul0`, **the same geography would be served two
+different numbers by two endpoints, and nothing would detect the divergence.**
+
+### ADR-034 — decided
+
+**Ship provisional, rename later.** ADR-034 stays `Proposed` and the exceedance columns keep their
+placeholder thresholds (`p_gt25`, `p_gt100`, `p_gt1000`). When CRAF'd confirms real numbers those
+columns get **renamed**, and any consumer scoring against them changes code at that point. The
+data dictionary already records them as placeholders; that is the disclosure this decision relies on.
 
 ## Step 2 — Run one real monthly delivery, end to end
 
 Proves the manual path works before anyone automates it. The two blockers that made this impossible
-were cleared 2026-08-23/24 (views-models#399, #403), and the procedure is written down in
-`deployment/MONTHLY_REFRESH.md`.
+were cleared 2026-08-23/24 (views-models#399, #403), and the procedure is `deployment/MONTHLY_REFRESH.md`.
 
-- `SPEC NEEDED` — **What counts as proof it worked?** Proposed, for agreement: a *new* `run_id` in
-  `/provenance/forecast`; `/health` healthy with `is_stale: false`; `smoke.py` ALL PASS; and the
-  bulk artifact's byte count **changing** from 461,991 — because an unchanged byte count would mean
-  the same run is still being served.
-- `SPEC NEEDED` — **Must the `*_actual` column be populated?** A delivery run after the 20th should
-  carry the previous month's observations, so this is the first chance to see that column carry real
-  numbers rather than zeros (register **C-293**). Whether that is a pass condition or an observation
-  is not decided.
-- `SPEC NEEDED` — **Who runs it, and on what?** The launcher needs conda, several GB, and network
-  reach to Appwrite and the datafactory zarr host.
+**Blocked by step 1's multi-target decision** — that decision determines what a delivery contains,
+so running one first would prove the wrong thing.
+
+**Pass conditions — decided, and each is a thing you can look at:**
+
+| check | passes when |
+|---|---|
+| `/provenance/forecast` | shows a **new** `run_id`, not `rusty_bucket_forecasting_20260727_095355` |
+| `/health` | `healthy`, `forecast_freshness.is_stale: false` |
+| `smoke.py --expect-tag <live tag>` | ALL PASS, both coverage checks included |
+| `/data/forecast/bulk` | byte count **differs from 461,991** |
+
+That last one is the load-bearing check and the easiest to skip. 461,991 bytes is what v0.4.0,
+v0.5.1 and v0.6.1 all returned — byte-identical across three releases, because they were all serving
+the same run. **An unchanged byte count after a delivery means the delivery did not land**, however
+green everything else looks.
+
+**`*_actual` is an observation, not a pass condition.** A delivery run after the 20th should be the
+first time that column carries real numbers instead of zeros (**C-293**). Recording whether it does
+is valuable; making it a gate is not, because it depends on upstream timing this repo does not
+control.
+
+**`SPEC NEEDED` — who runs it, and on what machine.** The launcher needs conda, several GB of
+memory, and network reach to Appwrite and the datafactory zarr host. That is an operator question,
+not one this repo can answer.
 
 ## Step 3 — Fix the two broken served surfaces
 
@@ -77,29 +150,56 @@ consumer-ready while they stand.
 - **No data route has any size bound** (**C-284**). `GET /pg/data/historical/subset` with no query
   string asks for 34.5 GB — more than the machine has.
 
-- `SPEC NEEDED` — **Retire `/latest`, or bound it?** C-284 calls retirement *"probably right and the
-  largest change"*. Retiring is a breaking change to a documented public route; bounding keeps it
-  and costs a size gate on 23 routes.
-- `SPEC NEEDED` — **What is the bound?** Not a row count: a historical row costs ~1,625 B through
-  the serializer and a forecast row ~7,731 B, and sample width varies per delivery. It has to be
-  estimated bytes from dataset shape.
-- `SPEC NEEDED` — **Does `METHODOLOGY_VERSION` bump?** Currently `3`. **C-244** argues the nine
-  added exceedance columns warrant it under ADR-023. It changes a value CRAF'd reads.
+**Recommended, not yet ratified — retire `/latest` rather than bound it.** C-284 already calls
+retirement *"probably right and the largest change"*. It is hollow, it is used by no known consumer,
+and retiring it deletes a Tier 1 defect instead of guarding it. The cost is that it is a breaking
+change to a documented public route, so it wants an explicit nod rather than arriving inside a
+cleanup. `NEEDS YOUR NOD`.
+
+**Decided — the bound is estimated bytes, not rows.** A row-count cap bounds nothing: a historical
+row costs ~1,625 B through the serializer and a forecast row ~7,731 B, because the second carries a
+draw per sample per target and **sample width varies per delivery**. The gate computes estimated
+bytes from dataset shape, before materialising anything, and refuses above the budget. The budget
+figure itself needs one measurement on the real artifact.
+
+**Decided — `METHODOLOGY_VERSION` does not bump yet, and bumps once.** It stays at `3`. C-244 argues
+the nine added exceedance columns warrant a bump under ADR-023, and that is right — but those same
+columns are about to be **renamed** when CRAF'd confirms real thresholds (the ADR-034 decision
+above). Bumping now and again at the rename is churn in a value CRAF'd reads. It bumps once, at the
+rename, covering both changes.
 
 ## Step 4 — Automate the monthly run
 
 Today it is two commands a human must remember on the 22nd. `data-freshness.yml` now opens an issue
 when a month is missed, so a lapse is at least *visible* — but visible is not automatic.
 
-- `SPEC NEEDED` — **Where does it run?** Needs conda, several GB of memory, and network reach to
-  Appwrite and the zarr host. GitHub's hosted runners will not do it. The Hetzner box already runs
-  datafactory's monthly cron and could host this too — at the cost of the monitor sharing fate with
-  the thing it monitors, which is the objection that put `data-freshness.yml` on GitHub rather than
-  the box.
-- `SPEC NEEDED` — **What happens on failure, and who is told?** datafactory uses a healthchecks.io
-  heartbeat for *"did the monthly pipeline run?"*. There is no equivalent for the delivery.
-- `SPEC NEEDED` — **Does Hop A (the ensemble run) automate too, or only Hop B (the delivery)?** They
-  are separate commands in separate places and only Hop B is cheap.
+**Decided — automate Hop B only. Hop A stays manual.** Hop B (the delivery) is cheap, deterministic
+and safe to repeat. Hop A (the ensemble run) is the modelling step; when it runs and on what is a
+research decision, not a schedule. Automating the cheap half removes the failure everyone actually
+has — forgetting to deliver — without pretending the expensive half is routine.
+
+**Decided — it runs on the Hetzner box.** It is the only machine with conda, the memory, and network
+reach to both Appwrite and the zarr host, and it already runs datafactory's monthly cron, so the
+pattern exists. GitHub's hosted runners cannot do it.
+
+The fate-sharing objection does not apply here: the *monitor* stays on GitHub, so the thing that
+notices a failure is not the thing that failed. That separation is the point, and it is why
+`data-freshness.yml` was not put on the box.
+
+**Decided — failure surfaces as a heartbeat, matching datafactory.** A healthchecks.io ping on
+success, with a period and grace window, answering *"did the delivery run?"* — the question the
+existing daily monitor cannot answer, because it only sees staleness 45 days later. datafactory
+already uses exactly this for its pipeline; this is the same mechanism for the delivery.
+
+That leaves three signals with three distinct jobs, none alerting on another's failure:
+
+| | question | when |
+|---|---|---|
+| Better Stack | is the service up? | 3 min |
+| heartbeat *(new)* | did the delivery run? | monthly |
+| `data-freshness.yml` | is what we serve still current? | daily |
+
+**`SPEC NEEDED` — who owns the cron entry and the heartbeat account.** Operator question.
 
 ---
 
