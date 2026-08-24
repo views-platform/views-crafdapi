@@ -11,6 +11,23 @@ can be *attributed and used*: we can name which pgm and cm ensembles produced it
 targets are present, and every one of them comes back out of the API with the correct columns. A
 placeholder ensemble fails that test only because nobody can point at what made it.
 
+**What "without anyone remembering to" covers — and what it does not.** It covers the **delivery**:
+the monthly act of putting the current forecast and the current observations into the bucket. It
+does **not** cover *producing a new forecast* — running an ensemble is a research act with its own
+cadence, and step 4 deliberately leaves it manual.
+
+That distinction is load-bearing, so state the consequence plainly: **a delivery that runs on
+schedule while no new ensemble has been run re-ships the same forecast with fresher observations.**
+That is a useful outcome — the `*_actual` column advances, which is the half that changes monthly by
+nature — but it is not a new forecast, and the byte-count check in step 2 is what tells the two
+apart.
+
+**What "every month" means, concretely.** A delivery on or after the 22nd of each calendar month.
+**A month counts as a missed month when no delivery has landed by the last day of that month** —
+which is stricter than the 45-day freshness SLA that `data-freshness.yml` alarms on. The SLA is a
+backstop for a badly missed delivery, not the definition of the cadence; a 44-day gap satisfies the
+monitor and still fails this goal. The heartbeat in step 4 is what closes that gap.
+
 *Set 2026-08-24, after the previous definition of done — EPIC #40, "CRAF'd can actually use this
 API, proven with real data" — was completed and closed.*
 
@@ -21,11 +38,18 @@ marked in place rather than papered over with a plausible-sounding sentence:*
 |---|---|---|
 | **`DECISION NEEDED`** | how multi-target composition works across pgm and cm | design, upstream |
 | **`NEEDS YOUR NOD`** | retire `/latest` rather than bound it | partner-facing call |
-| **`SPEC NEEDED`** | who runs the first real delivery, on what machine | operator |
+| **`SPEC NEEDED`** | who runs the *first* delivery (step 4 decides where the recurring one runs) | operator |
 | **`SPEC NEEDED`** | who owns the cron entry and the heartbeat account | operator |
 
 *Everything else marked "Decided" below was decided by me, with the reasoning stated, and is open to
 being overruled.*
+
+*This document was then attacked with `/falsify` against the claim that it contains no hand waving,
+ambiguity, or decision gap. **It did not survive — 4 hard findings and 4 soft.** All eight are fixed
+above, and `tests/test_falsify_roadmap_specs.py` now guards each one, so a regression to the same
+ambiguity fails the suite. The two that mattered: the goal said "without anyone remembering to"
+while step 4 kept Hop A manual, and the goal required naming cm ensembles the document itself
+records as non-existent.*
 
 ---
 
@@ -55,15 +79,24 @@ What step 1 actually requires:
 
 1. **We can say which pgm ensembles and which cm ensembles produce the forecast in the bucket.**
    Named, not inferred.
-2. **All three conflict targets are present** — `lr_ged_sb`, `lr_ged_ns`, `lr_ged_os`. More targets
-   will follow.
+2. **All three conflict targets are present** — `lr_ged_sb`, `lr_ged_ns`, `lr_ged_os`.
+
+   **Assessed against the target set as it stands on the day of assessment, and that set is
+   currently those three.** More targets will follow; a fourth arriving does *not* retroactively
+   un-do this step. It opens a new, smaller piece of work — add the target — which the multi-target
+   design below has to make cheap. Without this sentence "done" could never be reached, because the
+   set is open-ended by design.
 3. **All of it comes back out through the API** — all historical data and all forecasts, with the
    correct columns.
 
-The columns are already settled: `schema.bulk_columns()` is the authority — 45 columns, 6 identity
-+ 3 series × 13 — documented in `docs/api/data_dictionary.md` and reconciled across the repo on
-2026-08-23 (**C-244**, which had the repo carrying three different totals). Nothing more to decide
-there.
+The column **set** is settled: `schema.bulk_columns()` is the authority — 45 columns, 6 identity +
+3 series × 13 — documented in `docs/api/data_dictionary.md` and reconciled across the repo on
+2026-08-23 (**C-244**, which had the repo carrying three different totals).
+
+Two things about those columns are **not** settled, and are decided further down rather than here:
+the three exceedance columns will be **renamed** when CRAF'd confirms real thresholds (the ADR-034
+decision), and `METHODOLOGY_VERSION` bumps once at that rename (step 3). So the shape is fixed and
+two of the names are not.
 
 ### The hard part: more than one target, across models that disagree about how many they produce
 
@@ -83,7 +116,22 @@ general target-algebra.
 This decision is upstream of the delivery, not inside this repo. It should be settled before step 2
 runs, because it determines what a delivery even contains.
 
-### The cm half is already an epic, and it is blocked
+### cm is in scope, and it is a prerequisite — not a footnote
+
+The operator's spec names **pgm *and* cm** ensembles. That is kept rather than quietly narrowed, so
+the consequence has to be stated: **step 1 cannot complete until #81 completes.** #81 is not a
+related epic mentioned in passing; it is on the critical path of this roadmap's first step.
+
+That is an uncomfortable dependency, because #81 is blocked on things outside this repo — chiefly a
+cm baseline ensemble that does not exist. The alternative was to drop cm from the definition of
+done, which would have made this document tidier and wrong.
+
+**If cm turns out to be further away than it looks, the decision to take is whether to split the
+goal** — pgm-only as a first milestone, cm as a second — rather than to leave step 1 open
+indefinitely. That is a decision for the operator when #81's own blockers are costed, not one to
+pre-empt here.
+
+### What #81 says, and it is blocked
 
 **#81** (`epic`, `blocked`, `needs-decision`) holds it, and is worth reading before any work starts.
 Its own summary: *"the pgm+cm two-ensemble delivery does not exist anywhere in the platform."*
@@ -135,9 +183,11 @@ first time that column carries real numbers instead of zeros (**C-293**). Record
 is valuable; making it a gate is not, because it depends on upstream timing this repo does not
 control.
 
-**`SPEC NEEDED` — who runs it, and on what machine.** The launcher needs conda, several GB of
-memory, and network reach to Appwrite and the datafactory zarr host. That is an operator question,
-not one this repo can answer.
+**`SPEC NEEDED` — who runs the *first* one.** Step 4 decides where the *recurring* delivery runs
+(the Hetzner box); this is the separate question of who performs the one-off first run, which need
+not be on that machine — any host with conda, several GB, and network reach to Appwrite and the
+datafactory zarr host will do. Doing it somewhere other than the box is arguably better for a first
+run: it proves the procedure is not accidentally dependent on that one machine's state.
 
 ## Step 3 — Fix the two broken served surfaces
 
@@ -151,10 +201,20 @@ consumer-ready while they stand.
   string asks for 34.5 GB — more than the machine has.
 
 **Recommended, not yet ratified — retire `/latest` rather than bound it.** C-284 already calls
-retirement *"probably right and the largest change"*. It is hollow, it is used by no known consumer,
-and retiring it deletes a Tier 1 defect instead of guarding it. The cost is that it is a breaking
-change to a documented public route, so it wants an explicit nod rather than arriving inside a
-cleanup. `NEEDS YOUR NOD`.
+retirement *"probably right and the largest change"*. It is hollow, and retiring it deletes a Tier 1
+defect instead of guarding it.
+
+**But the usage claim behind it is not evidence, and an earlier draft of this section overstated
+it.** What is actually known is narrower: the register says only that *CRAF'd uses
+`/data/forecast/bulk` and the subset routes*, and that `/latest` needs a valid key so it is not
+reachable by accident. That is an inference about what CRAF'd uses — **not** a record of what
+anything calls. Nobody has looked.
+
+**So the precondition for retiring it is a check, not a nod:** read the nginx access log for calls
+to `/data/*/latest` over a period that covers at least one monthly cycle. If it is genuinely unused,
+retire it. If something is calling it, that changes the decision entirely and is worth knowing
+before a breaking change, not after. That log read is an operator action and has been outstanding
+since 2026-08-23. `NEEDS YOUR NOD` — on the retirement, *after* the log says what it says.
 
 **Decided — the bound is estimated bytes, not rows.** A row-count cap bounds nothing: a historical
 row costs ~1,625 B through the serializer and a forecast row ~7,731 B, because the second carries a
@@ -173,10 +233,22 @@ rename, covering both changes.
 Today it is two commands a human must remember on the 22nd. `data-freshness.yml` now opens an issue
 when a month is missed, so a lapse is at least *visible* — but visible is not automatic.
 
-**Decided — automate Hop B only. Hop A stays manual.** Hop B (the delivery) is cheap, deterministic
-and safe to repeat. Hop A (the ensemble run) is the modelling step; when it runs and on what is a
-research decision, not a schedule. Automating the cheap half removes the failure everyone actually
-has — forgetting to deliver — without pretending the expensive half is routine.
+**Decided — automate Hop B only. Hop A stays manual.** Hop A (the ensemble run) is the modelling
+step; when it runs is a research decision, not a schedule. Automating the delivery removes the
+failure people actually have — forgetting to deliver — without pretending the expensive half is
+routine.
+
+**Hop B is not deterministic, and that was the wrong reason to automate it.** An earlier draft of
+this section claimed it was. `MONTHLY_REFRESH.md` says the opposite in its own words: Hop B ships
+whatever the newest manifested run on the shelf is and clips the historical leg to the producer's
+observed boundary, so *"when you run it determines what you get."*
+
+The real justification is better: **that time-dependence is exactly what a monthly schedule wants.**
+Running on the 22nd picks up whatever the 21st's compile produced and whatever the newest ensemble
+run is. A deterministic step would be one that ignored the calendar, which is not what is wanted
+here. What has to be true instead is that repeating it is *safe* — it is, in the sense that a
+re-run supersedes rather than corrupts (newest-`$createdAt` wins), at the cost of another run
+appearing in the store.
 
 **Decided — it runs on the Hetzner box.** It is the only machine with conda, the memory, and network
 reach to both Appwrite and the zarr host, and it already runs datafactory's monthly cron, so the
