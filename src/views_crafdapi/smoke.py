@@ -63,6 +63,23 @@ def check_ping(base: str, timeout: float = 15.0) -> Result:
 
 
 def check_version(base: str, expect_tag: Optional[str] = None, timeout: float = 15.0) -> Result:
+    # An EMPTY expect_tag is an operator error, not "no assertion requested".
+    #
+    # `if expect_tag and ...` below treats "" as absent, so `--expect-tag ""` used to skip the
+    # comparison and report PASS. The release runbook made that reachable on every deploy: it
+    # said to run `--expect-tag "$TAG"` after `sudo -iu views-crafdapi-deploy`, and `sudo -i`
+    # starts a fresh login shell in which `TAG` — set by the previous user, never exported — is
+    # empty by construction. So the assertion ran against nothing while printing `version PASS`.
+    #
+    # Refusing loudly is the only safe reading: someone who passes the flag is asking for the
+    # check, and a check that silently inspects nothing is worse than no check, because it gets
+    # credited as evidence. Omitting the flag entirely is still fine — that is `None`.
+    if expect_tag is not None and not expect_tag.strip():
+        raise ValueError(
+            "--expect-tag was given an empty value. This usually means an unset shell variable "
+            "(e.g. `--expect-tag \"$TAG\"` after `sudo -iu`, which starts a fresh login shell). "
+            "Pass the tag literally, e.g. --expect-tag v0.7.0, or omit the flag."
+        )
     code, body, err = _get(base, "/version", timeout)
     if err or code != 200 or not isinstance(body, dict):
         return Result("version", False, f"HTTP {code} err={err}")

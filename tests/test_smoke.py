@@ -157,3 +157,58 @@ def test_run_without_key_flags_auth(monkeypatch):
     results = smoke.run("http://x", "", expect_tag=None, forecast_month=559, hist_month=540)
     names = {r.name: r.ok for r in results}
     assert names["ping"] and names["version"] and names["auth"] is False
+
+
+class TestExpectTagCannotSilentlyInspectNothing:
+    """An empty `--expect-tag` must fail loudly, not skip the check.
+
+    Found 2026-08-24, during the v0.7.0 deploy. `check_version` guarded the comparison with
+    `if expect_tag and ...`, so an empty string disabled it and the check reported PASS. That
+    would be a latent trap on its own; the release runbook turned it into a live one by
+    instructing
+
+        sudo -iu views-crafdapi-deploy
+        ...
+        .venv/bin/python scripts/smoke.py --expect-tag "$TAG"
+
+    `sudo -i` starts a fresh login shell, and `TAG` was set in the *previous* user's shell and
+    never exported. So `$TAG` is empty there by construction, and every deploy that followed the
+    runbook literally ran the tag assertion against nothing while printing `version ... PASS`.
+
+    This is the failure mode the repo keeps rediscovering: a check that silently inspects
+    nothing is worse than no check, because it is credited as evidence.
+    """
+
+    def test_empty_expect_tag_is_refused(self):
+        with pytest.raises(ValueError, match="--expect-tag was given an empty value"):
+            smoke.check_version("http://localhost", expect_tag="")
+
+    def test_whitespace_expect_tag_is_refused(self):
+        """`--expect-tag "$TAG"` with TAG unset expands to `''`; with TAG=" " it expands to
+        whitespace. Both mean the operator asked for a check they did not get."""
+        with pytest.raises(ValueError, match="--expect-tag was given an empty value"):
+            smoke.check_version("http://localhost", expect_tag="   ")
+
+    def test_omitting_expect_tag_is_still_allowed(self, monkeypatch):
+        """Not asking for the check is fine and stays fine — the default is None. Only *asking*
+        for it and silently getting nothing is the defect."""
+        monkeypatch.setattr(
+            "views_crafdapi.smoke._get",
+            lambda base, path, timeout: (
+                200,
+                {"version": "0.7.0", "deployed_tag": "v0.7.0", "served_contract_version": "1.5"},
+                None,
+            ),
+        )
+        assert smoke.check_version("http://localhost").ok
+
+    def test_a_real_mismatch_still_fails(self, monkeypatch):
+        monkeypatch.setattr(
+            "views_crafdapi.smoke._get",
+            lambda base, path, timeout: (
+                200,
+                {"version": "0.6.1", "deployed_tag": "v0.6.1", "served_contract_version": "1.5"},
+                None,
+            ),
+        )
+        assert not smoke.check_version("http://localhost", expect_tag="v0.7.0").ok

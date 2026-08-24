@@ -5,9 +5,9 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-24                                     |
-| Total Concerns    | 65                                             |
+| Total Concerns    | 66                                             |
 | Open Concerns     | 22                                             |
-| Resolved Concerns | 43                                             |
+| Resolved Concerns | 44                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -660,6 +660,65 @@ Cross-refs **C-33** (views-postprocessing, the first instance), views-models **#
 ---
 
 ## Resolved Concerns
+
+### C-297 (RESOLVED): `smoke.py --expect-tag "$TAG"` asserted nothing on every deploy that followed the runbook
+
+| Field | Value |
+|-------|-------|
+| ID | C-297 |
+| Tier | 2 |
+| Source | operator deploy of v0.7.0, 2026-08-24 |
+| Status | **RESOLVED 2026-08-24** — `smoke.py` refuses an empty `--expect-tag`; the runbook writes the tag literally in both places. |
+| Trigger | Was: any deploy following `RELEASE_RUNBOOK.md`'s recurring block. Now: reintroducing a shell variable for the tag, or adding any other `if flag and ...` guard where the flag is operator-supplied. |
+| Location | `src/views_crafdapi/smoke.py:65` (`check_version`), `deployment/RELEASE_RUNBOOK.md` (recurring release block) |
+
+`check_version` guarded its assertion with `if expect_tag and tag != expect_tag`, so an **empty**
+`--expect-tag` disabled the comparison and the check returned `PASS`.
+
+On its own that is latent. The runbook made it live. Its recurring block set `TAG=vX.Y.Z` as the
+operator's own user, then ran the verification as the deploy user:
+
+```
+sudo -iu views-crafdapi-deploy
+...
+.venv/bin/python scripts/smoke.py --expect-tag "$TAG"
+```
+
+`sudo -i` starts a **fresh login shell**, and `TAG` was set in the previous user's shell and never
+exported — so `$TAG` is empty there **by construction**, not by accident. Every deploy that
+followed the runbook literally ran the tag assertion against nothing and printed
+`version ... PASS`. The check that exists to catch a wrong-version deploy has never once run.
+
+**Found by deploying v0.7.0.** The operator's paste joined two lines, which surfaced the shell
+mechanics and made the variable's scope visible. The fault would not have shown up any other way:
+it produces a green result, and a green result is not investigated.
+
+**This is the fourth defect of the same shape in this one document** — after C-265, C-266 and
+C-281. Each rewrite fixed the previous trap and introduced the next: an inline real tag went stale
+across releases; the `TAG=` variable that fixed the duplication silently emptied itself across a
+privilege boundary. The pattern is that the runbook is *read* correctly and *behaves* differently,
+and the shell's scoping rules are invisible in the prose.
+
+**Resolution.** Two changes, because either alone leaves the trap rebuildable:
+
+- `check_version` now **raises** on an empty-or-whitespace `expect_tag`, naming the `sudo -iu`
+  cause in the message. Omitting the flag is still fine — that is `None`. Asking for the check and
+  silently not getting it is the defect.
+- The runbook writes the tag **literally in both places** with `vX.Y.Z` as a placeholder, splits
+  every prompting command into its own paste block, and states the shell-scope reason inline so
+  the next rewrite does not reintroduce the variable as an improvement.
+
+Guards: `TestExpectTagCannotSilentlyInspectNothing` in `tests/test_smoke.py` (4), confirmed failing
+against the unfixed code. The existing runbook guards in `test_falsify_shutdown_safety.py` also
+caught a regression in the restructure itself — the split dropped the `ON THE BOX` markers out of
+their 25-line window — which is the guard doing exactly its job.
+
+Cross-refs: **C-265**, **C-266**, **C-281** (the same document, the same shape, three earlier
+causes), **C-282** ("a check that silently inspects nothing" — the same failure class, in the
+memory-measurement procedure).
+
+---
+
 
 ### C-249: `seam_contract.declared_value` raises a bare `KeyError` if the registry pin is lowered below the row's first edition
 

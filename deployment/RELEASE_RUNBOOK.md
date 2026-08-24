@@ -204,26 +204,81 @@ laptop — `views-crafdapi-deploy` does not exist there, so the first line fails
 `sudo: unknown user views-crafdapi-deploy`. That failure is safe (nothing is changed) and it
 has happened, because the block below labels *which user* and never labelled *which host*.
 
-```bash
-# === ON THE BOX (ssh first) — as your own user ===
-TAG=vX.Y.Z   # <-- the ONLY line to change. Set it to the tag you are deploying.
-echo $TAG | sudo -u views-crafdapi-deploy tee /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
-sudo od -c /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag   # <-- CHECK: exactly your tag, then \n
-sudo systemctl restart views-crafdapi
-curl -s https://crafdapi.viewsforecasting.org/version     # expect version AND deployed_tag = $TAG
+> **Read this before you copy anything below.** The commands are deliberately laid out one per
+> block, and **each block is one paste.** Do not select across blocks. Two of these lines prompt
+> — `sudo` for your password, `read` for the key — and a prompting command reads the terminal
+> while the rest of your paste is still buffered, consuming it as input. That has corrupted a
+> deploy-tag file and produced a command containing a fragment of itself (see below).
+>
+> **Substitute the tag by hand, everywhere it appears.** An earlier version of this section used
+> a `TAG=` variable, and that was a latent defect: the second half runs under
+> `sudo -iu views-crafdapi-deploy`, which starts a **fresh login shell**, so `TAG` — set by your
+> user and never exported — is **empty there by construction**. `--expect-tag "$TAG"` therefore
+> asserted nothing while printing `version ... PASS`. Found during the v0.7.0 deploy on
+> 2026-08-24; `smoke.py` now refuses an empty `--expect-tag` rather than skipping the check, so
+> the trap fails loudly if it is ever rebuilt. Writing the tag out literally is the point.
 
-# === still ON THE BOX — now as the deploy user: the checkout is 0750, so `cd` fails for you ===
-sudo -iu views-crafdapi-deploy
-cd views-crafdapi
-read -rsp "APPWRITE_DATASTORE_API_KEY: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
-.venv/bin/python scripts/smoke.py --expect-tag "$TAG"   # verify + warm
-exit
+**ON THE BOX** (`ssh` first), as your own user. Replace `vX.Y.Z` with the tag you are deploying —
+none of this works from a laptop, where `views-crafdapi-deploy` does not exist:
+
+```bash
+echo vX.Y.Z | sudo -u views-crafdapi-deploy tee /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
 ```
 
-Three things that have each cost a release: the deploy checkout is **not readable by your own
-user**, so `cd` into it fails and `sudo cd` cannot work (`cd` is a shell builtin) — use
-`sudo -iu`. `read -rs` prints **no prompt**, so it looks like a hang; `-rsp` gives it one. And
-paste those two lines **separately** — pasted together, `read` swallows the next line as the key.
+**Check the file before restarting.** Expect exactly your tag then `\n`, nothing else:
+
+```bash
+sudo od -c /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
+```
+
+A corrupted tag usually fails loudly at the deploy gate. The case this check exists for is the
+quiet one, where the corruption happens to spell a *different real tag* and the service deploys
+the wrong version while every check looks fine. **If it shows anything else, stop.**
+
+```bash
+sudo systemctl restart views-crafdapi
+```
+
+```bash
+curl -s https://crafdapi.viewsforecasting.org/version
+```
+
+Expect `version` and `deployed_tag` to both name the tag you just wrote.
+
+**Still ON THE BOX, now as the deploy user** — the checkout is `0750`, so `cd` into it fails for
+your own user, and `sudo cd` cannot work because `cd` is a shell builtin:
+
+```bash
+sudo -iu views-crafdapi-deploy
+```
+
+```bash
+cd views-crafdapi
+```
+
+**This next line prompts.** Paste it alone and type the key at the prompt. (`read -rs` prints no
+prompt at all and looks like a hang — `-rsp` is what gives it one.)
+
+```bash
+read -rsp "APPWRITE_DATASTORE_API_KEY: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
+```
+
+If you are unsure whether the key is already set from an earlier attempt, this tells you without
+printing it:
+
+```bash
+[ -n "$APPWRITE_DATASTORE_API_KEY" ] && echo "set, ${#APPWRITE_DATASTORE_API_KEY} chars" || echo "NOT set"
+```
+
+**The literal tag again — not `$TAG`:**
+
+```bash
+.venv/bin/python scripts/smoke.py --expect-tag vX.Y.Z
+```
+
+```bash
+exit
+```
 
 **That hazard is not specific to `read`.** Any command in a pasted block that prompts — `read`,
 and `sudo` asking for a password — is reading the terminal while the rest of your paste is still
@@ -242,18 +297,25 @@ with a new cause.
 Inside that shell `sudo` prompts for *the service account's* password, which does not exist.
 `exit` first for anything needing sudo.
 
-Rollback: the same four lines with the previous tag.
+Rollback: the same steps with the previous tag.
 
-The tag was written out twice here, and the block was still naming `v0.2.0` two releases after
-it stopped being current — so pasting it as-is would have silently rolled production back while
-looking like a deploy. One variable, changed once, is why it is written this way.
+**Why the tag is written out literally, twice, instead of held in a variable.** This block has
+been rewritten three times and each version fixed the previous one's trap, so the history is
+worth keeping:
 
-That rewrite reduced the trap without removing it: `TAG=v0.4.0` was still a real, plausible tag
-that pasted cleanly and would be stale at the next release exactly as `v0.2.0` had been. It is
-now a **placeholder**. An unedited paste fails at the deploy gate — `checkout-deploy-tag.sh`
-cannot resolve `refs/tags/vX.Y.Z` and refuses — which is the correct direction: a stale
-placeholder fails loudly, a stale real tag succeeds at deploying the wrong version. Register
-**C-266**.
+1. It first named `v0.2.0` inline and was still naming it two releases later — pasting it as-is
+   would have silently rolled production back while looking like a deploy.
+2. So it became `TAG=` set once. That removed the duplication and introduced a worse fault: the
+   second half runs under `sudo -iu`, a **fresh login shell**, where `TAG` is empty. The
+   `--expect-tag "$TAG"` assertion silently checked nothing and reported PASS on every deploy
+   that followed the runbook literally (found 2026-08-24, v0.7.0).
+3. It is now literal in both places, with `vX.Y.Z` as a **placeholder** rather than a real tag.
+
+The placeholder matters: an unedited paste fails at the deploy gate, because
+`checkout-deploy-tag.sh` cannot resolve `refs/tags/vX.Y.Z` and refuses. That is the correct
+direction — a stale placeholder fails loudly, a stale *real* tag succeeds at deploying the wrong
+version. And `smoke.py` now refuses an empty `--expect-tag` outright, so fault 2 cannot be
+rebuilt silently even if someone reintroduces the variable. Register **C-266**.
 
 **The tag must exist on the remote before the restart** — the service checks out what this file
 names, so a tag that is only local leaves the service on the old version while the file claims
@@ -292,7 +354,12 @@ locally, served output byte-identical. Tagged but **never deployed** — superse
 ingest above, plus a bounded restart loop: the deploy gate's refusals are deterministic and were
 being retried forever, which is what the 47-minute incident on 2026-08-15 actually was.
 Deployed 2026-08-21: **cold-start peak 16.8 G -> 7.3 G measured**, served
-bulk artifact byte-count unchanged at 461,991 B, streamed ingest confirmed in the journal).
+bulk artifact byte-count unchanged at 461,991 B, streamed ingest confirmed in the journal),
+**v0.7.0** (2026-08-24 — the first release to change served behaviour: `/data/{category}/latest`
+retired, so those two routes now 404 (C-232), and the 20 subset/hdi-map routes gained an
+estimated-byte bound that refuses above 512 MiB with a 413 (C-284). Deploy was clean; the smoke
+run exposed the `--expect-tag "$TAG"` fault documented above, which had been silently passing
+since the variable was introduced).
 
 
 ## Taking a cold-start memory measurement
@@ -307,8 +374,8 @@ A restart does **not** deploy a new version, and it does **not** clear the datas
 
 **Deploy first.** The service serves whatever tag the deploy-tag file names. Restarting without
 writing the file re-deploys the version already running — which is what happened on 2026-08-21,
-producing a normal restart window that was briefly mistaken for an outage. Use the `TAG=` block
-above, then confirm before going further:
+producing a normal restart window that was briefly mistaken for an outage. Use the deploy
+steps above, then confirm before going further:
 
 ```bash
 curl -s https://crafdapi.viewsforecasting.org/version    # version AND deployed_tag must be the new one
@@ -407,7 +474,7 @@ sudo journalctl -u views-crafdapi -n 60 --no-pager  # `deploy-gate: serving tag 
 that is a permissions artefact, not a silent service. The gate prints exactly one line on
 success and a `FATAL deploy-gate:` naming the cause on failure; that line is the whole diagnosis.
 
-Rollback is the `TAG=` block with the previous tag.
+Rollback is the same deploy steps with the previous tag.
 
 
 ## Memory ceilings, and removing the temporary one
