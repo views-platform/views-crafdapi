@@ -5,9 +5,9 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-24                                     |
-| Total Concerns    | 66                                             |
-| Open Concerns     | 22                                             |
-| Resolved Concerns | 44                                             |
+| Total Concerns    | 70                                             |
+| Open Concerns     | 25                                             |
+| Resolved Concerns | 45                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -659,7 +659,164 @@ Cross-refs **C-33** (views-postprocessing, the first instance), views-models **#
 
 ---
 
+### C-299: the release runbook has produced four defects of the same shape, each introduced by the fix for the last
+
+| Field | Value |
+|-------|-------|
+| ID | C-299 |
+| Tier | 2 |
+| Source | pattern analysis across C-265, C-266, C-281, C-297 (2026-08-24, after the v0.7.0 deploy) |
+| Trigger | The next time anyone edits `RELEASE_RUNBOOK.md`'s recurring release block — including to fix a defect found in it. Each of the four faults below was introduced *by an improvement to the block*, so "I am making it safer" is precisely the moment this is acute. Also when a fifth instance is found: that is the signal to stop rewriting prose and script the deploy. |
+| Location | `deployment/RELEASE_RUNBOOK.md` (the "Every future release, forever after" block) |
+
+Four defects, one document, one shape — **the runbook reads correctly and behaves differently**:
+
+| | fault | introduced by |
+|---|---|---|
+| **C-265** | steps named which *user* but the block was ambiguous about state | original authoring |
+| **C-266** | an inline real tag (`v0.2.0`) went stale across releases and would have rolled production back | authoring the tag inline |
+| **C-281** | the block labelled which *user* to be and never which *host* | the C-266 rewrite |
+| **C-297** | `--expect-tag "$TAG"` asserted nothing, because `sudo -iu` starts a fresh login shell | the `TAG=` variable that fixed C-266's duplication |
+
+The causal chain is the finding. C-266's fix (one variable, changed once) removed a duplication
+hazard and created a scope hazard. C-297's fix (literal in both places) restores the duplication
+C-266 was raised about — which is safe *only* because `vX.Y.Z` is now a placeholder that fails at
+the deploy gate, and because `smoke.py` refuses an empty `--expect-tag`. That is two independent
+mitigations holding up a document that has defeated four rounds of careful editing.
+
+**Why Tier 2 rather than 3.** This is not a documentation-quality entry. Its instances are what
+they produce: C-266 and C-297 both had the failure mode *deploy the wrong version while every
+check reports green*, which is a silent-correctness fault reached through a routine action. The
+structural fragility is that the mitigation surface is prose executed by a human under `sudo`, and
+the failure is invisible in the prose. The realistic change scenario — someone improving the block
+— has caused a new fault three times out of three.
+
+**The standing recommendation, recorded so the fifth instance does not restart the argument:** the
+answer is not another rewrite. It is a script the operator invokes with the tag as its one
+argument, so there is nothing to paste, no variable crossing a privilege boundary, and the
+verification cannot be skipped by being empty. That is deliberately *not* being done now — it is a
+change to the deploy path and belongs to a session that can watch the box, which this one could
+not.
+
+Cross-refs: **C-265**, **C-266**, **C-281**, **C-297** (the instances), **C-283** (an undocumented
+step in the same ritual), **C-282** (a procedure whose omission produces a confident wrong number
+— the same "correct-looking output from a step that did not happen" class).
+
+---
+
+### C-300: the response-size estimator's constants are calibrated against artifacts that can change without them
+
+| Field | Value |
+|-------|-------|
+| ID | C-300 |
+| Tier | 3 |
+| Source | self-review of the C-284 remedy as shipped in v0.7.0 (2026-08-24) |
+| Trigger | Before changing anything in `dataframe_to_dict` or `convert_numpy_types` — a dtype change, a column-wise rewrite, dropping the numpy conversion — and before the first delivery whose sample width or target count differs materially from the calibration runs. Any of those moves the real cost without moving the constants. |
+| Location | `src/views_crafdapi/managers/serialization.py` (`_BYTES_PER_KEYED_VALUE = 120`, `_BYTES_PER_SAMPLE_ELEMENT = 32`, `estimate_records_bytes`) |
+
+The bound that now protects the 20 data routes is only as good as two numbers, and those numbers
+are **measurements of a serializer, not properties of it**. They were calibrated by `tracemalloc`
+against two real artifacts and rounded up, and they reproduce those two cases to within 6% high.
+
+Nothing ties them to the code they describe. `dataframe_to_dict` can be rewritten — and C-284's own
+narrative already contemplates rewriting it, "revisit when `/latest` must serve materially more
+than the response budget" — with the constants left untouched. The estimate would stay confident
+and stop being true.
+
+The direction of the error decides how bad this is. Too high and the service refuses work it could
+have done: visible, annoying, reported. **Too low and the guard admits the request it exists to
+refuse**, and the failure is the original C-284 — minutes of the box, then an OOM. The rounding is
+deliberately upward for that reason, but rounding does not survive a factor.
+
+There is no drift test for this and one is not cheap: it would have to allocate the frame the guard
+exists to avoid allocating. The honest mitigation is the trigger above — treat the constants as
+part of the serializer's contract and re-measure when it changes. `tests/test_response_size_bound.py`
+pins the *shape* helper against the real frame, which catches the other half of the estimate
+(rows and columns) but says nothing about bytes-per-value.
+
+Cross-refs: **C-284** (the bound these constants size), **C-262** (the box total the budget is
+drawn against), **C-282** (the same class: a number that looks measured and describes something
+that did not happen).
+
+---
+
+### C-301: the post-deploy smoke test verifies that the service works, not that the release did what it said
+
+| Field | Value |
+|-------|-------|
+| ID | C-301 |
+| Tier | 3 |
+| Source | the v0.7.0 deploy — the release's headline change had to be verified by hand (2026-08-24) |
+| Trigger | Before the next release that changes the route surface — adds, removes or re-paths an endpoint — and before trusting `ALL PASS` as evidence that such a release landed. Also when a rollback is performed: the same blindness means smoke cannot tell a rolled-back surface from a current one. |
+| Location | `src/views_crafdapi/smoke.py` (`run`, `check_ping`/`check_version`/`check_health`/coverage checks), `deployment/RELEASE_RUNBOOK.md` (Step 5 of the recurring block) |
+
+v0.7.0's entire purpose was to **remove two routes**. `smoke.py --expect-tag v0.7.0` returned
+`ALL PASS` — and would have returned exactly the same on v0.6.1, where those routes still answered
+`200` with valueless rows. The checks cover liveness, version, health, coverage at one country, and
+cache warmth. None of them looks at the route surface.
+
+The retirement was confirmed by curling the two paths by hand and reading `404`, plus a third curl
+to a surviving route to establish that the 404s meant *retired* and not *service broken*. That
+reasoning is exactly what a check should encode, and it lives nowhere.
+
+This is not an argument for asserting the whole catalogue on every deploy. The cheap, durable
+version is: the root endpoint already publishes its own catalogue, and `/version` already reports
+the deployed tag — so smoke can assert that **every path the running service advertises actually
+resolves**, which would have caught both a stale catalogue entry and a route that vanished
+unintentionally, without anyone maintaining a list.
+
+Registered rather than fixed because the shape of the assertion is a design question, and because
+the release it was found by is already verified.
+
+Cross-refs: **C-297** (the other half of "the post-deploy check does not check what you think":
+that one asserted the tag against nothing, this one asserts the wrong thing), **C-295** (a guard
+that never runs — same family, different mechanism), **C-232** (the retirement this failed to
+observe).
+
+---
+
 ## Resolved Concerns
+
+### C-298 (RESOLVED): the register header was maintained by hand and checked only for summing — it read 54/11 against a document holding 22/43
+
+| Field | Value |
+|-------|-------|
+| ID | C-298 |
+| Tier | 3 |
+| Source | discovered while resolving C-284 (2026-08-24) |
+| Status | **RESOLVED 2026-08-24** — the header is corrected and `tests/test_register_counts.py` now measures the document. |
+| Trigger | Was: any entry added or resolved. Now: adding a third status convention — the guard understands "under `## Resolved Concerns`" and "`(RESOLVED)` in the heading", and a new one would be counted as open. |
+| Location | `reports/technical_risk_register.md` (header block), `tests/test_register_counts.py` |
+
+The header's counts were maintained by hand and decremented by whoever remembered. The only check
+ever applied was that Open + Resolved equalled Total — **and it did, the whole time both numbers
+were wrong.** A sum is not a measurement of the thing being summed, and I applied exactly that
+check earlier in the same session and called the header verified.
+
+Measured against the document: **22 open, 43 resolved, 66 total** (at the time of the fix, before
+C-297 and this entry). The header said 54 and 11.
+
+**The cost was not hypothetical, and it landed on another entry in this register.** C-291 compares
+convergence across the platform's repos and reports this one at **9% resolved** against
+views-frames' 89% and views-datafactory's 87% — a table it states was "read from each repo's own
+header". Measured instead of read, this repo is at **67%**, which puts it beside views-bayesian
+(60%) rather than in a class of its own. C-291's headline claim about this repository was an
+artifact of the broken header; its second half — that no ADR has ever been marked superseded — is
+independently verifiable and stands. C-291 has been corrected in place.
+
+The register is the input to prioritisation. A header claiming 54 open concerns describes a
+different project from one with 22, and the error is paid by whoever reads it to decide what to
+work on next — which, in C-291's case, was this repository's own architecture audit.
+
+Guards: `tests/test_register_counts.py` (3) — the counts must match the entries, must remain
+internally consistent, and no id may appear twice. Confirmed to fire on the exact error, and it
+caught the very next entry (C-297) landing without a header update.
+
+Cross-refs: **C-291** (corrected by this finding), **C-282** and **C-300** (numbers that look
+measured and are not — the same class), issue **#84** (legacy triage, which reads these counts).
+
+---
+
 
 ### C-297 (RESOLVED): `smoke.py --expect-tag "$TAG"` asserted nothing on every deploy that followed the runbook
 
@@ -827,6 +984,15 @@ PR #93 preserves the silent-skip behaviour deliberately, to keep the change beha
 | Source | production `dmesg` + `systemctl status`, taken during the v0.4.0 deploy (2026-08-18) |
 | Trigger | Before the next dataset grows — a longer month horizon, the ADR-034 `ADDITIONAL_TARGETS` list, or a finer grain — check the peak of BOTH units against the box total, not just the one you changed. Also check this before adding any endpoint that materialises a full-history frame. |
 | Location | `/etc/systemd/system/views-crafdapi.service`, `/etc/systemd/system/views-faoapi.service` (neither declares `MemoryMax=`); `deployment/RELEASE_RUNBOOK.md` |
+
+**Extended 2026-08-24 — there is now a second per-service number drawn against this same box, and
+nothing keeps the two in step.** v0.7.0's response-size budget (C-284) refuses above 512 MiB, a
+figure sized for *this* host by the co-tenant API and reused here deliberately so the two services
+do not each assume the whole machine. But the coordination is a comment in each repo, not a
+mechanism: `CRAFDAPI_MAX_RESPONSE_BYTES` can be raised on one service during an incident with no
+signal to the other, and the same is true of the co-tenant's equivalent. Two independent per-request
+budgets plus two independent `MemoryMax` values, all drawn on 22 GiB with no swap, are held
+consistent only by whoever remembers both. Check both services when changing either.
 
 `views-crafdapi` and `views-faoapi` share one 22 GiB host. Measured on 2026-08-18, before the S7 deploy:
 
@@ -2056,8 +2222,21 @@ entries through in place — `| ~~C-253~~ | ~~1~~ | ~~...~~ | Resolved 2026-06-0
 `Status: actionable | awaiting — <precondition>` field in 2026-07 for precisely this problem, its
 own note being that a raw open-count had stopped being informative.
 
-Neither is a large change. The absence of both is why 53 open entries carry no signal about which
+Neither is a large change. The absence of both is why the open entries carry no signal about which
 can be worked today.
+
+**Corrected 2026-08-24 — the 9% was an artifact of a broken header, not a real divergence.** The
+table above states it was "read from each repo's own header", and this repo's header was wrong:
+maintained by hand, checked only for summing, and reading 54 open / 11 resolved against a document
+holding **22 and 43** (**C-298**). Measured rather than read, views-crafdapi is at **67% resolved**
+— beside views-bayesian's 60%, not in a class of its own. The comparison that motivated this entry
+does not survive its own correction.
+
+**What still stands, and is why this entry stays open.** Neither mechanism it recommends exists
+here: there is no `Status: actionable | awaiting — <precondition>` field, so a reader still cannot
+tell which open entries are blocked on the operator or on the box; and resolved entries are marked
+in place rather than archived, so the active register stays long. Those were the actionable half of
+this entry and neither has been done. The ADR half below is untouched by the correction.
 
 The ADR side is the same shape. 38 ADRs, 36 under `docs/ADRs/active/`, with status values
 `Accepted` (26, in two spellings), `Implemented` (5), `Proposed` (3), `Active` (1). **None is
@@ -2069,10 +2248,11 @@ retains superseded ADRs in place and marks them (*"Accepted — superseded in pa
 declared dependency direction had been wrong and was corrected to match the code.
 
 Tier 4: nothing incorrect is served because of this, and no reliability property depends on it. It
-is registered because it is the mechanism by which the other 53 entries stay hard to act on.
+is registered because it is the mechanism by which the remaining open entries stay hard to act on.
 
-Cross-refs: **C-241**/issue **#101** (citation drift in the same records), issue **#84** (legacy
-triage — the same "which of these is still live?" question).
+Cross-refs: **C-298** (the broken header this entry's comparison was read from — corrected above),
+**C-241**/issue **#101** (citation drift in the same records), issue **#84** (legacy triage — the
+same "which of these is still live?" question).
 
 ---
 
