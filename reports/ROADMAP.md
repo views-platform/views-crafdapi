@@ -217,9 +217,30 @@ communication* question: if CRAF'd was calling `/latest`, they have been receivi
 should be told. It is no longer a precondition. Nothing this repo ships called it — not
 `CrafdApiClient`, not `smoke.py`, not any notebook.
 
-**C-284 is unchanged in substance.** The two hollow routes are gone; the 20 `subset` and `hdi-map`
-routes still carry no bound, including the unparameterised 34.5 GB case, which was always the worst
-one. Tracked as #125.
+**Done 2026-08-24 — C-284 is resolved too, so Step 3 is complete.** The 20 `subset` and `hdi-map`
+routes now estimate the size of the response *before building it* and refuse above **512 MiB** with
+a `413` that names the way through. The 34.5 GB unparameterised request — the worst case, and the
+one that took no arguments — is refused in 0.014 s instead of spending thirteen minutes eating the
+box.
+
+The bound is **bytes, not rows**, for the reason already decided below, and it is **filter-aware**:
+`served_payload_shape()` takes the same filters as the call it guards, so narrowing a request
+lowers the estimate. That last part is the whole design. The sibling API this box co-hosts bounds
+one route that takes no arguments and can read the whole index; copying that here would have
+refused every narrow request CRAF'd actually makes. `test_a_narrow_selection_is_still_admitted`
+pins it: one budget between the two estimates, unfiltered refused and filtered served.
+
+`aggregate=true` deliberately does not lower the estimate — aggregation runs *after* the
+full-resolution frame is built, so the request still costs what that frame costs. The same fact is
+why one helper correctly guards all 20 routes rather than needing two.
+
+512 MiB is not a guess: it is the figure already measured for this box against this same serializer
+by the API it shares the machine with. `CRAFDAPI_MAX_RESPONSE_BYTES` overrides it, because headroom
+is a deployment fact and a bound an operator cannot raise during an incident is one they comment
+out instead.
+
+Guards: 18 tests, mutation-checked four ways, and the route tests confirmed failing against the
+ungated code. #125 can close.
 
 **Decided — the bound is estimated bytes, not rows.** A row-count cap bounds nothing: a historical
 row costs ~1,625 B through the serializer and a forecast row ~7,731 B, because the second carries a

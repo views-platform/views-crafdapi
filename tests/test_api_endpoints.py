@@ -13,6 +13,7 @@ from tests.conftest import make_fao_df
 from views_crafdapi.managers.api import CrafdApiManager
 from views_crafdapi.managers.appwrite import OperationResult
 from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.managers.serialization import estimate_records_bytes
 
 pytestmark = pytest.mark.layer3_http
 
@@ -207,6 +208,93 @@ class TestSubsetEndpoints:
         client, _, _ = app_client
         resp = client.get("/country/data/historical/subset", headers=HEADERS)
         assert resp.status_code == 200
+
+
+class TestResponseSizeBound:
+    """C-284: a request whose rendering the box cannot afford is refused, not attempted.
+
+    The budget is driven through `CRAFDAPI_MAX_RESPONSE_BYTES` rather than by building a huge
+    fixture, because the thing under test is the decision, not the arithmetic -- and a test that
+    had to materialise 34.5 GB to prove we refuse to materialise 34.5 GB would be self-defeating.
+    """
+
+    def _estimates(self, mgr):
+        """The full and narrow estimates for the fixture dataset, computed the way the route does.
+
+        Derived rather than hard-coded so a change to the fixture cannot silently make the
+        budget in `test_a_narrow_selection_is_still_admitted` meaningless.
+        """
+        dataset = mgr._dataframe_cache[mgr._get_api_key_hash("test-api-key")]["historical"][
+            "dataset"
+        ]
+        full = estimate_records_bytes(*dataset.served_payload_shape())
+        narrow = estimate_records_bytes(
+            *dataset.served_payload_shape(
+                time_ids=[600], features=["pred_lr_ged_sb"], sample_idx=[0]
+            )
+        )
+        return full, narrow
+
+    def test_a_selection_over_budget_is_refused(self, app_client, monkeypatch):
+        client, _, _ = app_client
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", "1")
+        resp = client.get("/pg/data/historical/subset", headers=HEADERS)
+        assert resp.status_code == 413
+
+    def test_hdi_map_is_bounded_too(self, app_client, monkeypatch):
+        """The reduction runs on a frame that must exist first, so it needs the same bound."""
+        client, _, _ = app_client
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", "1")
+        resp = client.get("/pg/analysis/historical/hdi-map", headers=HEADERS)
+        assert resp.status_code == 413
+
+    @pytest.mark.parametrize(
+        "category,expected",
+        [("historical", "/provenance/historical"), ("forecast", "/data/forecast/bulk")],
+    )
+    def test_the_refusal_says_how_to_get_the_data(
+        self, app_client, monkeypatch, category, expected
+    ):
+        """A refusal that does not name a way through is an outage with better manners.
+
+        The two categories get different advice on purpose: forecast has a single-call parquet
+        route and historical does not.
+        """
+        client, _, _ = app_client
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", "1")
+        resp = client.get(f"/pg/data/{category}/subset", headers=HEADERS)
+        assert resp.status_code == 413
+        detail = resp.json()["detail"]
+        assert expected in detail
+        assert "filters" in detail or "filter" in detail
+
+    def test_a_narrow_selection_is_still_admitted(self, app_client, monkeypatch):
+        """The property the design turns on, end to end through the route.
+
+        One budget, set between the two estimates: the unfiltered request is refused and the
+        filtered one succeeds. A bound computed on the full table -- the shortcut the sibling
+        API can afford, because its guarded route takes no filters -- would fail this, and would
+        refuse exactly the requests CRAF'd makes.
+        """
+        client, mgr, _ = app_client
+        full, narrow = self._estimates(mgr)
+        assert narrow < full, "fixture no longer distinguishes the two cases"
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", str((full + narrow) // 2))
+
+        assert client.get("/pg/data/historical/subset", headers=HEADERS).status_code == 413
+        assert (
+            client.get(
+                "/pg/data/historical/subset",
+                params={"time_ids": "600", "features": "pred_lr_ged_sb", "sample_idx": "0"},
+                headers=HEADERS,
+            ).status_code
+            == 200
+        )
+
+    def test_the_default_budget_admits_the_ordinary_request(self, app_client):
+        """With no override, nothing about normal serving changes."""
+        client, _, _ = app_client
+        assert client.get("/pg/data/historical/subset", headers=HEADERS).status_code == 200
 
 
 # ============================================================

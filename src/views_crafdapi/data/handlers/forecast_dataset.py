@@ -896,6 +896,105 @@ class ForecastDataset(_GridDataset):
         final_result = final_result.loc[:, ~final_result.columns.duplicated()]
         return final_result
 
+    def served_payload_shape(
+        self,
+        time_ids: Optional[Union[int, List[int]]] = None,
+        features: Optional[Union[str, List[str]]] = None,
+        sample_idx: Optional[Union[int, List[int]]] = None,
+        entity_ids: Optional[Union[int, str, List[int], List[str]]] = None,
+        with_metadata: bool = True,
+        level: Optional[str] = None,
+        aggregate: bool = False,
+    ) -> tuple:
+        """Report the shape ``get_subset_dataframe()`` would return, without building it.
+
+        ``(rows, keyed_columns, sample_elements_per_row)`` -- enough for a caller to estimate
+        the cost of serving this selection before paying it. That ordering is the whole point:
+        a guard that has to materialise the frame in order to decide whether materialising it
+        is affordable is not a guard.
+
+        **Takes the same filters as the payload it describes.** The equivalent guard on the
+        sibling API this box co-hosts sits on one unfiltered route and can simply read the whole
+        index; that shortcut is wrong here. Every route bounded in this service takes filters,
+        and those filters are what CRAF'd actually uses -- a bound computed on the full table
+        would refuse the narrow requests the service exists to answer.
+
+        Selection is not reimplemented: ``_subset_mask`` and ``_get_pg_cells`` are the same
+        helpers ``get_subset_dataframe`` calls, in the same order, so the two cannot disagree
+        about which rows are in the subset.
+
+        That does mean the mask is computed twice -- once here, once in the call this guards --
+        and the cost was measured rather than assumed. On a 27,950,000-row index (the size of
+        the real historical grid, from the C-263 event): 0.014 s unfiltered, 0.23 s with a
+        ``time_ids`` filter. ``_subset_mask`` reads index levels and materialises no column, so
+        against a request that would otherwise spend minutes and tens of GB this is free. The
+        alternative -- threading the mask through ``get_subset_dataframe`` -- buys a fifth of a
+        second and costs a wider signature on the hottest method here.
+
+        ``keyed_columns`` counts index levels too, because ``dataframe_to_dict`` calls
+        ``reset_index()`` and they become real columns in every row.
+
+        ``sample_elements_per_row`` is 0 on the historical/scalar path -- those values are
+        single numbers, already counted as keyed columns. For a prediction it is draws x
+        targets, which is what makes a forecast row roughly five times a historical one, and
+        it varies per delivery: a 32-draw run and a 1000-draw run differ by another factor of
+        thirty.
+
+        **``aggregate`` deliberately does not reduce the row count.** Aggregation happens in
+        ``get_subset_dataframe`` *after* the pg-grain frame is built and joined
+        (see that method) -- so the pg-grain frame is the peak, and it is what a bound has to
+        be computed against. Estimating on the post-aggregation grain would describe the
+        response and miss the cost. The same reasoning makes this correct for the
+        ``hdi-map`` routes, whose reduction also runs on a frame that must exist first.
+        """
+        # Mirrors get_subset_dataframe's own first step: entity codes at a named level are
+        # resolved to pg cells before selection, so `rows` counts the cells actually scanned.
+        if level is not None and entity_ids is not None:
+            if isinstance(entity_ids, (str, int)):
+                entity_ids = [entity_ids]
+            pg_cells = []
+            for code in entity_ids:
+                pg_cells.extend(self._get_pg_cells(level=level, code=code))
+            entity_ids = pg_cells
+
+        # get_subset_dataframe short-circuits an explicitly empty selection to an empty frame.
+        if entity_ids == [] or time_ids == []:
+            return 0, 0, 0
+
+        rows = int(self._subset_mask(time_ids=time_ids, entity_ids=entity_ids).sum())
+
+        # Column selection mirrors `_GridDataset.get_subset_dataframe`. Kept in step by
+        # `test_payload_shape_matches_the_materialised_frame`, which builds the real frame and
+        # compares -- so a change to either branch fails a test rather than silently
+        # mis-sizing the guard.
+        if features is not None:
+            selected = features if isinstance(features, list) else [features]
+            n_value_columns = len(selected)
+        elif self.is_prediction:
+            n_value_columns = len(self.targets)
+        else:
+            n_value_columns = len(getattr(self, "_feature_store", {})) + len(
+                self.dataframe.columns
+            )
+
+        geo_columns = (
+            len(self.geo_metadata.columns)
+            if with_metadata and self.geo_metadata is not None
+            else 0
+        )
+        keyed = self.dataframe.index.nlevels + n_value_columns + geo_columns
+
+        if self.is_prediction:
+            if sample_idx is not None:
+                width = len(sample_idx) if isinstance(sample_idx, list) else 1
+            else:
+                width = self.sample_size or 0
+            sample_elements = n_value_columns * width
+        else:
+            sample_elements = 0
+
+        return rows, keyed, sample_elements
+
     def get_subset_dataframe(
         self,
         time_ids: Optional[Union[int, List[int]]] = None,

@@ -125,6 +125,11 @@ HDI-MAP (by level)
 - GET `/{pg|country|gaul1|gaul2}/analysis/historical/hdi-map`
 - GET `/{pg|country|gaul1|gaul2}/analysis/forecast/hdi-map`
 
+> **Size limit.** The subset and hdi-map routes estimate the response before building it and
+> return `413` above 512 MiB, with a body naming how to narrow the request or fetch the whole
+> table instead. Filters lower the estimate; `aggregate=true` does not. Override with
+> `CRAFDAPI_MAX_RESPONSE_BYTES`. See [docs/api/README.md](docs/api/README.md#35-response-size-limit).
+
 Files
 - GET `/files/{bucket_id}`
 - GET `/files/{bucket_id}/{file_id}/info`
