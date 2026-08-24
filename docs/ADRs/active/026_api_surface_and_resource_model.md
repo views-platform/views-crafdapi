@@ -43,7 +43,9 @@ The data/analysis surface follows one URL grammar:
 - **`analysis/.../hdi-map`** returns computed MAP + HDI summaries at `level`.
 - The **`pg`** prefix is the native PRIO-GRID grain; `country`/`gaul0`/`gaul1`/`gaul2` are aggregation levels. Aggregation is performed by the conservation-correct joint-sum (the `aggregate=true` parameter; cf. C-70, the forecast `forecast/aggregate` path).
 
-Two **non-levelled** convenience endpoints return the full latest dataframe of a category: `/data/historical/latest` and `/data/forecast/latest`.
+~~Two **non-levelled** convenience endpoints return the full latest dataframe of a category: `/data/historical/latest` and `/data/forecast/latest`.~~
+
+> **Amended 2026-08-24 — both retired (register C-232).** They answered HTTP 200 with rows carrying no values: ADR-030 §5 moved samples and scalars out of `.dataframe`, and the handlers served that index-only frame directly. Measured live before removal: 88,357,820 bytes in 9.04 s for `/data/forecast/latest`, every row carrying only `month_id` and `priogrid_id`. Retired rather than fixed because nothing this repo ships called them, and any caller that did was already receiving a successful-looking empty answer — a 404 tells a caller to stop, a valueless 200 does not. The levelled `subset` routes serve the same need with a filter.
 
 ### 3. Auxiliary surfaces: provenance, file access, cache, health
 

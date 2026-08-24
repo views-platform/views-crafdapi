@@ -31,13 +31,12 @@ monitor and still fails this goal. The heartbeat in step 4 is what closes that g
 *Set 2026-08-24, after the previous definition of done — EPIC #40, "CRAF'd can actually use this
 API, proven with real data" — was completed and closed.*
 
-*The four steps are agreed and most specs are now written down. **Four things are still open**, each
+*The four steps are agreed and most specs are now written down. **Three things are still open**, each
 marked in place rather than papered over with a plausible-sounding sentence:*
 
 | | what | whose |
 |---|---|---|
 | **`DECISION NEEDED`** | how multi-target composition works across pgm and cm | design, upstream |
-| **`NEEDS YOUR NOD`** | retire `/latest` rather than bound it | partner-facing call |
 | **`SPEC NEEDED`** | who runs the *first* delivery (step 4 decides where the recurring one runs) | operator |
 | **`SPEC NEEDED`** | who owns the cron entry and the heartbeat account | operator |
 
@@ -200,21 +199,27 @@ consumer-ready while they stand.
 - **No data route has any size bound** (**C-284**). `GET /pg/data/historical/subset` with no query
   string asks for 34.5 GB — more than the machine has.
 
-**Recommended, not yet ratified — retire `/latest` rather than bound it.** C-284 already calls
-retirement *"probably right and the largest change"*. It is hollow, and retiring it deletes a Tier 1
-defect instead of guarding it.
+**Done 2026-08-24 — `/latest` is retired.** Both route handlers are gone, along with their entries
+in the root endpoint catalog, `README.md`, `docs/api/README.md`, and ADR-026 (amended in place, the
+original struck through rather than deleted). **C-232 is resolved by retirement**, not by a fix.
 
-**But the usage claim behind it is not evidence, and an earlier draft of this section overstated
-it.** What is actually known is narrower: the register says only that *CRAF'd uses
-`/data/forecast/bulk` and the subset routes*, and that `/latest` needs a valid key so it is not
-reachable by accident. That is an inference about what CRAF'd uses — **not** a record of what
-anything calls. Nobody has looked.
+An earlier draft of this section made the retirement conditional on an nginx log read. That was the
+wrong gate, and the decision table shows why:
 
-**So the precondition for retiring it is a check, not a nod:** read the nginx access log for calls
-to `/data/*/latest` over a period that covers at least one monthly cycle. If it is genuinely unused,
-retire it. If something is calling it, that changes the decision entirely and is worth knowing
-before a breaking change, not after. That log read is an operator action and has been outstanding
-since 2026-08-23. `NEEDS YOUR NOD` — on the retirement, *after* the log says what it says.
+| | keep it | retire it |
+|---|---|---|
+| nobody calls it | harmless | harmless |
+| someone calls it | **silent wrong answer** | loud 404 |
+
+Retirement is at least as good in both branches, so no log read can change the answer — a 404 tells
+a caller to stop; a valueless 200 does not. The log read remains worth doing as a *partner-
+communication* question: if CRAF'd was calling `/latest`, they have been receiving empty rows and
+should be told. It is no longer a precondition. Nothing this repo ships called it — not
+`CrafdApiClient`, not `smoke.py`, not any notebook.
+
+**C-284 is unchanged in substance.** The two hollow routes are gone; the 20 `subset` and `hdi-map`
+routes still carry no bound, including the unparameterised 34.5 GB case, which was always the worst
+one. Tracked as #125.
 
 **Decided — the bound is estimated bytes, not rows.** A row-count cap bounds nothing: a historical
 row costs ~1,625 B through the serializer and a forecast row ~7,731 B, because the second carries a
