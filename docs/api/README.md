@@ -58,7 +58,31 @@ Tabular payloads (`data.dataframe` or `data.hdi_map`) also carry `shape`, `colum
 |--------|---------|
 | `422` | Missing/invalid parameter (e.g. unknown `category`, missing `X-API-Key`). |
 | `404` | No artifact of the requested category exists in the bucket. |
+| `413` | The selection is too large to render as JSON. See [Response size limit](#35-response-size-limit). |
 | `500` | Unhandled server/upstream error (`detail` carries the message). |
+
+### 3.5 Response size limit
+
+The `subset` and `hdi-map` routes estimate the size of the response **before building it**, and
+refuse with `413` above **512 MiB**. That admits roughly 320,000 historical rows, or 65,000 rows of
+a 32-draw forecast.
+
+The bound is in bytes rather than rows because a row is not a fixed cost: a historical row runs
+~1,625 B and a forecast row ~7,731 B, since the second carries a posterior draw per sample per
+target — and sample width varies per delivery, so a 32-draw run and a 1000-draw run differ by
+another factor of thirty. One row number could not be right for both.
+
+The estimate accounts for the filters you send, so **narrowing the request lowers it**: `time_ids`,
+`entity_ids` and `features` reduce the estimate directly, and `sample_idx` reduces it for forecasts.
+`aggregate=true` does **not**, because aggregation runs after the full-resolution frame is built —
+the request still costs what the pre-aggregation frame costs.
+
+The `413` body names the way through: filters, or the whole-table route for that category
+(`GET /data/forecast/bulk` for forecasts; `GET /provenance/historical` then the file download for
+historical). **Nothing is unreachable because of this limit** — it bounds one rendering, not the data.
+
+Operators can override the budget with the `CRAFDAPI_MAX_RESPONSE_BYTES` environment variable
+(bytes). An unset, unparseable, or non-positive value falls back to the 512 MiB default.
 
 ---
 
@@ -77,7 +101,6 @@ The levelled surface follows `/{level}/{kind}/{category}/{operation}` (ADR-026):
 |---------------|---------|
 | `GET /{level}/data/{category}/subset` | Rows of the latest dataframe at `level`, filtered by query params. |
 | `GET /{level}/analysis/{category}/hdi-map` | MAP + HDI summaries at `level`. |
-| `GET /data/{category}/latest` | The full latest dataframe of a category (non-levelled, PRIO-GRID grain). |
 
 `pg` is the native PRIO-GRID grain; `country`/`gaul0`/`gaul1`/`gaul2` are aggregation levels (pass `aggregate=true` to roll up). Forecast aggregation uses the conservation-correct joint-sum (`HDI(Σ) ≠ ΣHDI`).
 
@@ -140,7 +163,7 @@ Latest forecast (full, PRIO-GRID grain):
 
 ```bash
 curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
-  https://crafdapi.viewsforecasting.org/data/forecast/latest
+  "https://crafdapi.viewsforecasting.org/pg/data/forecast/subset?time_ids=559"
 ```
 
 Forecast HDI + MAP aggregated to GAUL admin-1, 90% HDI, for two months:

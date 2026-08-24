@@ -13,6 +13,7 @@ from tests.conftest import make_fao_df
 from views_crafdapi.managers.api import CrafdApiManager
 from views_crafdapi.managers.appwrite import OperationResult
 from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.managers.serialization import estimate_records_bytes
 
 pytestmark = pytest.mark.layer3_http
 
@@ -169,26 +170,23 @@ class TestCacheStatsEndpoint:
 # ============================================================
 
 
-class TestLatestDataEndpoints:
+class TestLatestDataEndpointsAreRetired:
+    """`/data/{category}/latest` was retired 2026-08-24 (register C-232).
 
-    def test_historical_latest_returns_200(self, app_client):
-        client, _, _ = app_client
-        resp = client.get("/data/historical/latest", headers=HEADERS)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert "dataframe" in body["data"]
+    It answered 200 with rows carrying no values, and these two tests were the only ones that
+    touched it — named `*_returns_200`, asserting exactly that and nothing about the payload.
+    They are the reason a Tier 1 defect sat open from 2026-08-10 behind a green suite."""
 
-    def test_forecast_latest_returns_200(self, app_client):
+    @pytest.mark.parametrize("category", ["historical", "forecast"])
+    def test_latest_is_gone(self, app_client, category):
         client, _, _ = app_client
-        resp = client.get("/data/forecast/latest", headers=HEADERS)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["data"]["category"] == "forecast"
+        assert client.get(f"/data/{category}/latest", headers=HEADERS).status_code == 404
 
     def test_missing_api_key_returns_422(self, app_client):
+        """Re-pointed off `/latest` at a surviving keyed route — the behaviour under test is
+        FastAPI's missing-header handling, which was never specific to that endpoint."""
         client, _, _ = app_client
-        resp = client.get("/data/historical/latest")
+        resp = client.get("/pg/data/historical/subset")
         assert resp.status_code == 422
 
 
@@ -210,6 +208,93 @@ class TestSubsetEndpoints:
         client, _, _ = app_client
         resp = client.get("/country/data/historical/subset", headers=HEADERS)
         assert resp.status_code == 200
+
+
+class TestResponseSizeBound:
+    """C-284: a request whose rendering the box cannot afford is refused, not attempted.
+
+    The budget is driven through `CRAFDAPI_MAX_RESPONSE_BYTES` rather than by building a huge
+    fixture, because the thing under test is the decision, not the arithmetic -- and a test that
+    had to materialise 34.5 GB to prove we refuse to materialise 34.5 GB would be self-defeating.
+    """
+
+    def _estimates(self, mgr):
+        """The full and narrow estimates for the fixture dataset, computed the way the route does.
+
+        Derived rather than hard-coded so a change to the fixture cannot silently make the
+        budget in `test_a_narrow_selection_is_still_admitted` meaningless.
+        """
+        dataset = mgr._dataframe_cache[mgr._get_api_key_hash("test-api-key")]["historical"][
+            "dataset"
+        ]
+        full = estimate_records_bytes(*dataset.served_payload_shape())
+        narrow = estimate_records_bytes(
+            *dataset.served_payload_shape(
+                time_ids=[600], features=["pred_lr_ged_sb"], sample_idx=[0]
+            )
+        )
+        return full, narrow
+
+    def test_a_selection_over_budget_is_refused(self, app_client, monkeypatch):
+        client, _, _ = app_client
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", "1")
+        resp = client.get("/pg/data/historical/subset", headers=HEADERS)
+        assert resp.status_code == 413
+
+    def test_hdi_map_is_bounded_too(self, app_client, monkeypatch):
+        """The reduction runs on a frame that must exist first, so it needs the same bound."""
+        client, _, _ = app_client
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", "1")
+        resp = client.get("/pg/analysis/historical/hdi-map", headers=HEADERS)
+        assert resp.status_code == 413
+
+    @pytest.mark.parametrize(
+        "category,expected",
+        [("historical", "/provenance/historical"), ("forecast", "/data/forecast/bulk")],
+    )
+    def test_the_refusal_says_how_to_get_the_data(
+        self, app_client, monkeypatch, category, expected
+    ):
+        """A refusal that does not name a way through is an outage with better manners.
+
+        The two categories get different advice on purpose: forecast has a single-call parquet
+        route and historical does not.
+        """
+        client, _, _ = app_client
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", "1")
+        resp = client.get(f"/pg/data/{category}/subset", headers=HEADERS)
+        assert resp.status_code == 413
+        detail = resp.json()["detail"]
+        assert expected in detail
+        assert "filters" in detail or "filter" in detail
+
+    def test_a_narrow_selection_is_still_admitted(self, app_client, monkeypatch):
+        """The property the design turns on, end to end through the route.
+
+        One budget, set between the two estimates: the unfiltered request is refused and the
+        filtered one succeeds. A bound computed on the full table -- the shortcut the sibling
+        API can afford, because its guarded route takes no filters -- would fail this, and would
+        refuse exactly the requests CRAF'd makes.
+        """
+        client, mgr, _ = app_client
+        full, narrow = self._estimates(mgr)
+        assert narrow < full, "fixture no longer distinguishes the two cases"
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", str((full + narrow) // 2))
+
+        assert client.get("/pg/data/historical/subset", headers=HEADERS).status_code == 413
+        assert (
+            client.get(
+                "/pg/data/historical/subset",
+                params={"time_ids": "600", "features": "pred_lr_ged_sb", "sample_idx": "0"},
+                headers=HEADERS,
+            ).status_code
+            == 200
+        )
+
+    def test_the_default_budget_admits_the_ordinary_request(self, app_client):
+        """With no override, nothing about normal serving changes."""
+        client, _, _ = app_client
+        assert client.get("/pg/data/historical/subset", headers=HEADERS).status_code == 200
 
 
 # ============================================================
@@ -348,8 +433,11 @@ class TestOperationResultDataConsumers:
         mock_pm.get_latest_file_id.return_value = OperationResult(
             success=True, data={"file_id": "file_001"}
         )
+        # Re-pointed off the retired `/latest` onto a subset route: the behaviour under test is
+        # the INGEST error path (`download_prediction` returning data with no `file_bytes`), which
+        # every route reaches via `get_latest_dataset` → `get_latest_dataframe`.
         resp = client.get(
-            "/data/historical/latest",
+            "/pg/data/historical/subset",
             params={"force_refresh": "true"},
             headers=HEADERS,
         )

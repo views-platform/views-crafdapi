@@ -1,7 +1,7 @@
 # CRAF'd Forecast API (views-crafdapi)
 
 FastAPI service for retrieving and analyzing CRAF'd prediction data stored in Appwrite. It provides:
-- Retrieval of latest historical and forecast prediction datasets
+- Retrieval of historical and forecast prediction data, filtered by month, entity and feature
 - Flexible subsetting by time, entity, features, and samples
 - Computation of Highest Density Intervals (HDI) and MAP estimates
 - Aggregation to country and GAUL administrative levels
@@ -117,10 +117,6 @@ Root
 Health
 - GET `/health` — checks Appwrite connectivity and cache stats
 
-Latest data
-- GET `/data/historical/latest`
-- GET `/data/forecast/latest`
-
 Subset (by level)
 - GET `/{pg|country|gaul1|gaul2}/data/historical/subset`
 - GET `/{pg|country|gaul1|gaul2}/data/forecast/subset`
@@ -128,6 +124,11 @@ Subset (by level)
 HDI-MAP (by level)
 - GET `/{pg|country|gaul1|gaul2}/analysis/historical/hdi-map`
 - GET `/{pg|country|gaul1|gaul2}/analysis/forecast/hdi-map`
+
+> **Size limit.** The subset and hdi-map routes estimate the response before building it and
+> return `413` above 512 MiB, with a body naming how to narrow the request or fetch the whole
+> table instead. Filters lower the estimate; `aggregate=true` does not. Override with
+> `CRAFDAPI_MAX_RESPONSE_BYTES`. See [docs/api/README.md](docs/api/README.md#35-response-size-limit).
 
 Files
 - GET `/files/{bucket_id}`
@@ -207,8 +208,8 @@ HDI-MAP endpoints
 
 Curl (macOS)
 ```bash
-# Historical latest (force refresh)
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/data/historical/latest?force_refresh=true"
+# Historical subset at PG level (force refresh)
+curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/pg/data/historical/subset?time_ids=540&force_refresh=true"
 
 # Forecast subset at PG level for specific months and features
 curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/pg/data/forecast/subset?time_ids=252,253&features=pred_lr_ged_sb&sample_idx=0,1&with_metadata=true"
