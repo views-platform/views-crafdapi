@@ -2305,14 +2305,14 @@ redaction defect in `wandb/utils.py` — same vestigial corner), **C-284**/issue
 
 ---
 
-### C-293 (CORRECTED, downgraded 1 -> 3): the bulk `*_actual` columns are undocumented, not broken
+### C-293 (CORRECTED TWICE, downgraded 1 -> 3): the bulk `*_actual` columns are undocumented, not broken — and the frontier month is sparse, not empty
 
 | Field | Value |
 |-------|-------|
 | ID | C-293 |
 | Tier | 1 |
 | Source | route-by-route functionality probe against real artifacts (2026-08-23) |
-| Trigger | Before CRAF'd — or anyone — computes a forecast-vs-actual skill score from the bulk parquet. Also whenever a new forecast run shifts the window: check how many of its months overlap the historical series, and whether the overlap month carries data. |
+| Trigger | Before CRAF'd — or anyone — computes a forecast-vs-actual skill score from the bulk parquet. Also whenever a new forecast run shifts the window: check how many of its months overlap the historical series, and — across ALL delivered targets, not one — how many cells of the overlap month carry any event, compared with the months before it. A sum of zero on one column is not a measurement of the month. |
 | Location | `src/views_crafdapi/forecast/serialize/bulk_parquet.py` (`build_bulk_table`, `_actual_by_admin1`), `src/views_crafdapi/managers/api.py` (`get_forecast_bulk_parquet`) |
 
 **CORRECTION 2026-08-23 — the original entry was wrong, and its Tier 1 rating with it.**
@@ -2323,12 +2323,52 @@ I filed this as silent corruption on the delivery path. It is not. **`month_id` 
 `historical_dataset_20260814_203554.parquet` was cut **2026-08-14**. VIEWS historical fatalities lag
 one month: July's numbers reach views-datafactory around **20 August**.
 
-So the artifact was built **six days before July's data existed**. Month 559 is zero because it had
-not arrived. That is correct behaviour, and a fresh artifact cut after ~20 August carries it.
+So the artifact was built **six days before July's data was complete**. That is correct behaviour,
+and a fresh artifact cut after ~20 August carries the full month.
 
 The original entry inferred a defect from an empty month without once converting the month id to a
 date. Everything below the line is retained as written, so the error is visible rather than tidied
 away.
+
+**SECOND CORRECTION 2026-08-25 — "month 559 is zero" was also wrong, and the truth is worse.**
+
+The correction above says July "had not arrived". Prompted by a review on
+views-postprocessing#297, re-measured on the same artifact, across **all three** delivered targets
+rather than one:
+
+| month | cells with any event | `lr_ged_sb` | `lr_ged_ns` | `lr_ged_os` |
+|---|---|---|---|---|
+| 556 | 603 | 3601.0 | 851.0 | 777.0 |
+| 557 | 574 | 3705.0 | 1034.0 | 971.0 |
+| 558 | 572 | 2974.0 | 771.0 | 625.0 |
+| **559** | **6** | **0.0** | **12.0** | **3.0** |
+
+July **had** arrived — at about **1% of normal coverage**. The `sum=0` measurement recorded below
+is correct for `lr_ged_sb` and was generalised to the month, which is the same error as the
+original filing in a smaller form: a conclusion about a month drawn from one column without
+checking the others. Also recorded: the artifact **ends at 559** — month 560 is absent, not sparse.
+
+**This makes the surviving Tier 3 defect worse, not better, and is the reason this correction
+matters.** The narrative below reasons about a *not-yet-reported* month appearing as "a full block
+of zeros" that "the join cannot distinguish from a genuinely conflict-free month". A block of
+zeros is at least conspicuous. What is actually served is a month with **six cells of events out of
+64,742**, which looks like a real and unusually peaceful month. A consumer scoring forecasts
+against it reads a plausible near-zero outcome rather than an obviously broken one — the failure is
+harder to notice, not easier.
+
+**Upstream consequence, and it runs the other way too.** views-datafactory#476 (closed COMPLETED,
+per-source coverage bounds published as `last_valid_month_ids`, plus ADR-052) was filed from here
+on the claim of *"a month nobody reported"*. The accurate statement is **"a month reported at 1% of
+normal coverage, which an inferred boundary could not distinguish from a complete one"**. Their fix
+is correct either way — better justified, if anything — but the claim they were given was stronger
+than the data supports, and CRAF'd was told the same. The producer's boundary is inferred from
+non-zero sums (their **C-355**), so those six cells were enough to declare July observed; read
+`last_valid_month_ids` as a **ceiling, not a frontier**, and expect it to move earlier when C-355
+closes.
+
+Cross-ref: **views-postprocessing#297** (open) — its clip kept July *correctly*, by contract, and
+the forward-looking half is to stamp the boundary a run clipped against into the delivery
+provenance, since nothing currently records it.
 
 **What survives the correction, and is why this stays open at Tier 3:**
 
