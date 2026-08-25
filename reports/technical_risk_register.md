@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-08-24                                     |
-| Total Concerns    | 70                                             |
-| Open Concerns     | 25                                             |
+| Total Concerns    | 71                                             |
+| Open Concerns     | 26                                             |
 | Resolved Concerns | 45                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -774,6 +774,59 @@ that never runs — same family, different mechanism), **C-232** (the retirement
 observe).
 
 ---
+
+### C-302: the CRAF'd storage bucket answers an anonymous listing with HTTP 200 — the container is world-readable, the files are not
+
+| Field | Value |
+|-------|-------|
+| ID | C-302 |
+| Tier | 4 |
+| Source | anonymous exposure probe run to assess #123 (2026-08-25) |
+| Trigger | Before any bucket is created outside this repo's `create_bucket` — console, views-appwrite provisioning, or a partner onboarding script — check the container grant, not only the file grants. Also if `file_security` is ever set `False` on this bucket: that single flag converts this entry from metadata disclosure into the full C-83 exposure. |
+| Location | Appwrite `crafd_bucket` (container permissions, set at creation and not by this repo); `src/views_crafdapi/managers/appwrite/manager.py:972-1002` (`create_bucket` — the path that is already correct) |
+
+Run to close out **#123**, whose code fix covers `create_metadata_collection_if_not_exists`
+(databases) and says nothing about storage. Anonymous — project id only, no key, no session:
+
+| target | result |
+|---|---|
+| `crafd` collection, databases API | **HTTP 401** |
+| `crafd` collection, tablesDB API | **HTTP 401** |
+| list databases / collections / buckets | **HTTP 401** |
+| **`crafd_bucket` file listing** | **HTTP 200 — `{"total":0,"files":[]}`** |
+
+**The 401s are the important half: #123's actual subject is clean.** views-appwrite C-83 measured
+`crafd` at 401 with `$permissions: []` on 2026-08-14 and it still is, so nothing regressed and the
+collection was never created through the vulnerable path.
+
+**The 200 is a real but bounded finding.** `total: 0` is not the truth — the bucket demonstrably
+holds the 108 wire shards and the 171.8 MB historical parquet the service serves, and `smoke.py`
+returned ALL PASS against it on 2026-08-24. The empty list is `file_security=True` doing its job:
+the container grants read to an anonymous caller, and per-file permissions then hide every file. So
+what leaks is **existence and name**, not data. An anonymous caller learns that a bucket called
+`crafd_bucket` exists in this project and is readable, and gets nothing out of it.
+
+**This repo is not the cause and cannot become it.** `create_bucket` normalises
+`permissions=None` to `[]` (`manager.py:992-993`) and defaults `file_security=True`, and the only
+call site passes neither. The container was created elsewhere — console or views-appwrite
+provisioning — before or outside that path.
+
+Tier 4: no data is disclosed, no reliability property depends on it, and the correct value is one
+field on a resource this repo does not own. It is registered because it is the **storage half of a
+question that was asked and answered only for databases**, and because the mitigation holding it at
+metadata-only is a single flag — flip `file_security` to `False` on this bucket and it becomes C-83
+exactly.
+
+Raised with the owner as views-appwrite (see #123 comment). Not fixed from here: it is another
+repository's resource, and per `CLAUDE.md` a change with a security consequence goes to the owner
+rather than a drive-by.
+
+Cross-refs: **#123** and **#91** (the databases half, fixed and ratcheted in v0.7.0),
+views-appwrite **C-83** (the measured exposure this shape produced), **C-296** (the provisioning
+gate that stops this repo creating anything by accident).
+
+---
+
 
 ## Resolved Concerns
 
