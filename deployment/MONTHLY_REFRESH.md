@@ -25,7 +25,11 @@ uploaded by the same `_save_contract()` call, behind the same interlock. It is o
 Historical fatalities lag one month: **July's numbers arrive around 20 August**, and so on.
 datafactory's cron then compiles on the **21st**.
 
-So the delivery runs **on or after the 22nd**.
+So the delivery runs **on or after the 22nd** — and **on or after the 22nd of the month whose data
+you want**, which is not the same thing. Running on 25 August delivers July; August's fatalities do
+not arrive until ~20 September. If the producer's inferred boundary has already advanced to August
+(it declares the month it ran in), the clip will keep an August that nobody has reported yet. See
+*Before you run it* below.
 
 > This arrival window is written down here because it is written down **nowhere else**. It is not in
 > views-datafactory's source catalog, and its own 21st-of-the-month cron carries no comment
@@ -56,18 +60,55 @@ Appwrite calls.
 Hop B ships whatever the newest manifested run on the shelf is, and clips the historical leg to the
 producer's observed boundary. So *when* you run it determines *what* you get.
 
-## Blockers as of 2026-08-23
+## Blockers — CLEARED as of 2026-08-25
 
-Both are in views-models, and both must be cleared before a real delivery.
+Both are done. Verified, not assumed:
 
-1. **views-models#399 is unmerged.** `deliveries/un_crafd.py` on `development` still declares
-   `intent = paused(...)`, with a reason that is now false — *"crafdapi's first delivery has not
-   been executed"*, when it has. `paused` is a real interlock, not a comment: it derives
-   `wire_upload_enabled=False` and the manager makes no store calls. **A run today would be a dry
-   run.**
-2. **views-models#403 is open.** Both launchers are still pinned to `views-postprocessing 1.1.0`,
-   which carries the download fail-open that broke the first CRAF'd delivery on 2026-08-13. `1.1.1`
-   fixes it.
+1. ~~**views-models#399 is unmerged**~~ — **MERGED.** `deliveries/un_crafd.py` no longer declares
+   `paused`, so `wire_upload_enabled` is armed and a run makes real Appwrite calls.
+2. ~~**views-models#403 is open**~~ — **CLOSED.** Both launchers are pinned to
+   `views-postprocessing 1.1.1`, past the download fail-open that broke the first delivery.
+
+**A run today is a real delivery, not a dry run.** That is the change: with `paused` in place the
+interlock made every mistake free. It no longer does.
+
+## Before you run it — check the frontier month
+
+**This is the step that did not exist when this file was written, and it is the one that matters.**
+
+Hop B clips the historical leg to the producer's **observed boundary**, and that boundary is
+*inferred from non-zero sums* (views-datafactory **C-355**). A single stray event in a month is
+enough to declare that whole month observed. The grid is dense, so the month then ships as 64,742
+cells of almost entirely zeros — which reads to a consumer as a real and unusually peaceful month,
+not as a missing one.
+
+That is not hypothetical. It is what the 2026-08-14 artifact did, and what CRAF'd is serving now:
+
+| month | cells with any event | `lr_ged_sb` | `lr_ged_ns` | `lr_ged_os` |
+|---|---|---|---|---|
+| 558 (June) | 572 | 2974.0 | 771.0 | 625.0 |
+| **559 (July)** | **6** | **0.0** | **12.0** | **3.0** |
+
+Six cells declared July observed. See register **C-293**.
+
+**The check, before delivering:** read the artifact Hop B stages and count cells carrying **any**
+event per month, across **all three** targets — not the sum of one column, which is what produced
+the original wrong reading. A drop from several hundred cells to single digits means the newest
+month is a frontier artefact, whatever the boundary says.
+
+```python
+import pandas as pd
+df = pd.read_parquet(STAGED_HISTORICAL_PARQUET).reset_index()
+t = ["lr_ged_sb", "lr_ged_ns", "lr_ged_os"]
+for m in sorted(df.month_id.unique())[-5:]:
+    s = df[df.month_id == m]
+    print(m, int((s[t].fillna(0) != 0).any(axis=1).sum()), [float(s[c].sum()) for c in t])
+```
+
+**Then decide, deliberately:** ship the sparse month, or hold the delivery until the month is
+reported. There is no flag for this — the clip will keep it either way. Record which you chose and
+why, because the artifact cannot answer that question afterwards (views-postprocessing#297: nothing
+stamps the boundary a run clipped against).
 
 ## Verifying afterwards
 
