@@ -105,9 +105,14 @@ validation exists to detect.
 `prediction_frame_ensemble.py:646` gates on truthiness rather than equality, so a sampled ensemble
 declaring `pgm_cm_point` receives aligned-draws regardless. The name does not describe the behaviour
 on the path CRAF'd would be on. **If a reconciliation type is adopted for this delivery, adopt
-`pgm_cm`.** This is a concrete instruction for views-models#423, not a preference. (pipeline-core
-#490 step 1 has landed — `pgm_cm_point` deprecated and warning rather than refusing, PR #492 — and
-#490 stays open until step 3.)
+`pgm_cm`.** This is a concrete instruction for views-models#423, not a preference.
+
+Note the timing precisely, because an earlier draft of this ADR overstated it: pipeline-core PR #492
+(deprecate `pgm_cm_point`, warn rather than refuse) is **open against `development` and not merged**,
+so `pgm_cm_point` warns in **no released version**. #490 stays open until step 3. **The instruction
+does not depend on #492**: the truthiness gate at `prediction_frame_ensemble.py:646` is in shipped
+code today, so a sampled ensemble declaring `pgm_cm_point` already receives aligned-draws regardless
+of when the deprecation lands.
 
 ---
 
