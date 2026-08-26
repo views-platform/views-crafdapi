@@ -97,7 +97,17 @@ validation exists to detect.
 - The three conflicting partition-calendar definitions (real configs 457/504 and 505/552;
   pipeline-core's fallback 397/444 and 445/492; the scaffolding template 445/492 and 493/540).
 - MetricFrame paths carrying no timestamp or run id, so a second calibration run silently destroys
-  the first run's evaluation of record.
+  the first run's evaluation of record. Confirmed by views-pipeline-core 2026-08-26 at
+  `evaluation/stage.py:395`, whose own docstring calls that path *"the evaluation-of-record (#226)"*.
+
+**One upstream fact that changes a downstream instruction.** views-pipeline-core reports that on the
+`PredictionFrame` path, `pgm_cm_point` is **not honoured as point reconciliation at all**:
+`prediction_frame_ensemble.py:646` gates on truthiness rather than equality, so a sampled ensemble
+declaring `pgm_cm_point` receives aligned-draws regardless. The name does not describe the behaviour
+on the path CRAF'd would be on. **If a reconciliation type is adopted for this delivery, adopt
+`pgm_cm`.** This is a concrete instruction for views-models#423, not a preference. (pipeline-core
+#490 step 1 has landed — `pgm_cm_point` deprecated and warning rather than refusing, PR #492 — and
+#490 stays open until step 3.)
 
 ---
 

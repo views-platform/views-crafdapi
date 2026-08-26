@@ -950,7 +950,7 @@ observe).
 
 ---
 
-### C-302: the CRAF'd storage bucket answers an anonymous listing with HTTP 200 — the container is world-readable, the files are not
+### C-302 (CORRECTED, downgraded 4 -> 4/unproven): the CRAF'd storage bucket answers an anonymous listing with HTTP 200 and `total: 0` — which does not mean what I said it meant
 
 | Field | Value |
 |-------|-------|
@@ -992,9 +992,43 @@ question that was asked and answered only for databases**, and because the mitig
 metadata-only is a single flag — flip `file_security` to `False` on this bucket and it becomes C-83
 exactly.
 
-Raised with the owner as views-appwrite (see #123 comment). Not fixed from here: it is another
-repository's resource, and per `CLAUDE.md` a change with a security consequence goes to the owner
-rather than a drive-by.
+**CORRECTION 2026-08-26 — the central claim is unsupported, and the probe could not have supported
+it.** Raised by views-pipeline-core in cross-session review; verified at source before accepting.
+
+`views-models/tools/credentials/close_resource_permissions.py:118-136` records, from a measurement
+against Appwrite 1.9.5 on 2026-08-02:
+
+> Appwrite answers a **rejected** key on the file-listing endpoint with **HTTP 200 and `total: 0`**
+> rather than 401 — a shape that renders a refusal as emptiness.
+
+Their probe therefore deliberately refuses to reduce the result to a boolean, and discriminates
+three ways: `HTTP 4xx` = refused; `total > 0` = **"READABLE BY ANYONE"**; `total == 0` =
+**"accepted the request but returned nothing"** — explicitly *not* called readable.
+
+**My probe returned `total: 0`.** That is their third case, the ambiguous one. I reported it as the
+first, and wrote the entry around a mechanism — "the container grants anonymous read and
+`file_security=True` hides every file" — that is one of two readings and was never established. The
+other reading, that the request was refused and the refusal rendered as an empty 200, is at least as
+likely and is the documented behaviour of this endpoint.
+
+**What still stands:** the 401s, which are the half that mattered. `crafd` is closed on both API
+shapes, and #123's subject is clean. And this repo still cannot have created the bucket —
+`create_bucket` normalises `permissions=None` to `[]` and defaults `file_security=True`.
+
+**What does not stand:** that the container is world-readable. Unknown, and unknowable by this
+method.
+
+**The transferable part is the method, not the finding.** I designed a probe to answer a yes/no
+question on an endpoint that another repo had already measured as unable to carry a yes/no answer,
+and the failure mode was that it returned the answer I was looking for. Settling this needs a probe
+that reads the container's declared permissions — which is what `close_resource_permissions.py`
+does, and which needs a key this session does not hold.
+
+Tier unchanged at 4, but the entry is now **a question, not a finding**.
+
+Raised with the owner as views-appwrite (see #123 comment and views-appwrite#160). Not fixed from
+here: it is another repository's resource, and per `CLAUDE.md` a change with a security consequence
+goes to the owner rather than a drive-by.
 
 Cross-refs: **#123** and **#91** (the databases half, fixed and ratcheted in v0.7.0),
 views-appwrite **C-83** (the measured exposure this shape produced), **C-296** (the provisioning
