@@ -4,10 +4,10 @@
 |-------------------|------------------------------------------------|
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
-| Last Updated      | 2026-08-24                                     |
-| Total Concerns    | 71                                             |
-| Open Concerns     | 26                                             |
-| Resolved Concerns | 45                                             |
+| Last Updated      | 2026-08-26                                     |
+| Total Concerns    | 77                                             |
+| Open Concerns     | 63                                             |
+| Resolved Concerns | 14                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -498,6 +498,181 @@ The README pins the Appwrite Seam Contract at `platform-001-v1.2.0` and describe
 
 ---
 
+### C-303: there is no run address — the newest upload silently becomes the served forecast
+
+| Field | Value |
+|-------|-------|
+| ID | C-303 |
+| Tier | 2 — structural fragility with a trigger anyone could pull today, and the failure is silent: a wrong forecast served under a valid 200 with correct-looking provenance. |
+| Source | expert-code-review of the delivery architecture (2026-08-26) |
+| Trigger | Before uploading ANY second forecast artifact to `crafd_bucket` — a calibration experiment, a re-run, a test — and before the operator is asked to store validation or calibration partitions there. Also before relying on `APPWRITE_CRAFD_QUARANTINED_FILE_IDS` as a control: it names file ids, not runs. |
+| Location | `src/views_crafdapi/managers/prediction/manager.py:298-311` (`get_latest_manifest`), `:195-199` (sort-in-Python by `$createdAt`), `src/views_crafdapi/managers/prediction/quarantine.py:12,19` |
+
+`get_latest_manifest()` takes no arguments and returns `docs[0]` after sorting every matching document
+by `$createdAt` descending, in Python. That is a **last-write-wins register**, and it is the sole
+mechanism deciding what a UN partner is served.
+
+There is no queryable run identifier anywhere. `run_id` exists only *inside* the manifest JSON
+(`forecast/ingestion/wire_reader.py:58,87`), so learning which run a document belongs to requires
+downloading it. `category` is a closed enum `{forecast, historical}` enforced by a raise
+(`prediction/metadata.py:74-75`) and a golden test, so a partition label cannot be expressed as a
+category — it must be a new field, and crafdapi does not upload, so that is a cross-repo wire
+amendment.
+
+**The concrete hazard:** upload a calibration run today and it becomes the production CRAF'd
+forecast, unconditionally, because it is newest. The only lever is a comma-separated list of file
+ids in an environment variable — an ops control, not an API property.
+
+This is the entry that makes the partition requirement a design question rather than a feature
+request: an archive whose entries cannot be addressed by identity is not an archive.
+
+Cross-refs: **C-233** (a manifest-lookup failure serving a superseded run — the same selection path,
+different failure), **C-254** (`run_id` absent from the lineage response), **C-306** (the identity
+guards that currently stand in for run selection).
+
+---
+
+### C-304: the 413 refusal names two provenance fields the endpoint does not return
+
+| Field | Value |
+|-------|-------|
+| ID | C-304 |
+| Tier | 3 — the instruction is followable up to a point and then dead-ends; no wrong data is served, but the documented escape hatch from a refusal does not work. |
+| Source | route-inventory investigation (2026-08-26); introduced by the C-284 remedy on 2026-08-24 |
+| Trigger | Before a consumer is pointed at the historical file channel — by the 413 body, by `docs/api/README.md:80-82`, or in a partner conversation. Also when `/provenance/historical` is next edited: the fix is to emit the fields, not to soften the message. |
+| Location | `src/views_crafdapi/managers/api.py:117-121` (the refusal text), `src/views_crafdapi/managers/api.py:655-656` (the historical branch), `src/views_crafdapi/managers/prediction/metadata.py:37-49` (`to_dict`), `docs/api/README.md:80-82` |
+
+The 413 tells the caller to `GET /provenance/historical` for `bucket_id` and `artifact_id`. The
+historical branch returns `PredictionProvenance.to_dict()`, whose complete key set is `file_id,
+source, created_at, filename, name, category, targets, description, file_hash,
+methodology_version`. **Neither field is present.** `artifact_id` is injected only on the forecast
+path (`forecast/provenance.py:98,102`); `bucket_id` appears in no provenance payload at all.
+
+A caller following our own instruction gets `file_id` and must supply the bucket out of band.
+views-faoapi made exactly this change (`2ed9a21`, "made the artifact addressable"); this repo did
+not. Mine to answer for: I wrote the refusal text without checking the payload it names.
+
+Cross-refs: **C-284** (the bound whose remedy this is part of), **C-286** (the download route the
+instruction leads to, which has its own defect).
+
+---
+
+### C-305: shard resolution scans every run in the bucket, and nothing ever deletes a run
+
+| Field | Value |
+|-------|-------|
+| ID | C-305 |
+| Tier | 3 — cost and mis-resolution risk that grow monotonically with bucket contents; today's failure mode is a hard refusal, not a wrong answer. |
+| Source | storage-addressing audit (2026-08-26) |
+| Trigger | Before a second run of any kind is stored, and specifically before storing partition runs — 3 partitions x 108 shards is ~324 documents scanned per ingest, and calibration/validation are 468 month-slices each, not 36. Also when anyone reinstates a page bound on this query. |
+| Location | `src/views_crafdapi/managers/prediction/manager.py:313-332` (`resolve_artifact_file_ids`), `src/views_crafdapi/managers/appwrite/metadata.py:443-474` (equality filters, full pagination, no server-side ordering or limit) |
+
+`resolve_artifact_file_ids` queries `{"category": "forecast", "type": "sampled_forecast_shard"}` —
+**not scoped to a run** — pages every shard document ever uploaded at 100 per page, then matches by
+`filename` in Python, newest-first, first match wins.
+
+Two consequences. It grows linearly and forever, because nothing prunes the bucket. And matching by
+filename alone means run-unique filenames are an **unwritten producer obligation**: two runs sharing
+a shard name hand the newer run's bytes to the older run's manifest. That fails loudly today —
+`verify_content_hash` (`wire_reader.py:150-165`) raises on the sha256 mismatch — but as a permanent
+refusal of the older run with a misleading cause.
+
+#287's pagination fix exists because a 25-document page silently truncated a 108-shard run into "83
+missing". The same class returns the moment a bound is reintroduced on an unscoped query.
+
+Cross-refs: **C-303** (no run address is why this query cannot be scoped), **C-234** (hash
+verification, which is what currently converts a collision into a refusal rather than corruption).
+
+---
+
+### C-306: the identity guards carry two guarantees in one mechanism
+
+| Field | Value |
+|-------|-------|
+| ID | C-306 |
+| Tier | 3 — no current defect; it is what makes any change to run selection or caching unsafe to reason about, and it will be load-bearing in exactly the change now being considered. |
+| Source | expert-code-review (2026-08-26), Hickey and Feathers seats |
+| Trigger | Before changing the cache key, the disk-cache path layout, or run selection — including the "serve precomputed files" change. Deleting a cache tier without first separating these two meanings removes a safety property with no test to notice. |
+| Location | `src/views_crafdapi/managers/dataset_service.py:737-753` (`_identity_ok`), `:725-735` (`_forecast_entry_servable`), `:755-766` (`_legacy_identity_ok`), `:658-723` (`_serve_last_good_within_sla`) |
+
+`_identity_ok` asserts `cache["file_id"] == wire_identity`, where `wire_identity` is *the newest
+manifest*. That single comparison is doing two unrelated jobs: **cache invalidation** (is my cached
+copy current?) and the **ADR-033 fail-visible guarantee** (a forecast is never served from anything
+but the current manifested run).
+
+Because they share a mechanism, neither can be changed alone, and neither has a test that names it.
+views-faoapi attempted to delete cache tiers on the premise that they existed only for rendering
+speed, and found three of four targets load-bearing for unrelated reasons — per-key partitioning is
+a security property, and the disk tier *implements* their last-good fallback. The same shape is here.
+
+The remedy is not a refactor for its own sake: it is to make "which run is live" an explicit, named
+thing before anything else moves, because a pointer is cheap to introduce now and expensive to
+retrofit once artifacts are addressable.
+
+Cross-refs: **C-303**, **C-287** (per-key cache partitioning — the security half of the same
+tangle), **C-236** (caches bounded by count, not bytes).
+
+---
+
+### C-307: the 20-route query grid was inherited, not chosen, and its governing ADR is addressed to a different consumer
+
+| Field | Value |
+|-------|-------|
+| ID | C-307 |
+| Tier | 3 — a governance/root-cause entry. Nothing is served incorrectly because of it, but it explains why twelve open concerns cluster on one surface and why removing them is cheaper than it looks. |
+| Source | route-inventory and consumer-contract investigation (2026-08-26) |
+| Trigger | Before defending, extending, or documenting any levelled route as a CRAF'd requirement — and before the next reviewer treats faoapi symmetry as a constraint. Check what ADR-034 actually obliges us to, which is content, not endpoints. |
+| Location | `docs/ADRs/active/026_api_surface_and_resource_model.md:7,13,36,71-74`, `src/views_crafdapi/managers/api.py:857-899` (the registration loop), `docs/ADRs/active/034_crafd_data_contract.md` |
+
+ADR-026 defines the `/{level}/{kind}/{category}/{operation}` grammar and lists its **Informed** party
+as *UN FAO / FSFC API consumers*. Its Context says the route table "grew organically… and has never
+been described in a decision record". It justifies the **mechanism** — one registration loop rather
+than five-fold duplicated handlers — and never the **cardinality**: no consumer need is cited for
+`gaul0`, `gaul1` or `gaul2` anywhere in it.
+
+The registration loop at `api.py:857-899` is character-for-character identical to views-faoapi's.
+
+Meanwhile the actual CRAF'd agreement, ADR-034, is **content-only** — targets, geography vocabulary,
+summary statistics, column names, bucket, document name — is still marked **Proposed**, and has all
+four of its open items unticked. It names no endpoint. So does `seam_contract.py`, which binds one
+document name.
+
+`country` and `gaul0` are additionally the **same geography** under two key columns
+(`forecast/serialize/schema.py:70-74` maps `country_code` to `admin1_gaul0_code`), with no test
+comparing them and different missing-code handling on each path — a divergence `reports/ROADMAP.md:147-149`
+already names as undetectable.
+
+Cross-refs: **C-292** (the file sizes this surface produces), **C-245**, **C-294**, **C-267**,
+**C-284** — the concern cluster living on this surface.
+
+---
+
+### C-308: the delivered run is pgm-only and unreconciled, so the agreed spec cannot currently be met
+
+| Field | Value |
+|-------|-------|
+| ID | C-308 |
+| Tier | 2 — a delivery cannot satisfy the stated agreement, and nothing in this repo surfaces that. A consumer reading the artifact would find no field contradicting "reconciled pgm and cm"; the claim is simply absent rather than refuted. |
+| Source | wire-artifact inspection of the delivered run (2026-08-26) |
+| Trigger | Before describing any delivery to CRAF'd as meeting the agreed specification, and before designing a delivery format that implies two spatial levels. Also when views-models #419/#421/#422/#423 and views-pipeline-core #490 close — that is when the material arrives. |
+| Location | The delivered run `rusty_bucket_forecasting_20260727_095355` in `apis/un_crafd/cache/appwrite_cache/crafd_bucket/` (108 shard headers); `reports/ROADMAP.md:118-148` |
+
+The agreed spec is a global 36-month forecast with uncertainty **from PGM and CM ensembles that are
+reconciled**. Read from the parquet key-value metadata of all 108 shards of the delivered run:
+`spatial_level` is `"pgm"` on **108/108**, and `provenance.reconciled` is `false` on **108/108**.
+There is no CM artifact in the bucket.
+
+So the pgm/cm reconciled half of the agreement has **zero raw material today**. The global and
+36-month halves are fully satisfied — `land_gaul`, 64,742 cells, months 559–594.
+
+`views-frames/src/views_frames/spatial_level.py:24-25` defines `CM` alongside `PGM`, so the
+vocabulary exists; nothing else does. The blockers are upstream and already filed.
+
+Cross-refs: **#81** (the cm epic), `reports/ROADMAP.md` Step 1, **C-303** (which becomes acute if cm
+and pgm runs must coexist in one bucket).
+
+---
+
 ## Disagreements
 
 (No disagreements registered yet. New IDs start at `D-27` — see the ID Namespace Note.)
@@ -861,8 +1036,41 @@ The register is the input to prioritisation. A header claiming 54 open concerns 
 different project from one with 22, and the error is paid by whoever reads it to decide what to
 work on next — which, in C-291's case, was this repository's own architecture audit.
 
-Guards: `tests/test_register_counts.py` (3) — the counts must match the entries, must remain
-internally consistent, and no id may appear twice. Confirmed to fire on the exact error, and it
+**SECOND CORRECTION 2026-08-26 — the first fix was also wrong, and for a more basic reason: the
+section headings are decorative.** I corrected the header to 22/43 by trusting `## Open Concerns`
+and `## Resolved Concerns` as boundaries. They are not boundaries. Entries have been appended to the
+end of the file for months regardless of heading. Counted by section:
+
+| section | C-entries |
+|---|---|
+| Open Concerns | 63 |
+| **Disagreements** | **11** (all misfiled C-entries, no D-entries at all) |
+| Resolved Concerns | 14 |
+| **Register Conventions** | **39** — appended *after* the conventions text |
+
+So an entry's position says nothing about its status, and C-299–C-302, which I added last week,
+landed under "Disagreements".
+
+**Counted by what each entry actually says — the only reliable method — it is 57 open and 14
+resolved of 71** (before this batch). The original header, 54/11, was closer to the truth than
+either of my corrections. On the most generous possible reading, counting any entry that mentions
+"resolved" or "fixed" anywhere, it is still at most 31 resolved.
+
+**The consequence for C-291 stands and is now firmer.** Its comparative table put this repo at 9%
+resolved against views-frames' 89% and views-datafactory's 87%, read from headers. Measured by
+content: **14/71 = 20%**. Better than 9%, still a different class from the siblings, and the
+correction I wrote there on 2026-08-24 — claiming 67% and parity with views-bayesian — was wrong and
+has been withdrawn.
+
+**Deliberately not fixed: the 39 misplaced entries stay where they are.** Moving them is a large
+diff that changes no behaviour, and once the guard counts by content, position stops mattering for
+correctness. Recorded here so the next reader does not mistake the mess for a task.
+
+Guards: `tests/test_register_counts.py` — rewritten 2026-08-26 to derive status from each entry's
+own heading and Status row, never from the section it sits in. The previous version encoded the
+section rule and therefore *enforced* the wrong numbers; that is the sharper lesson than the count
+itself. A guard that codifies an assumption you have not tested makes the assumption harder to
+question, not easier. Confirmed to fire on the exact error, and it
 caught the very next entry (C-297) landing without a header update.
 
 Cross-refs: **C-291** (corrected by this finding), **C-282** and **C-300** (numbers that look
