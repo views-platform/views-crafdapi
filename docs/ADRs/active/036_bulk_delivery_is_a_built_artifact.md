@@ -113,23 +113,56 @@ hands it back, rather than assembling a response per request.
 
 Concretely, and in this order:
 
-1. **Build at ingest, serve as files.** Once per delivered run, compute the 45-column consumer
-   schema at each aggregation level and write it as parquet. Hand those files back directly rather than
-   generating a response, so the caller is told the size up front, can resume an interrupted
-   download, and can skip re-downloading a file that has not changed.
+1. **Build at ingest, serve as files.** When a run is ingested, compute the 45-column consumer
+   schema at each aggregation level and write it as parquet, before any request arrives. Hand those
+   files back directly rather than generating a response, so the caller is told the size up front,
+   can resume an interrupted download, and can skip re-downloading a file that has not changed.
+
+   **What is built, precisely.** Eight artifacts per run: two categories (`forecast`, `historical`)
+   × four levels (`pg`, `country`, `gaul1`, `gaul2`). `gaul0` is **not** built — see the decision
+   below.
+
+   **Where.** Alongside the existing per-run cache, under the run's own directory, named
+   `{category}_{level}.parquet`. The layout is this repository's own and needs no agreement with the
+   producer; the *addressing* of runs is ADR-037's subject, not this one's.
+
+   **When.** Triggered by the same ingest that already assembles a run — not by a request, and not
+   by a separate schedule.
+
+   **`DECISION NEEDED` — `country` vs `gaul0`.** These are the same geography under two key columns,
+   and precomputation forces the question because it would otherwise mean writing the same numbers
+   to two files. This ADR builds `country` and not `gaul0`, on the grounds that ISO3 is the key a
+   partner will use — **but that is a partner-facing choice and the operator should overrule it if
+   ISO3 is wrong.** Until ratified, the `gaul0` route continues to serve from the query path.
 
 2. **Verify against what the service already produces.** The current `/data/forecast/bulk` route
    returns a parquet file of **461,991 bytes**, and it has returned exactly that size in three
-   consecutive releases — so any change to it is visible. The file the new build step produces
-   must be identical, byte for byte, before anything else proceeds.
+   consecutive releases — so any change to it is visible. The file the new build step produces must be identical, byte for byte, before anything else
+   proceeds.
+
+   **That check covers one of the eight artifacts.** `/data/forecast/bulk` is admin-1 forecast only;
+   the other seven have no existing output to compare against. For those, the acceptance criterion
+   is weaker and stated so it is not mistaken for the byte check: each must load, carry all 45
+   columns, have row count equal to (months × units at that level), and contain no all-null value
+   column. Both criteria are recorded because they are not the same strength, and the difference
+   should be visible to whoever reads the results.
 
 3. **Add the new path alongside the existing routes. Delete nothing yet.** The query grid is retired
-   only after the built artifacts have served a full monthly cycle, and then only what is provably
-   unreferenced.
+   only after the built artifacts have served a full monthly cycle. "Unreferenced" then means:
+   absent from `CrafdApiClient`, from `smoke.py`, from every notebook under `notebooks/`, and from
+   both READMEs — which is the same test used to retire `/data/{category}/latest`, and which is
+   checkable by grep rather than by judgement. It does **not** mean "no consumer calls it": that
+   would need an access-log read, and the log is not available to this repository.
 
-**Explicitly in scope:** the forecast and historical consumer schema at pg, country/gaul0, admin-1
-and admin-2; the build step; file serving; and the ADR-026 amendment recording that the levelled
-grammar is for slices, not bulk.
+4. **Retention: keep two runs.** The artifacts for the live run and for the one it replaced are
+   kept; older sets are deleted when a new run is adopted. Two rather than one so a bad adoption can
+   be reversed without a rebuild, and two rather than many because nothing in this codebase evicts
+   by size and an unbounded set on a 22 GiB shared box is how the neighbouring service failed. At
+   ~16 MB per run that is ~32 MB, so the number is chosen for reversibility, not for space.
+
+**Explicitly in scope:** the forecast and historical consumer schema at `pg`, `country`, `gaul1` and
+`gaul2`; the build step; retention; file serving; and the ADR-026 amendment recording that the
+levelled grammar is for slices, not bulk.
 
 **Explicitly out of scope, and deferred with named triggers:**
 
@@ -234,15 +267,22 @@ be reverted selectively, three of which lack evidence or are blocked upstream.
 
 ## Open Questions
 
-1. **Which of `country` and `gaul0` survives.** They are the same geography under two key columns
-   (`forecast/serialize/schema.py:70-74`), with different missing-code handling and no test
-   comparing them. `ROADMAP.md:147-149` already names the divergence as undetectable. Precomputation
-   forces the question, because it means writing the same numbers to two files.
-2. **Retention.** How many built artifacts are kept, evicted by what rule. There is no size-based
-   eviction anywhere in this codebase. A number written now costs nothing.
-3. **Whether historical needs a computed product at all**, or whether making the stored parquet
-   followable is sufficient (the refusal currently names two provenance fields the endpoint does not return, which has to be
-   fixed either way).
+1. **Is `country` the right survivor?** The Decision picks `country` (ISO3) over `gaul0` and says
+   why, but the reasoning is about what a partner will key on, which is the operator's call rather
+   than an engineering one. If `gaul0` is the right key, one line of the Decision changes and
+   nothing else does. Until ratified the Decision stands and `gaul0` keeps serving from the query
+   path, so neither answer is blocked.
+
+2. **Does the historical file channel survive alongside the built historical artifacts?** The
+   Decision builds historical at four levels. That is a *computed* product; the raw 164 MB parquet
+   the producer uploaded is a different thing, and a consumer may want it. Keeping both is cheap and
+   they answer different questions, but nobody has asked for the raw one. Note that its discovery
+   path is broken either way — the refusal message names two provenance fields the endpoint does not
+   return — and that must be fixed whichever way this lands.
+
+3. **Nothing in this ADR states how a consumer discovers which artifacts exist.** The Decision names
+   what is built, where, and when, but not how it is found. That is ADR-037's subject and is
+   deliberately not settled here; recorded so the gap is visible rather than implied.
 
 ---
 
