@@ -83,26 +83,55 @@ validation exists to detect.
 
 **Run identity becomes explicit, and "which run is live" becomes a separate, named thing.**
 
-1. **Artifacts are addressed by run.** Every built artifact (ADR-036) is written under an address
-   that names the run, and that address is stable and immutable. An artifact, once published, is
-   never rewritten in place.
+1. **Artifacts are addressed by run, and the address is ours to set.** ADR-036's built artifacts
+   are produced by this repository, not by the producer, so their layout needs no cross-repo
+   agreement. They are written under `runs/{run_id}/{category}_{level}.parquet`, where `run_id` is
+   the value already carried in the run manifest. Once written, an artifact is never rewritten in
+   place; a corrected run is a new `run_id`.
 
-2. **Lead time is part of the address where it exists.** For rolling-origin partitions the address
-   carries the sequence, not merely the month. **This goes in the path, not only in a catalogue** —
-   because a catalogue that carries identity the bytes do not is a second source of truth that can
-   drift from the thing it describes.
+   This is separate from the *wire* shard naming, which views-postprocessing owns and which this
+   ADR does not touch.
 
-3. **One explicit live-run pointer.** A single, small, named, mutable record states which run is
-   current for CRAF'd. It is the *only* mutable thing in the delivery. Everything else is an
-   immutable value. Selection stops being an emergent property of upload order.
+2. **Lead time goes in the path when partitions arrive.** Production forecasting runs have one
+   sequence, so today's address needs no sequence component. Calibration and validation have
+   thirteen, and for those the address becomes
+   `runs/{run_id}/seq{NN}/{category}_{level}.parquet`, `NN` zero-padded, matching the producer's
+   existing `predictions_{run_type}_{timestamp}_{NN}.parquet` convention.
 
-4. **The pointer is introduced now, with the one partition that exists.** This is the only item here
-   that is expensive to retrofit and nearly free to get right at the start, and it does not depend
-   on any upstream change.
+   **It goes in the path, not only in a catalogue**, because a catalogue carrying identity the bytes
+   do not is a second source of truth that can drift from what it describes.
 
-5. **The archive is not built yet.** Partition storage waits on the upstream work below. What is
-   built now is the *shape* that accommodates it: run-addressed artifacts and an explicit pointer,
-   exercised against production forecasting runs.
+   This item is **not buildable yet** — it needs `run_type` on the wire, which is upstream. It is
+   stated now so the production layout does not have to change when partitions land.
+
+3. **One explicit live-run pointer**, replacing "whichever arrived last". It is the *only* mutable
+   thing in the delivery; everything else is an immutable value.
+
+   **What it must satisfy** — these are testable and are the decided part:
+   - it names exactly one `run_id`, and serving reads it rather than sorting by upload time;
+   - it is readable without downloading a run;
+   - it is shared by every worker, so two workers cannot serve different runs;
+   - it survives a restart and a redeploy;
+   - changing it is a deliberate act with a recorded actor and timestamp, not a side effect of an
+     upload;
+   - if it is absent or names a run that is not present, serving **refuses** rather than falling
+     back to newest — which is the ADR-033 guarantee, now carried by the pointer instead of by the
+     cache-identity comparison.
+
+   **`DECISION NEEDED` — where it is stored.** A document in the existing Appwrite collection is
+   shared and survives redeploy for free, but that collection's schema is closed by a golden test
+   and adding a field is a contract change. A file in the bucket is schema-free but needs its own
+   read path. A deployment config value is simplest but is not visible to the operator at runtime.
+   **This ADR does not choose.** Item 4 below cannot be executed until it does.
+
+4. **The pointer is introduced before the archive, not after.** It is the only item here that is
+   expensive to retrofit — once artifacts are addressable and something has pinned one, changing how
+   "live" is expressed breaks the pins — and it depends on no upstream change. It does depend on
+   item 3's storage choice, which is why that is marked rather than assumed.
+
+5. **The archive is not built.** Partition storage waits on the upstream work below. What is built
+   now is items 1 and 3 only, exercised against production forecasting runs — item 2's sequence
+   component is specified but not implemented, because no artifact exists that needs it.
 
 **Out of scope, and filed upstream rather than compensated for here:**
 
@@ -159,21 +188,25 @@ with room for more than one at a time.
 
 ## Consequences
 
-**Positive**
+**Positive — stated as what each item delivers, and when**
 
-- Removes the live hazard that any second upload silently becomes the production forecast.
-- A consumer can pin a run and re-fetch it, verified against the per-shard sha256 already in the
-  manifest.
-- Makes a deprecation path possible: a run can be marked superseded or withdrawn, which is the thing
-  views-datafactory's model cannot express and cannot retrofit.
-- Lets the service find a run's files by asking for that run, instead of scanning every file in the
-  bucket and matching on filename.
+- **On item 3 shipping:** the live hazard is removed. Until then it stands, and this ADR does not
+  reduce it. Recorded that way because an ADR that says "removes" while the fix is unbuilt is how a
+  known hazard stops being tracked.
+- **On item 1 shipping:** the service finds a run's files by asking for that run, instead of
+  scanning every file in the bucket and matching on filename.
+- **On items 1 and 3 together:** a consumer can pin a run and re-fetch it, verified against the
+  per-shard sha256 already in the manifest — and a run can be marked superseded or withdrawn, which
+  is the deprecation path views-datafactory's model cannot express and cannot retrofit.
 
 **Negative, and accepted**
 
-- **A second mutable thing exists in the system** — the pointer — and it must be updated as part of
-  delivery. If it is forgotten, a fresh run is stored but not served. That failure is *visible*
-  (provenance names the old run) where the current failure is silent, which is the trade being made.
+- **A second mutable thing exists, and someone has to move it.** Moving the pointer becomes a named
+  step in `deployment/MONTHLY_REFRESH.md`, performed by whoever runs the delivery, immediately after
+  Hop B and before the verification block — so the existing provenance check doubles as the check
+  that the pointer moved. If it is forgotten, a fresh run is stored but not served. That failure is
+  *visible* — `/provenance/forecast` names the old run — where today's failure is silent, and that
+  is the trade being made deliberately.
 - **The address format is a commitment.** Once a consumer pins, the path shape is a contract.
 - Partition support remains unbuildable here until upstream moves. Building the shape against one
   partition is a deliberate bet that the shape generalises; if the wire contract lands with a
@@ -210,13 +243,19 @@ a golden test, and overloading it would conflate "what kind of data" with "which
 
 ## Open Questions
 
-1. **The exact address format**, which should be settled with views-postprocessing rather than
-   declared here, since they write the artifacts.
-2. **How the pointer is stored** — a document in the existing collection, a file in the bucket, or
-   configuration. The requirement is only that it is explicit, small, and readable without
-   downloading a run.
-3. **Retention**, shared with ADR-036: an archive with no eviction rule is an unbounded queue, and
-   this codebase has no size-based eviction anywhere.
+1. **Where the live-run pointer is stored** — see the `DECISION NEEDED` in Decision item 3, which
+   states the three options and what each costs. This is the one unanswered question that blocks
+   work: items 3 and 4 cannot be built until it is settled. Everything else here is either decided
+   or explicitly deferred to upstream.
+
+2. **Retention for archived runs**, when the archive exists. ADR-036 decides retention for *built
+   artifacts* — keep two runs — but an archive of calibration and validation runs is a different
+   thing with a different purpose, and two would be the wrong number for it. Not urgent, because the
+   archive is not built.
+
+3. **Whether the archive belongs in this service at all.** Recorded in Consequences as deliberately
+   unresolved. Keeping artifacts run-addressed from the start means a later split is a routing and
+   retention decision rather than a rewrite, so this does not need answering now.
 
 ---
 
