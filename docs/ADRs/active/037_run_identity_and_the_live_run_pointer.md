@@ -14,21 +14,21 @@
 nothing else.** Upload a second forecast to `crafd_bucket` — a calibration experiment, a re-run, a
 test — and it becomes the live CRAF'd forecast, unconditionally, behind a valid `200` with
 correct-looking provenance. There is no confirmation step and no way to express an intended run. The
-only existing control is a comma-separated list of file ids in an environment variable (**C-303**).
+only existing control is a comma-separated list of file ids in an environment variable.
 
 That is the harm this ADR answers. It is present today, and it does not depend on anything new being
 asked for.
 
 **The mechanism.** `get_latest_manifest()` (`managers/prediction/manager.py:298-311`) takes no
 arguments and returns `docs[0]` after sorting every matching document by `$createdAt` descending, in
-Python. That is a **last-write-wins register** — the weakest available conflict resolution — standing
-in for a selection policy that was never written.
+Python. In other words: whichever artifact arrived most recently wins, and nothing anywhere records that a
+choice was made. That is standing in for a selection policy nobody ever wrote.
 
 It cannot be scoped, because there is nothing to scope it by: no queryable run identifier exists.
-`run_id` lives only *inside* the manifest JSON (`forecast/ingestion/wire_reader.py:58,87`), so
-learning which run a stored document belongs to requires downloading it. Shard resolution inherits
+`run_id` lives only *inside* the manifest — the small JSON file the producer uploads last to mark a
+run complete — so learning which run a stored document belongs to means downloading it first. Shard resolution inherits
 the same gap — `resolve_artifact_file_ids` (`manager.py:313-332`) scans every shard document of
-every run ever uploaded, unscoped, and matches by filename in Python (**C-305**).
+every run ever uploaded, unscoped, and matches by filename in Python.
 
 ### Why this is now urgent
 
@@ -44,7 +44,18 @@ The volume is not the problem. The identity is.
 | forecasting | 36 |
 | calibration (months 457–504) | **468** — 13 rolling-origin sequences × 36 steps |
 | validation (months 505–552) | **468** |
-| **total** | **972** (2,916 shards: 2.5 GB as packaged, ~50 MB repacked, **96.5 GB expanded**) |
+| **total** | **972** |
+
+Those 972 slices are 2,916 files as the producer writes them today. What that costs depends
+entirely on how it is held:
+
+| | |
+|---|---|
+| as the producer writes them now | 2.5 GB |
+| repacked, dropping columns derivable from the header | ~50 MB |
+| **loaded into memory the way the current serving path loads a run** | **96.5 GB** |
+
+The last row is the one that decides the architecture, and the box has 22 GiB.
 
 **Rolling origin is the sharp edge.** The same `(month, cell)` appears up to **13 times** at
 different lead times. Any address phrased as *"the forecast for month M"* is ambiguous unless lead
@@ -100,7 +111,7 @@ validation exists to detect.
 - The three conflicting partition-calendar definitions (real configs 457/504 and 505/552;
   pipeline-core's fallback 397/444 and 445/492; the scaffolding template 445/492 and 493/540).
 - MetricFrame paths carrying no timestamp or run id, so a second calibration run silently destroys
-  the first run's evaluation of record. Confirmed by views-pipeline-core 2026-08-26 at
+  the first run's evaluation of record. Confirmed by views-pipeline-core on 2026-08-26 at
   `evaluation/stage.py:395`, whose own docstring calls that path *"the evaluation-of-record (#226)"*.
 
 **One upstream fact that changes a downstream instruction.** views-pipeline-core reports that on the
@@ -121,14 +132,14 @@ of when the deprecation lands.
 
 ## Rationale
 
-**Last-write-wins is not a selection policy; it is the absence of one.** Making the live run an
+**"Whatever arrived last" is not a selection policy; it is the absence of one.** Making the live run an
 explicit declaration replaces an accident of upload ordering with a statement someone made on
 purpose. That is worth doing even if the archive is never built.
 
 **It untangles two guarantees that currently share one mechanism.** `_identity_ok`
 (`dataset_service.py:737-753`) asserts that the cached copy equals the newest manifest, and that
 single comparison serves as both cache invalidation *and* the ADR-033 promise that a forecast is
-never served from anything but the current manifested run (**C-306**). Neither can be changed alone
+never served from anything but the current manifested run. Neither can be changed alone
 today, and neither has a test naming it. An explicit pointer separates them: the pointer carries the
 guarantee, the cache key carries the invalidation.
 
@@ -150,12 +161,13 @@ with room for more than one at a time.
 
 **Positive**
 
-- Removes **C-303** — the live hazard that any second upload silently becomes production.
+- Removes the live hazard that any second upload silently becomes the production forecast.
 - A consumer can pin a run and re-fetch it, verified against the per-shard sha256 already in the
   manifest.
 - Makes a deprecation path possible: a run can be marked superseded or withdrawn, which is the thing
   views-datafactory's model cannot express and cannot retrofit.
-- Scopes shard resolution to a run, removing the unbounded bucket scan (**C-305**).
+- Lets the service find a run's files by asking for that run, instead of scanning every file in the
+  bucket and matching on filename.
 
 **Negative, and accepted**
 
@@ -179,7 +191,7 @@ with room for more than one at a time.
 
 ## Alternatives Considered
 
-**Keep newest-wins.** Rejected: it is already a live hazard (**C-303**), and it cannot express an
+**Keep newest-wins.** Rejected: it is already a live hazard, and it cannot express an
 archive at all.
 
 **Catalogue-only identity** — files named by convention, identity carried in an index. Rejected by
@@ -210,9 +222,16 @@ a golden test, and overloading it would conflate "what kind of data" with "which
 
 ## Related
 
-**Register:** C-303 (no run address — the entry this ADR primarily answers), C-305 (unscoped shard
-resolution), C-306 (the two guarantees in one mechanism), C-308 (pgm-only, unreconciled — the spec
-gap that shares the upstream blockers), C-233, C-254, C-287, C-236.
-**ADRs:** ADR-036 (the artifacts being addressed), ADR-033 (the fail-visible guarantee the pointer
-must preserve), ADR-013 upstream (the wire contract that must carry `run_type`).
+**Findings behind this ADR** are recorded in the maintainer's local risk register, which is
+not part of this repository. Every measurement this ADR relies on is stated inline above so the
+decision can be read without it.
+
+**ADRs in this repository:** ADR-036 (the artifacts being addressed), ADR-033 (the guarantee that a
+forecast is never served from anything but the current run — which the pointer must preserve).
+
+**Cross-repo.** ADR numbers are per-repository and collide: `views-postprocessing/ADR-013` is not
+this repository's ADR-013, which is about environment-variable validation. Foreign references are
+written `repo/ADR-nnn`; a bare `ADR-nnn` always means this repository.
+
+- `views-postprocessing/ADR-013` — the wire contract, which would have to carry `run_type`
 **Upstream issues:** views-models #419/#421/#422/#423, views-pipeline-core #490.

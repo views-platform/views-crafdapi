@@ -231,3 +231,9 @@ src/views_crafdapi/wandb/**/*.pyc
 # Golden test fixtures must be tracked even though *.parquet/*.zip are ignored:
 !tests/forecast/golden/
 !tests/forecast/golden/**
+
+# The technical risk register is the maintainer's working document, not a shared
+# artefact. It is kept locally and deliberately not tracked: ADRs that depend on it
+# are unreadable to anyone who does not have it, so findings are stated inline in the
+# ADR instead. tests/test_register_counts.py skips when the file is absent.
+reports/technical_risk_register.md

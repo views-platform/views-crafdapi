@@ -13,19 +13,28 @@
 **This service renders a 1.81 MB product as tens of gigabytes of JSON, once per request, and that
 choice has already been paid for in production — on the machine we share.**
 
-The entire global forecast is **1.81 MB** of value bytes: every posterior draw, every target, every
-month. Serving a fraction of it as JSON at PRIO-GRID grain costs ~18 GB, and an unparameterised
-historical `subset` measures **34.5 GB and 13.5 minutes** (**C-284**). views-faoapi runs this same
-architecture over this same data on the same 22 GiB box, and on 2026-08-14 was **OOM-killed three
-times, at ~23.3 GB anonymous RSS each**.
+The whole global forecast — every posterior draw, for every target, for every month — is **1.81 MB**
+of numbers. Converted to JSON and sent over HTTP, the same numbers come to roughly **18 GB**.
 
-That is the problem this ADR exists to answer. It is a property of the *transport*, not of the data.
+**The worst case takes no arguments at all.** A caller who asks for the historical data without
+naming any filter — the bare URL, nothing else — is asking the service to turn 28.4 million rows
+into JSON. Measured against the real artifact: **34.5 GB of memory and 13.5 minutes**, on a machine
+with 22 GiB of RAM that is shared with a second service.
 
-**A new requirement turns a bad ratio into an impossible one.** The specification has gained
-calibration and validation partitions, which are rolling-origin: 972 predicted month-slices against
-today's 36. Expanded the way the serving path expands a run, that is **96.5 GB on a 22 GiB box**
-(see ADR-037). Render-on-demand does not become risky at that size; it stops being arithmetically
-available.
+That second service is views-faoapi, which runs this same architecture over this same data. On
+2026-08-14 the kernel killed it three times in 41 minutes, each time while it was holding about
+23 GB.
+
+That is the problem this ADR answers, and it is a property of the **transport**, not of the data. We
+are not short of memory because the forecast is large. We are short of memory because we convert a
+compact numeric format into a verbose text one, per request, at full size.
+
+**A new requirement turns a bad ratio into an impossible one.** The specification has gained the
+calibration and validation partitions. Those are rolling-origin, meaning each month is predicted
+repeatedly at different lead times, so they hold **972 predicted month-slices against today's 36**.
+Held in memory the way the current serving path holds a run, that is **96.5 GB** — on a 22 GiB box
+(see ADR-037). Rendering on demand does not become risky at that size. It stops being arithmetically
+possible.
 
 ### What is agreed, and what is open
 
@@ -37,8 +46,7 @@ content-only and still marked Proposed.
 The 20-route query grid was therefore never chosen for this consumer. ADR-026, which defines it,
 lists its Informed party as *UN FAO / FSFC API consumers*; its own Context records that the route
 table "grew organically… and has never been described in a decision record"; and its registration
-loop is character-for-character identical to views-faoapi's. It was inherited by forking
-(**C-307**).
+loop is character-for-character identical to views-faoapi's. It was inherited by forking.
 
 *Scope note, true as of 2026-08-26 and expected to change:* CRAF'd is not yet calling this service.
 That does not motivate the decision — the measurements above hold whether or not a consumer is
@@ -54,7 +62,7 @@ surface rather than only bounding one. See Consequences for what changes when th
 | The same, expanded as `(N,S)` float32 in the serving cache | **3.58 GB** |
 | Historical artifact | 164 MB, of which **518 KB is data** — the rest is `priogrid_id` and geography repeated 439 times |
 | Full 45-column consumer schema, precomputed at **all four** aggregation levels | **~16 MB**, ~2.5 min per delivery |
-| An unparameterised `subset` request, rendered as JSON | **34.5 GB, 13.5 minutes** (C-284) |
+| An unparameterised `subset` request, rendered as JSON | **34.5 GB, 13.5 minutes** |
 
 The data is small. **The transport is what is expensive.** Every memory ceiling, OOM, 504 and
 62-second cold start in this repository's history is an artifact of rendering parquet as JSON per
@@ -76,7 +84,7 @@ under file delivery. They attempted the deletion and abandoned it for exactly on
 the endpoints the step would delete."* **That blocker does not exist here.**
 
 **views-datafactory** delivers comparable data as static files with no application server, and
-ADR-021 explicitly considered and rejected FastAPI. Their register shows the bill: no versioning
+`views-datafactory/ADR-021` explicitly considered and rejected FastAPI. Their register shows the bill: no versioning
 (the previous export is `rmtree`'d, so a consumer cannot pin and there is no rollback), no
 deprecation mechanism at all, no server-side filtering, and **no consumer observability** — their
 three worst data defects were found by a human doing unrelated work, by a script written afterwards,
@@ -86,16 +94,16 @@ and by another team filing a bug in their repository.
 
 The HDI of a sum is not the sum of the HDIs. Correct aggregate uncertainty requires summing aligned
 draws **before** computing the interval, so the aggregation must happen where the draws are.
-views-faoapi's `DELIVERY_SPECIFICATION.md` §3 states this and adds that *"any proposal to 'just ship
+`views-faoapi/DELIVERY_SPECIFICATION.md` §3 states this and adds that *"any proposal to 'just ship
 files and delete the query surface' is wrong for this reason, and it is the single easiest thing on
 this page to forget."*
 
-It is correct, and it **proves server-side aggregation, not a query API.** The aggregation
-vocabulary is *closed* — five levels × two categories — so precomputing each combination at ingest
-satisfies the statistics identically, at ~2.5 minutes per delivery against 3–70 seconds per request.
+It is correct, and it **proves server-side aggregation, not a query API.** The list of aggregations we offer
+is fixed and short — five geographic levels, two categories, so ten combinations — so precomputing
+every one of them when a run arrives satisfies the statistics identically, at ~2.5 minutes per delivery against 3–70 seconds per request.
 `alpha` is already inert; the credible masses are fixed at 50/90/95, so there is no caller-selected
-dimension a file cannot precompute. This repository already does exactly this for one route:
-`/data/forecast/bulk` is built and served with `FileResponse`.
+dimension a file cannot precompute. This repository already does exactly this for one route: `/data/forecast/bulk` builds a file and
+hands it back, rather than assembling a response per request.
 
 ---
 
@@ -106,12 +114,14 @@ dimension a file cannot precompute. This repository already does exactly this fo
 Concretely, and in this order:
 
 1. **Build at ingest, serve as files.** Once per delivered run, compute the 45-column consumer
-   schema at each aggregation level and write it as parquet. Serve those files with `FileResponse`,
-   which brings `Content-Length`, `ETag`, `Accept-Ranges` and resumability.
+   schema at each aggregation level and write it as parquet. Hand those files back directly rather than
+   generating a response, so the caller is told the size up front, can resume an interrupted
+   download, and can skip re-downloading a file that has not changed.
 
-2. **Verify against the existing characterization test.** `/data/forecast/bulk` returns **461,991
-   bytes, byte-stable across v0.4.0, v0.5.1 and v0.6.1**. The admin-1 artifact produced by the new
-   path must match it byte for byte before anything else proceeds.
+2. **Verify against what the service already produces.** The current `/data/forecast/bulk` route
+   returns a parquet file of **461,991 bytes**, and it has returned exactly that size in three
+   consecutive releases — so any change to it is visible. The file the new build step produces
+   must be identical, byte for byte, before anything else proceeds.
 
 3. **Add the new path alongside the existing routes. Delete nothing yet.** The query grid is retired
    only after the built artifacts have served a full monthly cycle, and then only what is provably
@@ -126,11 +136,10 @@ grammar is for slices, not bulk.
 - **Publishing the raw posterior draws.** Nobody has asked for them. Once published they are a
   contract, and every future repacking decision would be constrained by consumers we never confirmed
   exist. *Trigger to revisit:* CRAF'd asks for a quantity we do not compute, or asks to aggregate to
-  a geography outside the closed vocabulary.
+  a geography outside the fixed list of levels we precompute.
 - **Deleting the cache tiers.** views-faoapi attempted this and found three of four targets
-  load-bearing for reasons unrelated to rendering — per-key partitioning is a **security** property
-  (C-287), and the disk tier *implements* the ADR-033 last-good fallback. *Trigger:* a
-  characterization test exists for each tier naming what it guarantees.
+  load-bearing for reasons unrelated to rendering — per-key partitioning is a **security** property, and the disk tier *implements* the ADR-033 last-good fallback. *Trigger:* each cache tier has a test that states, in words, what that tier guarantees — so
+  removing it fails loudly rather than quietly.
 - **The calibration/validation archive.** Blocked upstream in three places; see ADR-037.
 
 ---
@@ -138,13 +147,13 @@ grammar is for slices, not bulk.
 ## Rationale
 
 **It is a subtraction, not a rewrite.** The proposal generalises a route that already works
-(`/data/forecast/bulk`), against a byte-stable characterization test that already exists, at the
-existing ingest chokepoint (`_get_latest_dataset`). The operator's preference for local improvement
+(`/data/forecast/bulk`), against a file whose exact size has not changed in three releases, at the
+single place a run is already loaded (`_get_latest_dataset`). The operator's preference for local improvement
 over rewrites is honoured by staging: build alongside, verify, then remove.
 
-**It converts a shallow module into a deep one.** Thirty-two routes over a job whose entire
-information content is 1.81 MB is the textbook definition of a large interface over a small
-substance. Moving the complexity to build time pays it once, offline, where it can be debugged
+**It shrinks the surface without shrinking the capability.** Thirty-two routes over a job whose
+entire information content is 1.81 MB is a very large way in to a very small thing. Moving the work
+to build time pays it once, offline, where it can be debugged without a request attached. Moving the complexity to build time pays it once, offline, where it can be debugged
 without a request attached.
 
 **It makes correctness testable.** Today, proving a served number correct requires an Appwrite mock,
@@ -168,12 +177,12 @@ and sequence count, not in kind, so they need parameters, not strategies.
 
 **Positive**
 
-- Removes the failure mode that killed the neighbour three times: per-request expansion to 3.58 GB
-  on a 22 GiB shared box.
+- Removes the failure mode that killed the neighbouring service three times: loading a whole run
+  into memory, 3.58 GB at a time, on every request, on a 22 GiB shared box.
 - A stale artifact is still a valid, readable, correctly-labelled file. A stale cache slot is a
   wrong answer wearing a 200.
 - The aggregation cost moves from *per request* to *once per delivery*.
-- Materially shrinks the surface on which twelve open concerns live (**C-307**).
+- Materially shrinks the surface on which twelve open concerns live.
 
 **Negative, and accepted**
 
@@ -206,8 +215,8 @@ a partner-communication act rather than a repository one.
 ## Alternatives Considered
 
 **A — Keep the query grid and fix its defects.** Rejected on arithmetic. Even setting aside the 12
-open concerns on that surface, the partition requirement in ADR-037 needs 96.5 GB expanded on a
-22 GiB box. Render-on-demand does not become risky; it becomes impossible.
+open concerns on that surface, the partition requirement in ADR-037 would need 96.5 GB
+held in memory on a 22 GiB box. Render-on-demand does not become risky; it becomes impossible.
 
 **D — Static files with no application server, views-datafactory style.** Rejected on the four gaps
 their own register documents: no versioning, no deprecation, no server-side filtering, no consumer
@@ -230,18 +239,28 @@ be reverted selectively, three of which lack evidence or are blocked upstream.
    comparing them. `ROADMAP.md:147-149` already names the divergence as undetectable. Precomputation
    forces the question, because it means writing the same numbers to two files.
 2. **Retention.** How many built artifacts are kept, evicted by what rule. There is no size-based
-   eviction anywhere in this codebase (**C-236**). A number written now costs nothing.
+   eviction anywhere in this codebase. A number written now costs nothing.
 3. **Whether historical needs a computed product at all**, or whether making the stored parquet
-   followable is sufficient (**C-304** is the current blocker either way).
+   followable is sufficient (the refusal currently names two provenance fields the endpoint does not return, which has to be
+   fixed either way).
 
 ---
 
 ## Related
 
-**Register:** C-307 (the inherited surface), C-284 (the bound this supersedes for bulk), C-286 (the
-download defect on the file channel), C-304 (the unfollowable escape hatch), C-287 and C-236 (the
-cache properties that are *not* about rendering).
-**ADRs:** ADR-026 (the surface this amends), ADR-033 (fail-visible selection, unaffected), ADR-034
-(the CRAF'd data contract — content-only, names no endpoint), ADR-037 (run identity).
-**Cross-repo:** views-faoapi ADR-026 amendment 2026-08-22 and `DELIVERY_SPECIFICATION.md` §3;
-views-datafactory ADR-021 and ADR-050.
+**Findings behind this ADR** are recorded in the maintainer's local risk register, which is
+not part of this repository. Every measurement this ADR relies on is stated inline above so the
+decision can be read without it.
+
+**ADRs in this repository:** ADR-026 (the surface this amends), ADR-033 (fail-visible selection,
+unaffected), ADR-034 (the CRAF'd data contract — content-only, names no endpoint), ADR-037 (run
+identity).
+
+**Cross-repo.** ADR numbers are assigned per repository, so the same number names different
+documents in different repositories. Foreign references are therefore written `repo/ADR-nnn`; a
+bare `ADR-nnn` always means this repository.
+
+- `views-faoapi/ADR-026` — their 2026-08-22 amendment bounding the same route family
+- `views-faoapi/DELIVERY_SPECIFICATION.md` §3 — why aggregation must happen server-side
+- `views-datafactory/ADR-021` — why they rejected an application server
+- `views-datafactory/ADR-050` — their consumer contract as a file rather than a package
