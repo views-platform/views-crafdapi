@@ -10,22 +10,25 @@
 
 ## Context
 
-**This service has no concept of run identity.** `get_latest_manifest()`
-(`managers/prediction/manager.py:298-311`) takes no arguments and returns `docs[0]` after sorting
-every matching document by `$createdAt` descending, in Python. That is a **last-write-wins
-register** — the weakest available conflict resolution — and it is the sole mechanism deciding what
-a UN partner is served.
+**What a UN partner is served is decided by whichever artifact was uploaded most recently, and by
+nothing else.** Upload a second forecast to `crafd_bucket` — a calibration experiment, a re-run, a
+test — and it becomes the live CRAF'd forecast, unconditionally, behind a valid `200` with
+correct-looking provenance. There is no confirmation step and no way to express an intended run. The
+only existing control is a comma-separated list of file ids in an environment variable (**C-303**).
 
-There is no queryable run identifier at all. `run_id` exists only *inside* the manifest JSON
-(`forecast/ingestion/wire_reader.py:58,87`), so learning which run a stored document belongs to
-requires downloading it. Shard resolution compounds this: `resolve_artifact_file_ids`
-(`manager.py:313-332`) queries every shard document of every run ever uploaded, unscoped, and
-matches by filename in Python (**C-305**).
+That is the harm this ADR answers. It is present today, and it does not depend on anything new being
+asked for.
 
-**The concrete hazard exists today, before any new work.** Upload a second forecast artifact — a
-calibration experiment, a re-run, a test — and it becomes the served CRAF'd forecast, unconditionally,
-because it is newest (**C-303**). The only control is a comma-separated list of file ids in an
-environment variable.
+**The mechanism.** `get_latest_manifest()` (`managers/prediction/manager.py:298-311`) takes no
+arguments and returns `docs[0]` after sorting every matching document by `$createdAt` descending, in
+Python. That is a **last-write-wins register** — the weakest available conflict resolution — standing
+in for a selection policy that was never written.
+
+It cannot be scoped, because there is nothing to scope it by: no queryable run identifier exists.
+`run_id` lives only *inside* the manifest JSON (`forecast/ingestion/wire_reader.py:58,87`), so
+learning which run a stored document belongs to requires downloading it. Shard resolution inherits
+the same gap — `resolve_artifact_file_ids` (`manager.py:313-332`) scans every shard document of
+every run ever uploaded, unscoped, and matches by filename in Python (**C-305**).
 
 ### Why this is now urgent
 

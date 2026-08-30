@@ -4,24 +4,46 @@
 **Date:** 2026-08-26
 **Deciders:** Simon (maintainer)
 **Consulted:** expert-code-review panel (2026-08-26); views-faoapi and views-datafactory registers and post-mortems
-**Informed:** CRAF'd (not yet a consumer — see Context)
+**Informed:** CRAF'd (see the scope note in Context)
 
 ---
 
 ## Context
 
-**CRAF'd does not call this API.** There is no live consumer, no release note, and no signed
-delivery agreement. The FAO-facing release notes and the LoA referenced throughout this repository
-are inherited from views-faoapi and bind nothing here. This is the single fact that makes the
-decision available: **retirement breaks nobody.**
+**This service renders a 1.81 MB product as tens of gigabytes of JSON, once per request, and that
+choice has already been paid for in production — on the machine we share.**
 
-The agreed specification is small: a global forecast, 36 months ahead, carrying uncertainty as 128
+The entire global forecast is **1.81 MB** of value bytes: every posterior draw, every target, every
+month. Serving a fraction of it as JSON at PRIO-GRID grain costs ~18 GB, and an unparameterised
+historical `subset` measures **34.5 GB and 13.5 minutes** (**C-284**). views-faoapi runs this same
+architecture over this same data on the same 22 GiB box, and on 2026-08-14 was **OOM-killed three
+times, at ~23.3 GB anonymous RSS each**.
+
+That is the problem this ADR exists to answer. It is a property of the *transport*, not of the data.
+
+**A new requirement turns a bad ratio into an impossible one.** The specification has gained
+calibration and validation partitions, which are rolling-origin: 972 predicted month-slices against
+today's 36. Expanded the way the serving path expands a run, that is **96.5 GB on a 22 GiB box**
+(see ADR-037). Render-on-demand does not become risky at that size; it stops being arithmetically
+available.
+
+### What is agreed, and what is open
+
+The specification itself is small: a global forecast, 36 months ahead, carrying uncertainty as 128
 posterior draws, from PGM and CM ensembles that are reconciled, in an agreed 45-column schema.
-**Delivery mechanism is entirely open.** ADR-026, which defines the current 20-route query grid,
-lists its Informed party as *UN FAO / FSFC API consumers*; its Context records that the route table
-"grew organically… and has never been described in a decision record"; and its registration loop is
-character-for-character identical to views-faoapi's. The surface was inherited by forking, not
-chosen for this consumer (**C-307**).
+**It names no delivery mechanism**, and neither does ADR-034, the CRAF'd data contract, which is
+content-only and still marked Proposed.
+
+The 20-route query grid was therefore never chosen for this consumer. ADR-026, which defines it,
+lists its Informed party as *UN FAO / FSFC API consumers*; its own Context records that the route
+table "grew organically… and has never been described in a decision record"; and its registration
+loop is character-for-character identical to views-faoapi's. It was inherited by forking
+(**C-307**).
+
+*Scope note, true as of 2026-08-26 and expected to change:* CRAF'd is not yet calling this service.
+That does not motivate the decision — the measurements above hold whether or not a consumer is
+connected — but it does widen the options available, and it is why this ADR can propose removing a
+surface rather than only bounding one. See Consequences for what changes when that stops being true.
 
 ### The measurements that decide this
 
@@ -164,6 +186,14 @@ and sequence count, not in kind, so they need parameters, not strategies.
   No CRAF'd requirement names it.
 - Until the grid is retired, both paths exist and must agree. That is the cost of not doing a
   big-bang, and it is the right cost to pay.
+
+**What changes when CRAF'd connects**
+
+The scope note in Context is dated because it will expire. Once there is a live consumer, the
+staging in the Decision stops being a courtesy and becomes the mechanism: the built path must be
+serving, and verified, before anything is removed. Nothing in the Decision needs to change — but
+step 3's "delete nothing yet" acquires a second reason, and the retirement of the query grid becomes
+a partner-communication act rather than a repository one.
 
 **Neutral**
 
