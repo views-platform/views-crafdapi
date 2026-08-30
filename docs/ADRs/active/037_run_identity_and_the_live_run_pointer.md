@@ -46,16 +46,24 @@ The volume is not the problem. The identity is.
 | validation (months 505–552) | **468** |
 | **total** | **972** |
 
-Those 972 slices are 2,916 files as the producer writes them today. What that costs depends
-entirely on how it is held:
+Those 972 slices are 2,916 files as the producer writes them today (972 × 3 targets). What that
+costs depends entirely on how it is held:
 
-| | |
-|---|---|
-| as the producer writes them now | 2.5 GB |
-| repacked, dropping columns derivable from the header | ~50 MB |
-| **loaded into memory the way the current serving path loads a run** | **96.5 GB** |
+| | bytes | derivation |
+|---|---|---|
+| as the producer writes them now | **2,667,756,249** | 2,916 × 914,868, the measured mean shard size |
+| repacked, keeping only the value column | **49,002,867** | 2,916 × 16,805, the measured mean value bytes per shard |
+| **loaded into memory as `(N,S)` float32** | **96,659,288,064** | 3 × 972 × 64,742 × 128 × 4 |
 
-The last row is the one that decides the architecture, and the box has 22 GiB.
+The last row is the one that decides the architecture, and the box has 22 GiB. All three were
+computed on 2026-08-26 from the measured shard sizes of the delivered run — the mean shard is
+914,868 bytes over 108 shards, and one shard holds 64,742 × 128 = 8,286,976 rows, which was checked
+against the parquet metadata rather than assumed.
+
+**One assumption is load-bearing and is not measured:** that calibration and validation runs cover
+the same 64,742-cell grid at the same 128 draws as the forecasting run. That is what the partition
+definitions imply, but no calibration artifact exists to check it against. If either differs, all
+three figures scale with it.
 
 **Rolling origin is the sharp edge.** The same `(month, cell)` appears up to **13 times** at
 different lead times. Any address phrased as *"the forecast for month M"* is ambiguous unless lead

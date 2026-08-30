@@ -13,13 +13,14 @@
 **This service renders a 1.81 MB product as tens of gigabytes of JSON, once per request, and that
 choice has already been paid for in production — on the machine we share.**
 
-The whole global forecast — every posterior draw, for every target, for every month — is **1.81 MB**
-of numbers. Converted to JSON and sent over HTTP, the same numbers come to roughly **18 GB**.
+The whole global forecast — every posterior draw, for every target, for every month — is
+**1,814,921 bytes** of actual numbers. Converted to JSON and sent over HTTP, the same numbers come
+to roughly **18 GB**.
 
 **The worst case takes no arguments at all.** A caller who asks for the historical data without
 naming any filter — the bare URL, nothing else — is asking the service to turn 28.4 million rows
-into JSON. Measured against the real artifact: **34.5 GB of memory and 13.5 minutes**, on a machine
-with 22 GiB of RAM that is shared with a second service.
+into JSON. Measured against the real artifact: **34.5 GB of memory and 13.5 minutes**, on a machine with 22 GiB of RAM (from `free -g` on the box, 2026-08-21) that is shared with a
+second service.
 
 That second service is views-faoapi, which runs this same architecture over this same data. On
 2026-08-14 the kernel killed it three times in 41 minutes, each time while it was holding about
@@ -32,8 +33,8 @@ compact numeric format into a verbose text one, per request, at full size.
 **A new requirement turns a bad ratio into an impossible one.** The specification has gained the
 calibration and validation partitions. Those are rolling-origin, meaning each month is predicted
 repeatedly at different lead times, so they hold **972 predicted month-slices against today's 36**.
-Held in memory the way the current serving path holds a run, that is **96.5 GB** — on a 22 GiB box
-(see ADR-037). Rendering on demand does not become risky at that size. It stops being arithmetically
+Held in memory the way the current serving path holds a run, that is **96,659,288,064 bytes** —
+3 × 972 × 64,742 × 128 × 4, or about 97 GB — on a 22 GiB box (see ADR-037). Rendering on demand does not become risky at that size. It stops being arithmetically
 possible.
 
 ### What is agreed, and what is open
@@ -55,14 +56,42 @@ surface rather than only bounding one. See Consequences for what changes when th
 
 ### The measurements that decide this
 
-| | |
-|---|---|
-| Full production posterior — every draw, every target, globally | **1.81 MB** of value bytes |
-| The same, as currently packaged on the wire | 94 MB (98% is `unit` and `sample` columns derivable from the header) |
-| The same, expanded as `(N,S)` float32 in the serving cache | **3.58 GB** |
-| Historical artifact | 164 MB, of which **518 KB is data** — the rest is `priogrid_id` and geography repeated 439 times |
-| Full 45-column consumer schema, precomputed at **all four** aggregation levels | **~16 MB**, ~2.5 min per delivery |
-| An unparameterised `subset` request, rendered as JSON | **34.5 GB, 13.5 minutes** |
+All sizes are **bytes**, to avoid the MB/MiB ambiguity — an earlier draft of this table mixed both
+conventions and labelled all three "MB". Rows 1–4 were re-measured on 2026-08-26 against the
+delivered run `rusty_bucket_forecasting_20260727_095355`; the command is below the table.
+
+| | bytes | how obtained |
+|---|---|---|
+| Production posterior, `value` column only, all 108 shards | **1,814,921** | measured, from parquet column metadata |
+| The same, as packaged on the wire (all four columns) | **97,902,305** | measured; `unit` 57.4% + `sample` 40.7% = 98.1% is derivable from the header |
+| The same, expanded as `(N,S)` float32 in the serving cache | **3,579,974,016** | measured, `values.npy` on disk |
+| Historical artifact, whole file | **171,838,903** | measured; the three target columns are **518,072** of it (0.30%) |
+| Full 45-column schema at all four aggregation levels | **~16,000,000** | **extrapolated, not measured** — see below |
+| An unparameterised `subset` request, rendered as JSON | **~34,500,000,000**, 13.5 min | **inherited**, measured 2026-08-22 on a real artifact; not re-run here |
+
+**Reproducing rows 1–2.** From the repository root, with a delivered run in the cache:
+
+```
+uv run python -c "
+import pyarrow.parquet as pq, pathlib
+d = pathlib.Path('apis/un_crafd/cache/appwrite_cache/crafd_bucket')
+tot = {}
+for f in d.glob('*__lr_ged_*__m*.arrow.parquet'):
+    pf = pq.ParquetFile(f)
+    for rg in range(pf.metadata.num_row_groups):
+        m = pf.metadata.row_group(rg)
+        for c in range(m.num_columns):
+            col = m.column(c)
+            tot[col.path_in_schema] = tot.get(col.path_in_schema, 0) + col.total_compressed_size
+print(tot)"
+```
+
+**The ~16 MB figure is an extrapolation and should be read as one.** It scales the one artifact that
+has been measured — the admin-1 forecast file, 461,991 bytes over 87,552 rows, so 5.277 bytes per
+row — across the row counts at the other levels. Those row counts are measured (64,742 pg cells;
+2,432 admin-1; 15,595 admin-2; 202 countries; each × 36 months), but bytes-per-row is assumed
+constant across levels and will not be: `pg` carries a different identity block and `priogrid_id`
+compresses poorly. Read it as "tens of megabytes, not gigabytes", which is all the decision needs.
 
 The data is small. **The transport is what is expensive.** Every memory ceiling, OOM, 504 and
 62-second cold start in this repository's history is an artifact of rendering parquet as JSON per
@@ -100,7 +129,16 @@ this page to forget."*
 
 It is correct, and it **proves server-side aggregation, not a query API.** The list of aggregations we offer
 is fixed and short — five geographic levels, two categories, so ten combinations — so precomputing
-every one of them when a run arrives satisfies the statistics identically, at ~2.5 minutes per delivery against 3–70 seconds per request.
+every one of them when a run arrives satisfies the statistics identically.
+
+**On build time, stated carefully because the obvious number is the wrong one.** The available
+measurement is 154.9 s for the four *forecast aggregate* levels — country 33.0, gaul0 25.4, gaul1
+30.8, gaul2 65.7 — recorded in ADR-030 against this run. The Decision below specifies **eight**
+artifacts: both categories, and including `pg`, which has no aggregation step and has never been
+timed. So the honest statement is that **the four measured levels take ~2.5 minutes and the full set
+has not been measured.** It is paid once per delivery rather than once per request, which is the
+property the decision rests on; if the full set turns out materially slower, that is a reason to
+revisit the build, not the decision.
 `alpha` is already inert; the credible masses are fixed at 50/90/95, so there is no caller-selected
 dimension a file cannot precompute. This repository already does exactly this for one route: `/data/forecast/bulk` builds a file and
 hands it back, rather than assembling a response per request.
@@ -184,8 +222,8 @@ levelled grammar is for slices, not bulk.
 single place a run is already loaded (`_get_latest_dataset`). The operator's preference for local improvement
 over rewrites is honoured by staging: build alongside, verify, then remove.
 
-**It shrinks the surface without shrinking the capability.** Thirty-two routes over a job whose
-entire information content is 1.81 MB is a very large way in to a very small thing. Moving the work
+**It shrinks the surface without shrinking the capability.** Thirty-two routes over a job whose entire information content is 1,814,921 bytes is a very large
+way in to a very small thing. Moving the work
 to build time pays it once, offline, where it can be debugged without a request attached. Moving the complexity to build time pays it once, offline, where it can be debugged
 without a request attached.
 
@@ -248,7 +286,7 @@ a partner-communication act rather than a repository one.
 ## Alternatives Considered
 
 **A — Keep the query grid and fix its defects.** Rejected on arithmetic. Even setting aside the 12
-open concerns on that surface, the partition requirement in ADR-037 would need 96.5 GB
+open concerns on that surface, the partition requirement in ADR-037 would need ~97 GB
 held in memory on a 22 GiB box. Render-on-demand does not become risky; it becomes impossible.
 
 **D — Static files with no application server, views-datafactory style.** Rejected on the four gaps
@@ -274,8 +312,8 @@ be reverted selectively, three of which lack evidence or are blocked upstream.
    path, so neither answer is blocked.
 
 2. **Does the historical file channel survive alongside the built historical artifacts?** The
-   Decision builds historical at four levels. That is a *computed* product; the raw 164 MB parquet
-   the producer uploaded is a different thing, and a consumer may want it. Keeping both is cheap and
+   Decision builds historical at four levels. That is a *computed* product; the raw 171,838,903-byte parquet the producer uploaded is a different
+   thing, and a consumer may want it. Keeping both is cheap and
    they answer different questions, but nobody has asked for the raw one. Note that its discovery
    path is broken either way — the refusal message names two provenance fields the endpoint does not
    return — and that must be fixed whichever way this lands.
