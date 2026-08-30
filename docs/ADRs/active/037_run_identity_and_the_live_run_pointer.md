@@ -126,11 +126,22 @@ validation exists to detect.
      back to newest — which is the ADR-033 guarantee, now carried by the pointer instead of by the
      cache-identity comparison.
 
-   **`DECISION NEEDED` — where it is stored.** A document in the existing Appwrite collection is
-   shared and survives redeploy for free, but that collection's schema is closed by a golden test
-   and adding a field is a contract change. A file in the bucket is schema-free but needs its own
-   read path. A deployment config value is simplest but is not visible to the operator at runtime.
-   **This ADR does not choose.** Item 4 below cannot be executed until it does.
+   **Where it lives, and who writes it.** Ratified by the maintainer 2026-08-26.
+
+   The pointer is a document in the **CRAF'd bucket's own metadata collection** — the collection
+   this service already queries for file records. No new configuration in this repository, and none
+   in views-models or views-postprocessing. Chosen over a file in the bucket (needs its own read
+   path) and over a deployment config value (invisible at runtime, lost on redeploy). The cost is
+   real and accepted: that collection's attribute set is pinned by a golden test, so adding the
+   field is a deliberate contract change rather than an edit.
+
+   **views-postprocessing writes it at delivery**, as part of the same upload that publishes the
+   run. The producer declares what it published — which is where that knowledge already exists, and
+   which removes the "someone forgot to move the pointer" failure rather than documenting it.
+   Filed there as an issue; this repository reads the pointer and does not write it.
+
+   Until that lands, this repository still selects by upload order, so the hazard in Context stands.
+   Reading the pointer when present is the change here; writing it is upstream.
 
 4. **The pointer is introduced before the archive, not after.** It is the only item here that is
    expensive to retrofit — once artifacts are addressable and something has pinned one, changing how
@@ -209,12 +220,11 @@ with room for more than one at a time.
 
 **Negative, and accepted**
 
-- **A second mutable thing exists, and someone has to move it.** Moving the pointer becomes a named
-  step in `deployment/MONTHLY_REFRESH.md`, performed by whoever runs the delivery, immediately after
-  Hop B and before the verification block — so the existing provenance check doubles as the check
-  that the pointer moved. If it is forgotten, a fresh run is stored but not served. That failure is
-  *visible* — `/provenance/forecast` names the old run — where today's failure is silent, and that
-  is the trade being made deliberately.
+- **A second mutable thing exists.** It is written by the delivery itself rather than by a person,
+  so there is no new manual step and no "someone forgot" failure. If the write fails, the delivery
+  fails loudly at the point of upload instead of leaving a fresh run stored but unserved. That is
+  the reason for putting the write at the producer rather than in the runbook — a step in a runbook
+  is a step someone can skip.
 - **The address format is a commitment.** Once a consumer pins, the path shape is a contract.
 - Partition support remains unbuildable here until upstream moves. Building the shape against one
   partition is a deliberate bet that the shape generalises; if the wire contract lands with a
@@ -251,10 +261,8 @@ a golden test, and overloading it would conflate "what kind of data" with "which
 
 ## Open Questions
 
-1. **Where the live-run pointer is stored** — see the `DECISION NEEDED` in Decision item 3, which
-   states the three options and what each costs. This is the one unanswered question that blocks
-   work: items 3 and 4 cannot be built until it is settled. Everything else here is either decided
-   or explicitly deferred to upstream.
+1. ~~**Where the live-run pointer is stored**~~ **Ratified 2026-08-26** — see Decision item 3. What
+   remains is upstream: views-postprocessing has to write it. Reading it is buildable here now.
 
 2. **Retention for archived runs**, when the archive exists. ADR-036 decides retention for *built
    artifacts* — keep two runs — but an archive of calibration and validation runs is a different

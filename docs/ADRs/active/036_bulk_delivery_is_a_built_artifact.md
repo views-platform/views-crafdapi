@@ -167,11 +167,16 @@ Concretely, and in this order:
    **When.** Triggered by the same ingest that already assembles a run — not by a request, and not
    by a separate schedule.
 
-   **`DECISION NEEDED` — `country` vs `gaul0`.** These are the same geography under two key columns,
-   and precomputation forces the question because it would otherwise mean writing the same numbers
-   to two files. This ADR builds `country` and not `gaul0`, on the grounds that ISO3 is the key a
-   partner will use — **but that is a partner-facing choice and the operator should overrule it if
-   ISO3 is wrong.** Until ratified, the `gaul0` route continues to serve from the query path.
+   **`country` wins; `gaul0` is retired.** Ratified by the maintainer 2026-08-26. They are the same
+   geography under two key columns, and precomputation forced the question because keeping both
+   means writing identical numbers to two files with nothing checking they agree — a divergence
+   `ROADMAP.md:147-149` already records as undetectable.
+
+   The three-letter code is what an analyst recognises and what most datasets join on. **Nothing is
+   lost:** the GAUL numeric code stays in the file as a column (`country_code`, already in the
+   45-column schema), so a consumer keying on GAUL gets it from the data rather than from a separate
+   URL. The four `gaul0` routes are retired on the same schedule as the rest of the query grid —
+   Decision item 3 — not before.
 
 2. **Verify against what the service already produces.** The current `/data/forecast/bulk` route
    returns a parquet file of **461,991 bytes**, and it has returned exactly that size in three
@@ -305,11 +310,7 @@ be reverted selectively, three of which lack evidence or are blocked upstream.
 
 ## Open Questions
 
-1. **Is `country` the right survivor?** The Decision picks `country` (ISO3) over `gaul0` and says
-   why, but the reasoning is about what a partner will key on, which is the operator's call rather
-   than an engineering one. If `gaul0` is the right key, one line of the Decision changes and
-   nothing else does. Until ratified the Decision stands and `gaul0` keeps serving from the query
-   path, so neither answer is blocked.
+1. ~~**Is `country` the right survivor?**~~ **Ratified 2026-08-26 — `country`.** See Decision item 1.
 
 2. **Does the historical file channel survive alongside the built historical artifacts?** The
    Decision builds historical at four levels. That is a *computed* product; the raw 171,838,903-byte parquet the producer uploaded is a different
