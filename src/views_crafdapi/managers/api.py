@@ -12,7 +12,7 @@ import time
 from views_crafdapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
 from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager
 from views_crafdapi.managers.dataset_service import DatasetService
-from views_crafdapi.managers.prediction import PredictionStoreManager
+from views_crafdapi.managers.prediction import MetadataLookupError, PredictionStoreManager
 from views_crafdapi.managers import freshness
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.version import version_info
@@ -486,19 +486,33 @@ class CrafdApiManager(APIManager):
         # `_load_wire_run` turns it into Refused("manifest_lookup_error"). An Appwrite blip
         # must degrade the lineage answer to the legacy record fetched below, not 500 the
         # endpoint an operator is using to diagnose that very incident.
+        lookup_failed = None
         try:
             manifest = manager.get_latest_manifest_provenance()
         except Exception as e:  # noqa: BLE001 — same policy as api.py's health probe
             logger.warning("Manifest lineage lookup failed (non-blocking): %s", e)
-            manifest = None
-        stored = manager.get_latest_provenance(filters={"category": "forecast"})
+            manifest, lookup_failed = None, e
+        try:
+            stored = manager.get_latest_provenance(filters={"category": "forecast"})
+        except MetadataLookupError as e:
+            logger.warning("Stored lineage lookup failed (non-blocking): %s", e)
+            stored, lookup_failed = None, e
         data = forecast_provenance.forecast_record(
             served=served,
             manifest_record=manifest.to_dict() if manifest else None,
             stored_record=stored.to_dict() if stored else None,
         )
         if data is None:
+            if lookup_failed is not None:
+                # Nothing served here and the store could not be asked: "unavailable", not the
+                # 404 "no forecast exists" an empty answer would claim (C-233, #158). The
+                # store's own error text stays in the log, not the response (C-264).
+                raise HTTPException(status_code=503, detail="Metadata store unavailable")
             return None
+        if served is None and manifest is None and lookup_failed is not None:
+            # The manifest — which outranks any stored record — could not be checked, so what
+            # is reported here may not be the forecast this build would serve (#158 review).
+            data["manifest_lookup_failed"] = True
 
         # S3 (#246, ADR-033 §4): the freshness verdict of the served artifact.
         data["freshness"] = freshness.forecast_freshness(
@@ -511,7 +525,10 @@ class CrafdApiManager(APIManager):
         serving_state = self._dataset_service.forecast_serving_state()
         if serving_state is not None:
             data["serving_state"] = serving_state
-            if serving_state.get("degraded") and serving_state.get("reason"):
+            # A refusal reason only when something was refused: serving the cached run
+            # unverified during a lookup outage is a degraded serve, not a refusal (#158).
+            if (serving_state.get("degraded") and serving_state.get("reason")
+                    and serving_state.get("serving") != "cached_unverified"):
                 data["refusal_reason"] = serving_state["reason"]
         return data
 
@@ -653,7 +670,13 @@ class CrafdApiManager(APIManager):
                 if category == "forecast":
                     data = self._forecast_lineage(manager)
                 else:
-                    provenance = manager.get_latest_provenance(filters={"category": category})
+                    try:
+                        provenance = manager.get_latest_provenance(filters={"category": category})
+                    except MetadataLookupError as e:
+                        logger.warning("Historical lineage lookup failed: %s", e)
+                        raise HTTPException(
+                            status_code=503, detail="Metadata store unavailable"
+                        ) from e
                     data = provenance.to_dict() if provenance else None
 
                 if data is None:
@@ -1165,7 +1188,14 @@ class CrafdApiManager(APIManager):
                 serving_state = self._dataset_service.forecast_serving_state()
                 if serving_state is not None:
                     health["forecast_serving_state"] = serving_state
-                    if serving_state.get("degraded"):
+                    # `cached_unverified` records that the *last* forecast was served while the
+                    # store could not be asked. Once this probe reaches the store again it
+                    # describes a past response, not the service: show it, but do not page on
+                    # it — the next forecast request re-verifies the cache (#158 review).
+                    unverified_but_store_back = (
+                        serving_state.get("serving") == "cached_unverified" and result.success
+                    )
+                    if serving_state.get("degraded") and not unverified_but_store_back:
                         health["status"] = "degraded"
                         logger.warning(
                             "Forecast serving DEGRADED: newest run refused (reason=%s); "

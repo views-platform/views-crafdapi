@@ -152,3 +152,20 @@ class TestGetLatestDataset:
         mgr = _mock_manager(parquet_bytes)
         ds = svc.get_latest_dataset(mgr, "key", "historical")
         assert isinstance(ds, ForecastDataset)
+
+
+def test_historical_lookup_outage_cold_is_503_not_404():
+    """C-233 (#158): on a cold worker, a failed historical metadata lookup is "the store is
+    unavailable" (503) — not "no historical files exist" (404), which is what the empty result an
+    outage used to produce made it look like."""
+    from views_crafdapi.managers.prediction import MetadataLookupError
+
+    svc = _service(dataframe_cache={})
+    mgr = MagicMock()
+    mgr.get_latest_file_id.side_effect = MetadataLookupError("search failed", status=503)
+    mgr.get_latest_provenance.side_effect = MetadataLookupError("search failed", status=503)
+
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataframe(mgr, "key", "historical")
+    assert e.value.status_code == 503
+    assert e.value.detail == "Metadata store unavailable"   # the store's own text stays in the log

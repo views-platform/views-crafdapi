@@ -171,3 +171,18 @@ def test_valid_run_returns_Served():
     assert out.provenance["mode"] == "wire"      # S2: surfaced
     assert "status" in out.provenance            # S2: surfaced (None until producer stamps it)
     assert len(out.dataset.dataframe) == len(run.units)
+
+
+def test_artifact_lookup_failure_is_refused_as_artifact_lookup_error():
+    """C-233 (#158): when the shard/sidecar lookup itself fails, the run is refused for that
+    reason — not as `ingest_failed` "artifacts absent from the bucket", which is what an Appwrite
+    outage used to look like once the failed search had been turned into an empty result."""
+    from views_crafdapi.managers.prediction import MetadataLookupError
+
+    run = make_wire_run()
+    mgr = _wire_manager(run)
+    mgr.resolve_artifact_file_ids.side_effect = MetadataLookupError("search failed", status=503)
+    out = _service()._load_wire_run(
+        mgr, HASH, "forecast", _empty_cache(), time.time(), manifest_doc=run.manifest_doc,
+    )
+    assert isinstance(out, selection.Refused) and out.reason == "artifact_lookup_error"

@@ -288,6 +288,11 @@ def test_historical_never_takes_the_wire_path():
 
 # --- S5 (#207): cache re-key on the run-manifest fileId -----------------------------------------
 
+def _recent(days_ago: float = 1.0) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+
+
 def _rekey_manager(runs_by_fileid, *, with_legacy=False):
     """A store manager that serves whichever manifest ``state['current']`` names — a fileId key
     of ``runs_by_fileid`` (a `MultiShardRun`), ``None`` (no manifest), or the string ``"RAISE"``
@@ -295,7 +300,7 @@ def _rekey_manager(runs_by_fileid, *, with_legacy=False):
     run, a quarantine-to-nothing, or an Appwrite blip. Optionally also serves a legacy fallback."""
     from tests.conftest import make_fao_df
 
-    state = {"current": None}
+    state = {"current": None, "created_at": _recent()}
     mgr = MagicMock()
 
     def latest_manifest():
@@ -305,7 +310,10 @@ def _rekey_manager(runs_by_fileid, *, with_legacy=False):
         if cur is None:
             return None
         run = runs_by_fileid[cur]
-        return dict(run.manifest_doc, fileId=cur)  # patch the fileId to this run's identity
+        # Patch the fileId to this run's identity. `$createdAt` is an Appwrite system attribute
+        # every real document carries; it is what bounds an unverified serve by the SLA (#158).
+        stamp = {"$createdAt": state["created_at"]} if state["created_at"] else {}
+        return dict(run.manifest_doc, fileId=cur, **stamp)
 
     mgr.get_latest_manifest.side_effect = latest_manifest
 
@@ -418,6 +426,7 @@ def test_zero_manifest_forecast_fails_visible_not_legacy():
 
     run_a = make_multi_shard_run(run_id="run_a")
     mgr, state, _ = _rekey_manager({"mani_a": run_a}, with_legacy=True)
+    state["created_at"] = None  # no datable last-good: the premise of this test
     svc = _service()
 
     state["current"] = "mani_a"
@@ -612,6 +621,7 @@ def test_disk_wire_entry_manifest_vanishes_fails_visible_not_legacy(tmp_path):
 
     run_a = make_multi_shard_run(run_id="run_a")
     mgr, state, _ = _rekey_manager({"mani_a": run_a}, with_legacy=True)
+    state["created_at"] = None  # no datable last-good: the premise of this test
     svc = _service_real_disk(tmp_path)
 
     state["current"] = "mani_a"
@@ -787,3 +797,67 @@ def test_an_unidentifiable_run_does_not_destroy_the_last_good_entry(tmp_path):
         f"the refused run replaced the last-good entry (disk holds "
         f"{still['provenance']['run_id']!r})"
     )
+
+
+# --- C-233 (#158): a manifest-lookup outage is served from cache, flagged degraded ----------------
+
+def test_metadata_outage_on_warm_worker_serves_warm_flagged_degraded():
+    """With the outage now reaching the blip path (it used to be coerced into "no manifest"), the
+    warm run is served — but /health must say so: the cache could not be checked against the
+    store, so the run being served is unverified, not healthy."""
+    from tests.forecast._wire_fixtures import make_multi_shard_run
+
+    run_a = make_multi_shard_run(run_id="run_a")
+    mgr, state, _ = _rekey_manager({"mani_a": run_a})
+    svc = _service()
+    state["current"] = "mani_a"
+    svc.get_latest_dataframe(mgr, "key", "forecast")
+    assert svc.forecast_serving_state() == {"degraded": False}
+
+    state["current"] = "RAISE"
+    svc.get_latest_dataframe(mgr, "key", "forecast")
+    st = svc.forecast_serving_state()
+    assert st["degraded"] is True and st["reason"] == "manifest_lookup_error"
+    assert st["serving"] == "cached_unverified"
+
+
+def test_metadata_outage_on_cold_worker_serves_disk_flagged_degraded(tmp_path):
+    """The same on a cold worker: the disk entry is served, and flagged."""
+    from tests.forecast._wire_fixtures import make_multi_shard_run
+
+    run_a = make_multi_shard_run(run_id="run_a")
+    mgr, state, _ = _rekey_manager({"mani_a": run_a})
+    state["current"] = "mani_a"
+    _service(cache_dir=tmp_path).get_latest_dataframe(mgr, "key", "forecast")
+
+    state["current"] = "RAISE"
+    cold = _service(cache_dir=tmp_path)
+    cold.get_latest_dataframe(mgr, "key", "forecast")
+    st = cold.forecast_serving_state()
+    assert st["degraded"] is True and st["reason"] == "manifest_lookup_error"
+
+
+@pytest.mark.parametrize("gate", ["quarantined", "past_sla"])
+def test_an_unverified_cached_serve_honours_the_operator_and_the_sla(monkeypatch, gate):
+    """#158 review: during a manifest-lookup outage the cached run is served unverified — but with
+    the same two bounds the last-good fallback has. The operator's quarantine list is local (an
+    env var) and needs no store to read, and a run past the freshness SLA is never served on a
+    fallback. Either way: refuse, and fail visible."""
+    from fastapi import HTTPException
+    from tests.forecast._wire_fixtures import make_multi_shard_run
+    from views_crafdapi.managers.prediction import quarantine
+
+    run_a = make_multi_shard_run(run_id="run_a")
+    mgr, state, _ = _rekey_manager({"mani_a": run_a})
+    if gate == "past_sla":
+        state["created_at"] = _recent(days_ago=200)
+    svc = _service()
+    state["current"] = "mani_a"
+    svc.get_latest_dataframe(mgr, "key", "forecast")          # warm, verified
+
+    if gate == "quarantined":
+        monkeypatch.setenv(quarantine.QUARANTINED_FILE_IDS_ENV, "mani_a")
+    state["current"] = "RAISE"
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataframe(mgr, "key", "forecast")
+    assert e.value.status_code == 503

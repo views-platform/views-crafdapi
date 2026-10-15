@@ -157,6 +157,40 @@ class TestHealthEndpoint:
         assert body["forecast_serving_state"]["fallback_available"] is True
 
 
+class TestHealthAfterAnUnverifiedServe:
+
+    def test_a_past_unverified_serve_does_not_page_once_the_store_answers_again(self, app_client):
+        """One lookup failure leaves `cached_unverified` on the worker until its next forecast
+        request. If /health's own store probe succeeds, the store is back: that flag describes a
+        past response, not the service, and must not keep /health degraded (#158 review)."""
+        client, mgr, _ = app_client
+        self._unverified(mgr)
+        body = client.get("/health", headers=HEADERS).json()
+        assert body["status"] == "healthy"
+        assert body["forecast_serving_state"]["serving"] == "cached_unverified"   # still visible
+
+    def test_an_unverified_serve_still_degrades_health_while_the_store_is_unreachable(self, app_client):
+        client, mgr, _ = app_client
+        self._unverified(mgr)
+        mgr.app.dependency_overrides[mgr._get_appwrite_manager]().list_buckets.return_value = (
+            MagicMock(success=False)
+        )
+        body = client.get("/health", headers=HEADERS).json()
+        assert body["status"] == "degraded"
+
+    @staticmethod
+    def _unverified(mgr):
+        # A fresh served run, so freshness cannot be what decides the status.
+        mgr._dataset_service._last_forecast_provenance = {
+            "file_id": "wire_run_9", "mode": "wire", "source": "rusty_bucket",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        mgr._dataset_service._forecast_serving_state = {
+            "degraded": True, "reason": "manifest_lookup_error",
+            "fallback_available": True, "serving": "cached_unverified",
+        }
+
+
 class TestCacheStatsEndpoint:
 
     def test_cache_stats_returns_200(self, app_client):
@@ -724,6 +758,82 @@ class TestProvenanceEndpoint:
         resp = client.get("/provenance/forecast", headers=HEADERS)
         assert resp.status_code == 200, "must degrade to the legacy record, not 500"
         assert resp.json()["data"]["file_id"] == "legacy_001"
+        # #158 review: but it must say the manifest could not be checked — a legacy record is
+        # not "the forecast" when the manifest that would outrank it is unknown.
+        assert resp.json()["data"]["manifest_lookup_failed"] is True
+
+    def test_historical_provenance_is_503_when_the_store_lookup_fails(self, app_client):
+        """C-233 (#158): a failed lookup is "store unavailable", not "no historical files"."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, _, mock_pm = app_client
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("down", status=503)
+        resp = client.get("/provenance/historical", headers=HEADERS)
+        assert resp.status_code == 503, resp.text
+        assert "down" not in resp.text      # the store's own error text stays in the log (C-264)
+
+    def test_forecast_provenance_is_503_when_every_lookup_fails_and_nothing_is_served(self, app_client):
+        """With nothing served on this worker and both store lookups failing there is no answer to
+        give — but the honest refusal is 503, not a 404 claiming no forecast exists (#158)."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.side_effect = MetadataLookupError("down", status=503)
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("down", status=503)
+        mgr._dataset_service._last_forecast_provenance = None
+        resp = client.get("/provenance/forecast", headers=HEADERS)
+        assert resp.status_code == 503, resp.text
+        assert resp.json()["detail"] == "Metadata store unavailable"
+
+    def test_no_manifest_lookup_flag_when_a_forecast_is_being_served(self, app_client):
+        """The flag means "nothing here could be checked against the manifest". A worker that is
+        serving a forecast reports that run, so a failed manifest lookup does not taint it."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.side_effect = MetadataLookupError("down", status=503)
+        mock_pm.get_latest_provenance.return_value = None
+        mgr._dataset_service._last_forecast_provenance = {
+            "file_id": "wire_run_9", "mode": "wire", "source": "rusty_bucket",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
+        assert "manifest_lookup_failed" not in data
+
+    def test_no_manifest_lookup_flag_when_only_the_stored_lookup_failed(self, app_client):
+        """The manifest was checked and answered; only the outranked legacy lookup failed. The
+        answer is the manifest's, so it is not unchecked."""
+        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
+
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.side_effect = None
+        mock_pm.get_latest_manifest_provenance.return_value = PredictionProvenance(
+            file_id="manifest_001", source="rusty_bucket",
+            created_at=datetime.now(timezone.utc).isoformat(), filename="run__manifest.json",
+        )
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("down", status=503)
+        mgr._dataset_service._last_forecast_provenance = None
+        resp = client.get("/provenance/forecast", headers=HEADERS)
+        assert resp.status_code == 200, resp.text
+        assert "manifest_lookup_failed" not in resp.json()["data"]
+
+    def test_an_unverified_serve_is_not_reported_as_a_refusal(self, app_client):
+        """`refusal_reason` means a run was refused. Serving the cached run unverified during a
+        lookup outage is not a refusal, so it must not appear (#158 review)."""
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.return_value = None
+        mock_pm.get_latest_provenance.return_value = None
+        mgr._dataset_service._last_forecast_provenance = {
+            "file_id": "wire_run_9", "mode": "wire", "source": "rusty_bucket",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        mgr._dataset_service._forecast_serving_state = {
+            "degraded": True, "reason": "manifest_lookup_error",
+            "fallback_available": True, "serving": "cached_unverified",
+        }
+        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
+        assert "refusal_reason" not in data
+        assert data["serving_state"]["serving"] == "cached_unverified"
 
     def test_provenance_404s_when_the_store_answers_with_nothing_usable(self, app_client):
         """An unstubbed MagicMock's `to_dict()` collapses to `{}` — a truthy object carrying no

@@ -1233,3 +1233,31 @@ class TestCredentialRedaction:
         # this is exactly how api.py keys the cache — a sha256 prefix, never the raw key
         digest = hashlib.sha256(raw.encode()).hexdigest()[:16]
         assert raw not in digest and len(digest) == 16
+
+
+class TestAFailedCallKeepsItsHttpStatus:
+    """C-233 (#158). The SDK raises `AppwriteException` for every failure — an HTTP error, a
+    network error or a timeout. Keeping its HTTP status on the result is what lets a caller tell
+    "not authorised" (401/403) from "unreachable" (0/None/5xx) instead of reading all of them as
+    "nothing found"."""
+
+    def test_a_failed_search_carries_the_status_and_type(self, mock_databases, api_key_config):
+        mock_databases.list_documents.side_effect = AppwriteException(
+            "Service unavailable", 503, "general_server_error"
+        )
+        result = MetadataManager(mock_databases, api_key_config).search_files_by_metadata(
+            filters={"type": "sampled_forecast_manifest"}
+        )
+        assert result.success is False
+        assert result.status == 503 and result.code == "general_server_error"
+        assert result.to_dict()["status"] == 503
+
+    def test_a_failed_bucket_listing_carries_the_status(self, file_manager):
+        file_manager.storage.list_buckets.side_effect = AppwriteException(
+            "The current user is not authorized", 401, "general_unauthorized_scope"
+        )
+        result = file_manager.list_buckets(limit=1)
+        assert result.success is False and result.status == 401
+
+    def test_a_success_has_no_status(self):
+        assert OperationResult(success=True).status is None
