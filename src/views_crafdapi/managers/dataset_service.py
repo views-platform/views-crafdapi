@@ -32,6 +32,8 @@ from views_crafdapi.managers.prediction import (
     SHARD_ARTIFACT_TYPE,
     SIDECAR_ARTIFACT_TYPE,
     PredictionStoreManager,
+    _get_approved_file_ids,
+    _get_quarantined_file_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -680,7 +682,8 @@ class DatasetService:
         last-good value-dir this reads is intact.
         """
         try:
-            disk = self._disk_cache.read(api_key_hash, category)
+            # The SLA below bounds this read, not the disk TTL (ADR-033 §6; C-360, #157).
+            disk = self._disk_cache.read(api_key_hash, category, enforce_ttl=False)
         except Exception as e:  # a corrupt/unreadable last-good must not mask the refusal
             logger.warning("Last-good disk read failed during grace fallback: %s", e)
             disk = None
@@ -689,6 +692,22 @@ class DatasetService:
         if disk is None or disk.get("source_kind") != "wire":
             self._forecast_serving_state = {
                 "degraded": True, "reason": reason, "fallback_available": False,
+            }
+            return None
+        # The operator's C-71 rollback controls bind the fallback as they bind selection. With
+        # no other manifest left (NoRun), the slot holds exactly the run that was withdrawn, so
+        # without this check quarantining it would re-serve it for the whole SLA (#157 review).
+        approved = _get_approved_file_ids()
+        if disk.get("file_id") in _get_quarantined_file_ids() or (
+            approved and disk.get("file_id") not in approved
+        ):
+            logger.error(
+                "Grace fallback refused: last-good run %s is quarantined or not approved "
+                "(C-71); failing visible", disk.get("file_id"),
+            )
+            self._forecast_serving_state = {
+                "degraded": True, "reason": reason, "fallback_available": False,
+                "last_good_file_id": disk.get("file_id"), "last_good_withdrawn": True,
             }
             return None
         prov = dict(disk.get("provenance") or {})

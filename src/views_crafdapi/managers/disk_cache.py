@@ -133,8 +133,19 @@ class CrafdDiskCacheManager:
         for suffix in ("_value", "_meta.json", ".lock", "_dataset.pkl"):
             self._cleanup(self._cache_dir / f"{api_key_hash}_{category}{suffix}")
 
-    def read(self, api_key_hash: str, category: str) -> Optional[Dict[str, Any]]:
+    def read(self, api_key_hash: str, category: str,
+             enforce_ttl: bool = True) -> Optional[Dict[str, Any]]:
         """Read a dataset reconstructed from its disk-cached value.
+
+        An entry older than the TTL is a **miss, not a deletion** (C-360, #157). The slot is the
+        only copy of the last-good run, and the last-good fallback is bounded by the freshness SLA
+        (ADR-033 §6), not by this TTL — so it reads with ``enforce_ttl=False``. Deleting on expiry
+        silently cut its 45-day window to the 24.5-day TTL in two ways: the fallback's own read
+        deleted the slot (a refused run), and with no manifest at all the ordinary disk-tier read
+        ran first and deleted it (NoRun). Both paths need the slot to survive expiry, so the
+        deletion is gone, not merely skipped for one caller. One slot per (key, category) is
+        overwritten on the next write, so leaving an expired one in place costs nothing. A
+        schema-version mismatch still deletes: that slot cannot be loaded at all.
 
         Returns:
             Dict with 'dataset', 'file_id', 'timestamp' or None on cache miss/expired.
@@ -166,12 +177,12 @@ class CrafdDiskCacheManager:
                     return None
 
                 cache_age = time.time() - meta.get("timestamp", 0)
-                if cache_age > self._ttl_seconds:
+                if enforce_ttl and cache_age > self._ttl_seconds:
                     logger.info(
-                        "Disk cache expired for %s/%s (age: %.1f days)",
+                        "Disk cache expired for %s/%s (age: %.1f days); kept for the "
+                        "SLA-bounded last-good fallback",
                         api_key_hash, category, cache_age / 86400,
                     )
-                    self._cleanup(value_dir, meta_path)
                     return None
 
                 # S6b-1 (#208): mmap the sample store so a disk-served run pages on demand rather
@@ -224,6 +235,9 @@ class CrafdDiskCacheManager:
                 if tmp_dir.exists():
                     shutil.rmtree(tmp_dir)
                 dataset.to_value(tmp_dir)
+                # C-361 (#157): drop the old meta BEFORE the old data, so a kill anywhere below
+                # leaves "no meta" (a miss), never the new arrays under the previous run's identity.
+                meta_path.unlink(missing_ok=True)
                 if value_dir.exists():
                     shutil.rmtree(value_dir)
                 os.replace(tmp_dir, value_dir)
@@ -238,8 +252,7 @@ class CrafdDiskCacheManager:
                     "source_kind": source_kind,
                     "provenance": provenance,
                 }
-                with open(meta_path, "w") as f:
-                    json.dump(meta, f)
+                self._write_meta(meta_path, meta)
 
                 logger.info(
                     "Wrote disk cache for %s/%s (file_id: %s, rows: %d)",
@@ -278,6 +291,7 @@ class CrafdDiskCacheManager:
             lock = filelock.FileLock(lock_path, timeout=30)
             with lock:
                 self._cleanup_legacy_label(api_key_hash, category)
+                meta_path.unlink(missing_ok=True)  # C-361: before the data — see `write`
                 if value_dir.exists():
                     shutil.rmtree(value_dir)
                 os.replace(value_dir_src, value_dir)  # atomic (same filesystem)
@@ -291,8 +305,7 @@ class CrafdDiskCacheManager:
                     "source_kind": source_kind,
                     "provenance": provenance,
                 }
-                with open(meta_path, "w") as f:
-                    json.dump(meta, f)
+                self._write_meta(meta_path, meta)
                 logger.info(
                     "Adopted disk cache value-dir for %s/%s (file_id: %s, rows: %d)",
                     api_key_hash, category, file_id, rows,
@@ -314,6 +327,21 @@ class CrafdDiskCacheManager:
         except Exception as e:
             logger.warning("Failed to check disk cache file_id: %s", e)
             return False
+
+    @staticmethod
+    def _write_meta(meta_path: Path, meta: Dict[str, Any]) -> None:
+        """Write the sidecar atomically: a reader — including the lock-free ``check_file_id`` —
+        sees the previous state (here: no meta) or the complete new one, never a torn file."""
+        tmp = meta_path.with_name(meta_path.name + ".tmp")
+        try:
+            with open(tmp, "w") as f:
+                json.dump(meta, f)
+                f.flush()
+                os.fsync(f.fileno())  # the old meta is already gone, so this is the only copy
+            os.replace(tmp, meta_path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     @staticmethod
     def _cleanup(*paths: Path) -> None:

@@ -16,7 +16,7 @@ from fastapi import HTTPException
 
 from tests.conftest import make_fao_df
 from tests.forecast._wire_fixtures import make_wire_run
-from tests.test_dataset_service_wire import _service
+from tests.test_dataset_service_wire import HASH, _service
 from views_crafdapi.managers.prediction import SHARD_ARTIFACT_TYPE, SIDECAR_ARTIFACT_TYPE
 
 pytestmark = pytest.mark.layer4_infra
@@ -329,3 +329,59 @@ def test_a_caller_changing_its_dataset_does_not_change_the_next_serve(tmp_path):
 
     again = svc.get_latest_dataset(mgr, "key", "forecast")                # warm hit again
     assert len(again.dataframe) == n
+
+
+@pytest.mark.parametrize("phase", ["bad", "none"])
+def test_fallback_serves_last_good_past_disk_ttl_within_sla(tmp_path, phase):
+    """C-360 (#157). The last-good run is 5 days old — inside the 45-day SLA — but its disk slot is
+    past the disk TTL (set to 0 here; 24.5 days in production). ADR-033 §6 bounds the fallback by
+    the SLA, so it must still serve. Before #157 the disk-tier read deleted the slot first: 503."""
+    run = make_wire_run()
+    svc = _service(tmp_path)
+    mgr, state = _good_then_bad_manager(run, created_at=_iso(5))
+    good = svc.get_latest_dataset(mgr, "key", "forecast")
+
+    # Age only the last-good slot past the (production, 24.5-day) disk TTL; the run itself stays
+    # 5 days old by its producer timestamp, so it is inside the SLA. Cold worker, so no warm entry.
+    meta_path = svc._disk_cache._meta_path(HASH, "forecast")
+    meta = json.loads(meta_path.read_text())
+    meta["timestamp"] -= svc._disk_cache.ttl_seconds + 86400
+    meta_path.write_text(json.dumps(meta))
+    svc._dataframe_cache.clear()
+    state["phase"] = phase
+
+    for _ in range(2):                    # still served on a later request: the slot survived
+        served = svc.get_latest_dataset(mgr, "key", "forecast")
+        assert len(served.dataframe) == len(good.dataframe)
+        st = svc.forecast_serving_state()
+        assert st["degraded"] is True and st["serving"] == "last_good_manifested"
+    assert meta_path.exists()
+
+
+@pytest.mark.parametrize("gate", ["quarantined", "not_approved"])
+def test_fallback_never_serves_a_last_good_run_the_operator_has_withdrawn(
+    tmp_path, monkeypatch, gate
+):
+    """The operator's C-71 rollback controls bind the fallback too. Here the last-good run is the
+    one withdrawn — quarantined by file id, or left off an active approval allowlist — and no other
+    manifest exists, so selection is NoRun and the fallback reads that very run from disk. It must
+    fail visible rather than serve what the operator removed (code-review on #157)."""
+    from views_crafdapi.managers.prediction import quarantine
+
+    run = make_wire_run()
+    svc = _service(tmp_path)
+    mgr, state = _good_then_bad_manager(run, created_at=_iso(5))
+    svc.get_latest_dataset(mgr, "key", "forecast")                 # mani_good on disk
+
+    if gate == "quarantined":
+        monkeypatch.setenv(quarantine.QUARANTINED_FILE_IDS_ENV, "mani_good")
+    else:
+        monkeypatch.setenv(quarantine.APPROVED_FILE_IDS_ENV, "some_other_run")
+    state["phase"] = "none"
+    svc._dataframe_cache.clear()
+
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataset(mgr, "key", "forecast")
+    assert e.value.status_code == 503
+    st = svc.forecast_serving_state()
+    assert st["degraded"] is True and st["fallback_available"] is False
