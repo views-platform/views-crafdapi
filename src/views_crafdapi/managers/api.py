@@ -595,8 +595,9 @@ class CrafdApiManager(APIManager):
         # who DID call it was already receiving a successful-looking empty answer. A 404 tells a
         # caller to stop; a valueless 200 does not.
         #
-        # `_get_latest_dataframe` survives deliberately: `get_latest_dataset` calls it, so it is the
-        # ingest entry point for every remaining route, and ~30 tests use it as that seam.
+        # `_get_latest_dataframe` survives deliberately as a test seam (~30 tests drive the pipeline
+        # through it). Every route uses `_get_latest_dataset`, which returns the dataset the request
+        # selected; `_get_latest_dataframe` is that dataset's frame (C-356, #156).
 
         @self.app.get("/data/forecast/bulk")
         async def get_forecast_bulk_parquet(

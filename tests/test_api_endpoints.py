@@ -869,3 +869,58 @@ class TestHealthKeysTheFreshnessMonitorParses:
         assert "appwrite_connected" in body
         assert "forecast_freshness" in body
         assert "is_stale" in body["forecast_freshness"]
+
+
+# ============================================================
+# C-356 (#156): the degraded fallback through HTTP, across a restart
+# ============================================================
+
+
+def _cold_app(cache_dir, pm):
+    """A freshly started CrafdApiManager over an existing disk cache — what systemd's
+    Restart=always produces on every deploy. Nothing warm; only `pm` (the store) is mocked."""
+    mgr = CrafdApiManager.from_config({}, cache_dir=cache_dir)
+    mgr.app = FastAPI()
+    mgr._register_routes()
+    appwrite = MagicMock()
+    appwrite.list_buckets.return_value = MagicMock(success=True)
+    appwrite.get_cache_stats.return_value = {}
+    mgr._validate_api_key = MagicMock(return_value=appwrite)
+    mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: pm
+    mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: appwrite
+    return TestClient(mgr.app)
+
+
+class TestDegradedFallbackAcrossARestart:
+    """A good run is served, the service restarts, and the next delivery is refused (``bad``) or
+    absent (``none``). ADR-033 §6 says the last-good run is served, degraded and loudly. Before
+    #156 every data route answered 500 instead, because the route re-read a warm cache slot the
+    fallback never fills."""
+
+    ROUTES = ["/pg/analysis/forecast/hdi-map", "/data/forecast/bulk"]
+
+    @pytest.fixture
+    def restarted(self, tmp_path):
+        from tests.forecast._wire_fixtures import make_wire_run
+        from tests.test_dataset_service_fallback import _good_then_bad_manager, _iso
+
+        pm, state = _good_then_bad_manager(make_wire_run(), created_at=_iso(5))
+        pm.get_latest_provenance.return_value = None   # no historical: bulk serves s_actual as NaN
+        cache = tmp_path / "cache"
+        first = _cold_app(cache, pm)
+        assert first.get(self.ROUTES[0], headers=HEADERS).status_code == 200  # good run on disk
+        return cache, pm, state
+
+    @pytest.mark.parametrize("phase", ["bad", "none"])
+    @pytest.mark.parametrize("route", ROUTES)
+    def test_route_serves_last_good_after_restart(self, restarted, phase, route):
+        cache, pm, state = restarted
+        state["phase"] = phase
+        client = _cold_app(cache, pm)
+
+        resp = client.get(route, headers=HEADERS)
+        assert resp.status_code == 200, resp.text
+
+        health = client.get("/health", headers=HEADERS).json()
+        assert health["status"] == "degraded"
+        assert health["forecast_serving_state"]["serving"] == "last_good_manifested"

@@ -31,7 +31,7 @@ HASH = "deadbeef00000000"
 
 # --- the pure selection module -----------------------------------------------------------
 def test_result_types_are_distinct_and_frozen():
-    served = selection.Served(dataframe="df", dataset="ds", file_id="f", mode="wire")
+    served = selection.Served(dataset="ds", file_id="f", mode="wire")
     refused = selection.Refused("ingest_failed", detail="boom", file_id="f")
     assert served.mode == "wire" and served.provenance is None
     assert refused.reason == "ingest_failed" and refused.detail == "boom"
@@ -41,7 +41,7 @@ def test_result_types_are_distinct_and_frozen():
 
 
 def test_run_gates_short_circuits_on_first_refused():
-    served = selection.Served(dataframe="df", dataset="ds", file_id="f", mode="wire")
+    served = selection.Served(dataset="ds", file_id="f", mode="wire")
     calls = []
     out = selection.run_gates(
         served,
@@ -63,21 +63,21 @@ def test_run_gates_only_applies_to_served():
 
 
 def test_run_gates_empty_is_identity():
-    served = selection.Served(dataframe="df", dataset="ds", file_id="f", mode="wire")
+    served = selection.Served(dataset="ds", file_id="f", mode="wire")
     assert selection.run_gates(served, ()) is served
 
 
 # --- S2 (#247): the identifiable gate (ADR-033 §3) ---------------------------------------
 def test_identifiable_gate_refuses_unknown_or_absent_source():
     for prov in ({"source": "unknown"}, {"source": ""}, {}, None):
-        served = selection.Served(dataframe="df", dataset="ds", file_id="f", mode="wire",
+        served = selection.Served(dataset="ds", file_id="f", mode="wire",
                                   provenance=prov)
         out = _identifiable_gate(served)
         assert isinstance(out, selection.Refused) and out.reason == "unidentifiable"
 
 
 def test_identifiable_gate_passes_a_named_source():
-    served = selection.Served(dataframe="df", dataset="ds", file_id="f", mode="wire",
+    served = selection.Served(dataset="ds", file_id="f", mode="wire",
                               provenance={"source": "rusty_bucket"})
     assert _identifiable_gate(served) is served
 
@@ -170,4 +170,4 @@ def test_valid_run_returns_Served():
     assert out.provenance["run_id"] == run.run_id
     assert out.provenance["mode"] == "wire"      # S2: surfaced
     assert "status" in out.provenance            # S2: surfaced (None until producer stamps it)
-    assert len(out.dataframe) == len(run.units)
+    assert len(out.dataset.dataframe) == len(run.units)

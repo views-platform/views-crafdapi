@@ -151,18 +151,23 @@ class DatasetService:
         ``None`` until the first forecast serve."""
         return self._last_forecast_provenance
 
-    def get_latest_dataframe(
+    def get_latest_dataset(
         self,
         manager: PredictionStoreManager,
         x_api_key: str,
         category: str,
         force_refresh: bool = False,
-    ) -> pd.DataFrame:
+    ) -> ForecastDataset:
         """
-        Get the latest dataframe from the prediction bucket, using a multi-tier cache:
+        Get the latest dataset from the prediction bucket, using a multi-tier cache:
         1. In-memory cache (fastest, per-worker)
         2. Disk cache (shared across workers)
         3. Remote download from Appwrite (slowest)
+
+        Every return point returns the dataset that *this* request selected. Callers must never
+        re-read the warm cache afterwards to find it: the last-good fallback deliberately leaves
+        the warm cache empty (ADR-033 decision (i)), so on a cold worker that slot is ``None`` and
+        on a warm one it can hold a different run (C-356, #156).
 
         Args:
             manager: The PredictionStoreManager instance
@@ -171,7 +176,7 @@ class DatasetService:
             force_refresh: Whether to force refresh the cache
 
         Returns:
-            The latest dataframe as a pandas DataFrame
+            The selected ForecastDataset (a copy; safe for the caller to subset)
         """
         api_key_hash = self._api_key_hash(x_api_key)
         current_time = time.time()
@@ -232,7 +237,7 @@ class DatasetService:
         # *forecast* entry must additionally be a WIRE entry — a legacy forecast entry is never
         # served (that would re-open the loose-artifact seam this story closes).
         if (not force_refresh and
-            cache["data"] is not None and
+            cache["dataset"] is not None and
             cache["timestamp"] is not None and
             current_time - cache["timestamp"] <= cache_ttl and
             self._forecast_entry_servable(category, cache.get("source_kind")) and
@@ -253,7 +258,7 @@ class DatasetService:
             if category == "forecast":
                 self._forecast_serving_state = {"degraded": False}
                 self._last_forecast_provenance = cache.get("provenance")  # S7 (#252)
-            return cache["data"].copy()
+            return cache["dataset"].copy()
 
         # Check disk cache second (shared across workers). Post-S5 (#154) a hit returns a
         # dataset reconstructed from its persisted VALUE (ForecastDataset.from_value) — no
@@ -309,7 +314,7 @@ class DatasetService:
                 if category == "forecast":
                     self._forecast_serving_state = {"degraded": False}
                     self._last_forecast_provenance = cache.get("provenance")  # S7 (#252)
-                return cache["data"].copy()
+                return dataset.copy()
 
         # Need to download from remote
         logger.info(f"Refreshing latest {category} dataframe cache for API key: {api_key_hash}")
@@ -337,7 +342,7 @@ class DatasetService:
                 # Normal serve — clear any prior degraded/fallback state (producer recovered).
                 self._forecast_serving_state = {"degraded": False}
                 self._last_forecast_provenance = result.provenance  # S7 (#252): served-run lineage
-                return result.dataframe
+                return result.dataset.copy()
             if isinstance(result, selection.Refused):
                 logger.error(
                     "Wire run refused (reason=%s, file_id=%s): %s",
@@ -555,7 +560,7 @@ class DatasetService:
         # S1 (#264): the legacy path is `/historical`-only now — a forecast never reaches here (it is
         # served from a manifested run or fails visible above), so no forecast serving-state is set.
 
-        return cache["data"].copy()
+        return dataset.copy()
 
     def _try_stream_historical(
         self,
@@ -566,10 +571,10 @@ class DatasetService:
         provenance,
         cache: Dict[str, Any],
         current_time: float,
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[ForecastDataset]:
         """C-263 (#98): assemble the historical value-dir without decoding the artifact whole.
 
-        Returns the served dataframe on success, or ``None`` to fall through to the in-memory
+        Returns the served dataset on success, or ``None`` to fall through to the in-memory
         path — which is what happens for any artifact that is not already dense and in
         ``sort_index()`` order, and for any failure at all. This is a memory optimisation, so
         it is never allowed to be the reason a request fails: everything it can raise is caught
@@ -626,7 +631,7 @@ class DatasetService:
                 f"Streamed {category} value-dir: {rows} rows, targets={targets} "
                 f"(C-263 low-memory path)"
             )
-            return cache["data"].copy()
+            return dataset.copy()
         except historical_stream.ImplausibleArtifact as e:
             # C-72 is not a streaming problem, so it must not be answered by trying the other
             # streamer. The in-memory path would reach the same verdict after paying the full
@@ -657,7 +662,7 @@ class DatasetService:
 
     def _serve_last_good_within_sla(
         self, api_key_hash: str, category: str, reason: str
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[ForecastDataset]:
         """S4 (#249, ADR-033 §6, D-24) + S1 (#264): the bounded, alarmed grace fallback.
 
         There is no currently-servable manifested run — either the newest run was ``Refused``
@@ -666,12 +671,13 @@ class DatasetService:
         **manifested** run is still on disk AND still within the freshness SLA (S3), serve it —
         bounding a transient gap without going dark — but *loudly*: a WARNING alarm and a degraded
         serving-state that flips /health to ``degraded`` and flags /provenance. Returns the last-good
-        dataframe, or ``None`` to fail visible (past the SLA, unknown age, or no manifested last-good).
+        dataset, or ``None`` to fail visible (past the SLA, unknown age, or no manifested last-good).
 
         Deliberately does **not** repopulate the warm in-memory cache: every request re-evaluates the
         newest run (decision (i), ADR-033 §2), so recovery is picked up immediately and the fallback
-        never becomes sticky. A failed ingest discards only its staging dir (§4.6), so the last-good
-        value-dir this reads is intact.
+        never becomes sticky. That is why the dataset is *returned* rather than left in the cache
+        for the caller to find (C-356). A failed ingest discards only its staging dir (§4.6), so the
+        last-good value-dir this reads is intact.
         """
         try:
             disk = self._disk_cache.read(api_key_hash, category)
@@ -720,7 +726,7 @@ class DatasetService:
             "(%.1f days old, within %.0f-day SLA) as a bounded grace fallback",
             reason, disk.get("file_id"), verdict.get("age_days"), verdict.get("sla_days"),
         )
-        return dataset.dataframe.copy()
+        return dataset.copy()  # same contract as every other return point
 
     @staticmethod
     def _forecast_entry_servable(category: str, source_kind: Optional[str]) -> bool:
@@ -1009,35 +1015,22 @@ class DatasetService:
             f"targets={dataset.targets}"
         )
         return selection.Served(
-            dataframe=cache["data"].copy(),
             dataset=dataset,
             file_id=manifest_file_id,
             mode="wire",
             provenance=provenance,
         )
 
-    def get_latest_dataset(
+    def get_latest_dataframe(
         self,
         manager: PredictionStoreManager,
         x_api_key: str,
         category: str,
         force_refresh: bool = False,
-    ) -> ForecastDataset:
+    ) -> pd.DataFrame:
+        """The selected dataset's index/metadata frame — `get_latest_dataset(...).dataframe`.
+
+        No route uses this; it is kept as the seam the tests drive the pipeline through. The
+        `.copy()` keeps the deep-copy semantics it always had (`ForecastDataset.copy()` is shallow).
         """
-        Get the latest ViewsDataset from the prediction bucket, using a per-API-key cache.
-
-        Args:
-            manager: The PredictionStoreManager instance
-            x_api_key: The API key for cache keying
-            category: Either "historical" or "forecast"
-            force_refresh: Whether to force refresh the cache
-
-        Returns:
-            The latest ViewsDataset
-        """
-        api_key_hash = self._api_key_hash(x_api_key)
-
-        # Ensure the dataframe is loaded
-        self.get_latest_dataframe(manager, x_api_key, category, force_refresh)
-
-        return self._dataframe_cache[api_key_hash][category]["dataset"].copy()
+        return self.get_latest_dataset(manager, x_api_key, category, force_refresh).dataframe.copy()

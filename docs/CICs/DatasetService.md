@@ -33,7 +33,7 @@
 - **Format auto-detection:** parquet → CSV (utf-8 only) → JSON → feather. **Pickle is excluded** (C-59, RCE on untrusted bytes); a `PAR1` magic header that fails to parse short-circuits to 500 (C-52).
 - **Plausibility (C-72):** before caching/serving, `validate_value_plausibility()` + `validate_metadata_plausibility()` run; a violation surfaces as 500 — implausible data fails loud rather than reaching FAO.
 - **Cache key parity:** the API-key hash is computed by the injected `api_key_hash_fn` (the same function `CrafdApiManager` uses for routes), so service-written and route-read cache entries always share a key.
-- **Return contract:** `get_latest_dataframe` returns a **copy** of the cached DataFrame; `get_latest_dataset` returns a **copy** of the cached `ForecastDataset`.
+- **Return contract:** `get_latest_dataset` returns a **copy of the dataset this request selected** — warm, disk, a fresh wire ingest, or the last-good fallback — never whatever the warm cache happens to hold afterwards. The fallback leaves the warm cache empty by design (ADR-033 decision (i)), so a caller that re-read the cache got `None` on a cold worker and a different run on a warm one (C-356, #156). `get_latest_dataframe` is `get_latest_dataset(...).dataframe.copy()`; no route uses it, and it is kept as a test seam.
 
 ---
 
@@ -83,7 +83,7 @@ service = DatasetService(
     api_key_hash_fn=self._get_api_key_hash,
     check_staleness_fn=self._check_staleness,
 )
-df = service.get_latest_dataframe(prediction_manager, x_api_key, "forecast")
+dataset = service.get_latest_dataset(prediction_manager, x_api_key, "forecast")  # what routes use
 ```
 
 ## 9. Examples of Incorrect Usage

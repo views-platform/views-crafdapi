@@ -56,15 +56,16 @@ def _mock_manager(file_bytes, *, has_forecast=True):
 
 class TestCacheTiers:
     def test_memory_cache_hit_skips_download(self):
-        df = make_fao_df()
-        cache = {HASH: {"historical": {"data": df, "file_id": "f", "timestamp": time.time(), "dataset": None}}}
+        # A warm entry always carries its dataset — every writer sets `data` and `dataset` together.
+        ds = ForecastDataset(make_fao_df())
+        cache = {HASH: {"historical": {"data": ds.dataframe, "file_id": "f", "timestamp": time.time(), "dataset": ds}}}
         svc = _service(dataframe_cache=cache)
         mgr = MagicMock()
         mgr.get_latest_file_id.return_value = "f"  # C-172: cached entry IS still the newest historical
         out = svc.get_latest_dataframe(mgr, "key", "historical")
         mgr.get_latest_provenance.assert_not_called()
         mgr.download_prediction.assert_not_called()
-        assert out.equals(df) and out is not df  # returns a copy
+        assert out.equals(ds.dataframe) and out is not ds.dataframe  # returns a copy
 
     def test_disk_cache_fallback_skips_download(self):
         ds = ForecastDataset(make_fao_df())
