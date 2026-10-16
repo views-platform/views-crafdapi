@@ -490,14 +490,15 @@ class CrafdApiManager(APIManager):
         (S1/#264) while `/health` reports the manifest.
         """
         served = self._dataset_service.served_forecast_provenance()
-        # Guarded like every other caller of this query: `/health` wraps it, and
-        # `_load_wire_run` turns it into Refused("manifest_lookup_error"). An Appwrite blip
+        # `_load_wire_run` turns a failure of this query into Refused("manifest_lookup_error");
+        # `/health` swallows any failure, since its freshness block is best-effort. A store outage
         # must degrade the lineage answer to the legacy record fetched below, not 500 the
-        # endpoint an operator is using to diagnose that very incident.
+        # endpoint an operator is using to diagnose that very incident. Only a store failure:
+        # a config error or a bug propagates, as in `DatasetService` (ADR-033 §6a).
         lookup_failed = None
         try:
             manifest = manager.get_latest_manifest_provenance()
-        except Exception as e:  # noqa: BLE001 — same policy as api.py's health probe
+        except MetadataLookupError as e:
             refuse_if_unauthorized(e)                                       # C-268, #159
             logger.warning("Manifest lineage lookup failed (non-blocking): %s", e)
             manifest, lookup_failed = None, e
@@ -699,7 +700,10 @@ class CrafdApiManager(APIManager):
             except HTTPException:
                 raise
             except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
+                # A bug or a config error, not a store outage (those are 503 above). Its text is
+                # for the operator's log, not the response (C-264).
+                logger.error("%s provenance failed: %r", category, e)
+                raise HTTPException(status_code=500, detail="Provenance lookup failed") from e
 
         # Helper function for subset endpoints
         def create_subset_endpoint(category: str, level: Optional[str] = None):
@@ -1150,7 +1154,7 @@ class CrafdApiManager(APIManager):
         ):
             """Health check: Appwrite connectivity + forecast freshness (S3/#246, C-50).
 
-            HTTP status stays about *service* health (503 iff Appwrite is unreachable). *Data*
+            HTTP status stays about *service* health (401 for a refused key; 503 only if the check raises). *Data*
             freshness is reported in the body: a served forecast older than the SLA sets
             ``status="degraded"`` (service is up, the forecast is stale) so an external monitor
             can page on the body without conflating it with a service outage.

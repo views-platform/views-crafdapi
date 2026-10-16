@@ -65,7 +65,7 @@
 
 ## 7. Boundaries and Interactions
 
-- **Composed by** `CrafdApiManager` (constructed in `__init__` and `from_config`); route handlers call it via the thin `_get_latest_dataframe`/`_get_latest_dataset` delegators.
+- **Composed by** `CrafdApiManager` (constructed in `__init__` and `from_config`); route handlers call it via the thin `_get_latest_dataset` delegator; `_get_latest_dataframe` survives only as the test seam (C-356, #156). `/health` and `/provenance/forecast` also read `served_forecast_provenance()` and `forecast_serving_state()` directly.
 - **Depends on** `PredictionStoreManager` (injected per call), `CrafdDiskCacheManager`, `ForecastDataset` (domain).
 - **Does not** depend on FastAPI routing or `CrafdApiManager` internals beyond the injected collaborators (DIP).
 

@@ -767,14 +767,16 @@ class TestProvenanceEndpoint:
         assert mock_pm.get_latest_manifest_provenance.called, "the manifest must always be consulted"
 
     def test_provenance_degrades_to_legacy_when_the_manifest_lookup_raises(self, app_client):
-        """An Appwrite blip must not 500 the endpoint an operator uses to diagnose it.
+        """A store outage must not 500 the endpoint an operator uses to diagnose it.
 
-        `/health` and `_load_wire_run` both wrap this same call defensively; so does this.
+        `_load_wire_run` refuses with the reason and `/health` is best-effort; this degrades.
         """
-        from views_crafdapi.managers.prediction import PredictionProvenance
+        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
 
         client, mgr, mock_pm = app_client
-        mock_pm.get_latest_manifest_provenance.side_effect = RuntimeError("appwrite is down")
+        mock_pm.get_latest_manifest_provenance.side_effect = MetadataLookupError(
+            "appwrite is down", status=503
+        )
         mock_pm.get_latest_provenance.return_value = PredictionProvenance(
             file_id="legacy_001", source="orange_ensemble",
             created_at="2026-03-01T00:00:00.000Z", filename="old.parquet",
@@ -787,6 +789,25 @@ class TestProvenanceEndpoint:
         # #158 review: but it must say the manifest could not be checked — a legacy record is
         # not "the forecast" when the manifest that would outrank it is unknown.
         assert resp.json()["data"]["manifest_lookup_failed"] is True
+
+    @pytest.mark.parametrize("error", [RuntimeError, ValueError, KeyError, TypeError])
+    def test_a_non_store_error_in_the_manifest_lineage_lookup_is_not_a_503(
+        self, app_client, caplog, error
+    ):
+        """Only a store failure degrades lineage; a bug or a config error is not reported as
+        "Metadata store unavailable" (the policy `DatasetService` follows, ADR-033 §6a). Its
+        text goes to the log, not the response (C-264)."""
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.side_effect = error("collection not configured")
+        mock_pm.get_latest_provenance.return_value = None
+        mgr._dataset_service._last_forecast_provenance = None
+
+        with caplog.at_level("ERROR"):
+            resp = client.get("/provenance/forecast", headers=HEADERS)
+        assert resp.status_code == 500, resp.text
+        assert "collection not configured" not in resp.text, "internal text leaked (C-264)"
+        assert "unavailable" not in resp.json()["detail"].lower(), "a bug is not an outage"
+        assert "collection not configured" in caplog.text, "the cause must reach the log"
 
     def test_historical_provenance_is_503_when_the_store_lookup_fails(self, app_client):
         """C-233 (#158): a failed lookup is "store unavailable", not "no historical files"."""

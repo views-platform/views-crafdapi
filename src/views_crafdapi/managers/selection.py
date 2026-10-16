@@ -29,7 +29,7 @@ class Served:
     """The selection resolved to a servable run.
 
     ``dataset`` is kept untyped (``Any``) so this module stays dependency-light; it is a
-    ``ForecastDataset``. ``mode`` is the serving path that produced it (``"wire"`` / ``"legacy"``).
+    ``ForecastDataset``. ``mode`` is the serving path that produced it (``"wire"`` since S1/#264).
     (A ``dataframe`` field was removed in #156: the caller serves the dataset, and the frame was a
     deep copy built on every cold ingest and never read.)
     """
