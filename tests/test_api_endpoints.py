@@ -191,6 +191,32 @@ class TestHealthAfterAnUnverifiedServe:
         }
 
 
+class TestHealthCarriesNoStoreText:
+    """ADR-033 §6a rule 6 / C-264: no response carries the store's own error text — /health
+    included, which had put `str(e)` in its freshness error and its 503 detail (#160 review)."""
+
+    def test_the_freshness_error_is_generic(self, app_client):
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, mgr, mock_pm = app_client
+        mgr._dataset_service._last_forecast_provenance = None
+        mock_pm.get_latest_manifest.return_value = None
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError(
+            "storage_secret_detail", status=503)
+        resp = client.get("/health", headers=HEADERS)
+        assert resp.status_code == 200
+        assert "storage_secret_detail" not in resp.text
+        assert resp.json()["forecast_freshness"] == {"error": "freshness check failed"}
+
+    def test_the_unhealthy_detail_is_generic(self, app_client):
+        client, mgr, _ = app_client
+        appwrite = mgr.app.dependency_overrides[mgr._get_appwrite_manager]()
+        appwrite.list_buckets.side_effect = RuntimeError("storage_secret_detail")
+        resp = client.get("/health", headers=HEADERS)
+        assert resp.status_code == 503
+        assert "storage_secret_detail" not in resp.text
+
+
 class TestCacheStatsEndpoint:
 
     def test_cache_stats_returns_200(self, app_client):

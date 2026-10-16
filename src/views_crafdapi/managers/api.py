@@ -1200,7 +1200,7 @@ class CrafdApiManager(APIManager):
                 except Exception as e:  # freshness is best-effort; never fail the health check on it
                     refuse_if_unauthorized(e)
                     logger.warning("Forecast freshness check failed (non-blocking): %s", e)
-                    health["forecast_freshness"] = {"error": str(e)}
+                    health["forecast_freshness"] = {"error": "freshness check failed"}  # C-264
                 # S4 (#249, ADR-033 §6): a bounded grace fallback (the newest manifested run was
                 # refused, a last-good run is being served) is a degraded state — surface it and flip
                 # status, even when the served last-good is itself still within the freshness SLA.
@@ -1225,9 +1225,10 @@ class CrafdApiManager(APIManager):
             except HTTPException:
                 raise
             except Exception as e:
+                logger.error("Health check failed: %r", e)
                 raise HTTPException(
                     status_code=503,
-                    detail=f"Service unhealthy: {str(e)}"
+                    detail="Service unhealthy"  # the cause goes to the log, not the response (C-264)
                 )
 
         

@@ -7,18 +7,19 @@ ADR-013 §4. This module resolves that wire form into a ``ForecastDataset`` the 
 serving surface (HDI/MAP, posterior subsetting) can serve unchanged.
 
 Scope fence (deliberately minimal — extension points marked inline):
-  * S2: ONE small-S shard + the sidecar -> one servable ``ForecastDataset``; fail-safe (the
-    caller falls back to legacy on any ingest failure) + the §4.5(b) ``sample``-ordering guard.
+  * S2: ONE small-S shard + the sidecar -> one servable ``ForecastDataset``; fail-safe (on any
+    ingest failure the run is refused, never served degraded) + the §4.5(b) ``sample``-ordering
+    guard.
   * S3 (#205, done): the full §4.5 fail-LOUD integrity asserts now land here — (a) loaded S ==
     header ``sample_count``, (b) ``sample``-ordering, (c) shard + sidecar content-hash vs the
     manifest ``sha256`` (``verify_content_hash``, called from the service); plus the
     header-vs-manifest ``target``/``time_id`` cross-check and the coverage (§5.2) + completeness
-    (``expected_cell_count``) asserts (promoted from S2 warnings). A violation raises → the
-    fail-safe path serves legacy (loud in logs, safe for the endpoint).
+    (``expected_cell_count``) asserts (promoted from S2 warnings). A violation raises →
+    the run is refused (→ ``Refused``; ADR-033 §6a); loud in logs.
   * S4 (#206, done): multi-shard/month/target assembly — ``build_dataset`` now stacks ALL of a
     run's shards into one servable dataset (union grid, one ``pred_<target>`` per target,
     cross-shard uniform-S, run-level coverage). A *documented capacity bound*
-    (``estimate_assembled_bytes`` + the service guard) refuses oversized runs → fail-safe legacy;
+    (``estimate_assembled_bytes`` + the service guard) refuses oversized runs (→ ``Refused``);
     production-scale lazy per-month loading + the array-direct store are **S6 (#208)**.
   * Note: the served target keeps the wire vocabulary (``pred_lr_ged_sb``); mapping to the
     prefix-free FAO output schema (ADR-024/025) is a serving-layer concern, not S2.
@@ -107,8 +108,8 @@ def load_shard_state(shard_bytes: bytes) -> Dict[str, Any]:
     ``sample`` column, so a permuted or truncated ``sample`` column would silently place
     draws in the wrong slots (wrong ``sample_idx=`` results, invisible downstream). We read
     the raw ``sample`` column and assert it equals ``np.tile(np.arange(S), N)`` BEFORE
-    trusting the reshaped values; a violation raises (the serving path then falls back to
-    legacy rather than serving mis-slotted draws). S3 (#205) still owns the remaining
+    trusting the reshaped values; a violation raises, so the run is refused rather than served
+    with mis-slotted draws (→ ``Refused``; ADR-033 §6a). S3 (#205) still owns the remaining
     asserts: S == manifest ``sample_count``, and shard content-hash vs the manifest.
     """
     import pyarrow.parquet as pq
@@ -150,8 +151,8 @@ def load_shard_state(shard_bytes: bytes) -> Dict[str, Any]:
 def verify_content_hash(data: bytes, expected_sha256: Optional[str], what: str) -> None:
     """§4.5(c): assert an artifact's bytes match the SHA-256 the run manifest pinned for it.
 
-    A mismatch raises (the serving path then falls back to legacy rather than serving
-    unverified/tampered bytes). ``expected_sha256=None`` means the manifest did not pin a
+    A mismatch raises, so the run is refused rather than served from unverified or tampered
+    bytes (→ ``Refused``; ADR-033 §6a). ``expected_sha256=None`` means the manifest did not pin a
     hash for this artifact — we WARN (cannot verify) rather than fail, since hash *absence*
     is a manifest-completeness gap, not evidence of corruption."""
     if not expected_sha256:
@@ -212,7 +213,7 @@ def build_dataset(
 
     Integrity (S3, generalized to the run): per-shard header-vs-manifest ``target``/``time_id``
     + ``expected_cell_count``; cross-shard uniform S (§4.5a); run-level sidecar coverage (§5.2).
-    A violation raises → the serving path (S2 fail-safe) serves legacy instead.
+    A violation raises → the run is refused (→ ``Refused``; ADR-033 §6a).
     """
     if not shard_states:
         raise ValueError("no shards to assemble")
@@ -393,7 +394,7 @@ class WireRunAssembler:
 
         # Every month must carry EXACTLY the run's target set — else a target present only in
         # some months would be silently dropped (missing from self._vars) or KeyError. The
-        # whole-run path zero-fills such gaps; per-month assembly refuses them (fail-safe legacy),
+        # whole-run path zero-fills such gaps; per-month assembly refuses them (→ ``Refused``),
         # which is safer than serving a run with a silently-absent target.
         if set(ds.targets) != set(self._vars):
             raise ValueError(

@@ -142,7 +142,9 @@ def test_malformed_manifest_returns_Refused():
 
 def test_manifest_lookup_error_returns_Refused():
     mgr = MagicMock()
-    mgr.get_latest_manifest.side_effect = RuntimeError("appwrite down")
+    from views_crafdapi.managers.prediction import MetadataLookupError
+
+    mgr.get_latest_manifest.side_effect = MetadataLookupError("appwrite down", status=503)
     out = _service()._load_wire_run(
         mgr, HASH, "forecast", _empty_cache(), time.time(), manifest_doc=_MANIFEST_UNFETCHED
     )
@@ -186,3 +188,14 @@ def test_artifact_lookup_failure_is_refused_as_artifact_lookup_error():
         mgr, HASH, "forecast", _empty_cache(), time.time(), manifest_doc=run.manifest_doc,
     )
     assert isinstance(out, selection.Refused) and out.reason == "artifact_lookup_error"
+
+
+def test_a_non_store_error_in_the_cold_manifest_refetch_propagates():
+    """#160 guard audit: only a store failure is a lookup blip. A config error or a bug in the
+    cold path's own manifest refetch is not turned into `Refused("manifest_lookup_error")`."""
+    mgr = MagicMock()
+    mgr.get_latest_manifest.side_effect = RuntimeError("metadata collection is not configured")
+    with pytest.raises(RuntimeError):
+        _service()._load_wire_run(
+            mgr, HASH, "forecast", _empty_cache(), time.time(), manifest_doc=_MANIFEST_UNFETCHED
+        )

@@ -306,7 +306,10 @@ def _rekey_manager(runs_by_fileid, *, with_legacy=False):
     def latest_manifest():
         cur = state["current"]
         if cur == "RAISE":
-            raise RuntimeError("appwrite blip")
+            # What an Appwrite outage actually raises since #158 — not a bare RuntimeError, which
+            # since #160 is a bug or a deployment error and is no longer served around.
+            from views_crafdapi.managers.prediction import MetadataLookupError
+            raise MetadataLookupError("appwrite blip", status=503)
         if cur is None:
             return None
         run = runs_by_fileid[cur]
@@ -861,3 +864,21 @@ def test_an_unverified_cached_serve_honours_the_operator_and_the_sla(monkeypatch
     with pytest.raises(HTTPException) as e:
         svc.get_latest_dataframe(mgr, "key", "forecast")
     assert e.value.status_code == 503
+
+
+def test_a_configuration_error_is_not_served_around_as_a_lookup_blip():
+    """#160 review: only a store failure is a blip. A missing collection config raises
+    RuntimeError ("a deployment error, not an outage", #158); serving the cache as
+    `cached_unverified` would send the operator looking for an unreachable store."""
+    from tests.forecast._wire_fixtures import make_multi_shard_run
+
+    run_a = make_multi_shard_run(run_id="run_a")
+    mgr, state, _ = _rekey_manager({"mani_a": run_a})
+    svc = _service()
+    state["current"] = "mani_a"
+    svc.get_latest_dataframe(mgr, "key", "forecast")                  # warm
+
+    mgr.get_latest_manifest.side_effect = RuntimeError("metadata collection is not configured")
+    with pytest.raises(RuntimeError):
+        svc.get_latest_dataframe(mgr, "key", "forecast")
+    assert (svc.forecast_serving_state() or {}).get("serving") != "cached_unverified"

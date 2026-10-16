@@ -201,3 +201,26 @@ def test_the_historical_provenance_lookup_refuses_on_its_own():
     with pytest.raises(HTTPException) as e:
         svc.get_latest_dataframe(mgr, "key", "historical")
     assert e.value.status_code == 401
+
+
+def test_a_non_store_error_in_the_historical_lookup_is_not_served_around():
+    """#160 guard audit: with the historical cache warm, a config error or a bug in the latest-file
+    lookup surfaces; only a store failure (MetadataLookupError) is answered from the cache."""
+    ds = ForecastDataset(make_fao_df())
+    cache = {HASH: {"historical": {"data": ds.dataframe, "file_id": "f", "timestamp": time.time(),
+                                   "dataset": ds}}}
+    svc = _service(dataframe_cache=cache)
+    mgr = MagicMock()
+    mgr.get_latest_file_id.side_effect = RuntimeError("metadata collection is not configured")
+    with pytest.raises(RuntimeError):
+        svc.get_latest_dataframe(mgr, "key", "historical")
+
+
+def test_a_non_store_error_in_the_historical_provenance_lookup_is_not_a_503():
+    """Same rule at the provenance lookup: a config error is not "metadata store unavailable"."""
+    svc = _service(dataframe_cache={})
+    mgr = MagicMock()
+    mgr.get_latest_file_id.return_value = "hist_1"
+    mgr.get_latest_provenance.side_effect = RuntimeError("metadata collection is not configured")
+    with pytest.raises(RuntimeError):
+        svc.get_latest_dataframe(mgr, "key", "historical")

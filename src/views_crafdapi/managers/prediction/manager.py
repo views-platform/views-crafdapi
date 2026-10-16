@@ -333,7 +333,8 @@ class PredictionStoreManager:
         """ADR-013 §4.3 (S2/#204): resolve the newest Sampled-Forecast Wire Contract *run
         manifest* (``type="sampled_forecast_manifest"``, ``category="forecast"``). Returns
         the manifest store document (``fileId`` + ``filename`` + metadata) or ``None`` when
-        no manifested run exists — in which case the caller falls back to the legacy path.
+        no manifested run exists — in which case the caller serves the last-good manifested run
+        within the SLA, or a 503 (ADR-033 §6a); never a legacy artifact (S1/#264).
 
         The explicit ``type`` means the §11.4 transition guard leaves this query untouched
         (it only pins type-*less* category selections). Quarantine/approval and newest-wins
