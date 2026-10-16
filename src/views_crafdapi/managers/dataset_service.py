@@ -89,6 +89,19 @@ def _unidentifiable_reason(provenance: Optional[Dict[str, Any]]) -> Optional[str
     return None
 
 
+UNAUTHORIZED_DETAIL = "API key not authorized"
+
+
+def refuse_if_unauthorized(e: Exception) -> None:
+    """A metadata lookup the store refused (401/403) is not a blip: the key was revoked or never
+    had access. Nothing is served — not from the warm cache, the disk or the fallback — and the
+    caller gets 401 on this very request (C-268, #159). Anything else returns, to be handled as
+    the outage it is. Used at every lookup handler on the serving path, in this module and in
+    the routes."""
+    if isinstance(e, MetadataLookupError) and e.is_unauthorized:
+        raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL) from e
+
+
 def _withdrawn_by_operator(file_id: Optional[str]) -> bool:
     """Has the operator withdrawn this run with the C-71 controls — quarantined it, or left it off
     an active approval allowlist? Both are environment variables, so this needs no store and
@@ -246,6 +259,7 @@ class DatasetService:
                 if isinstance(manifest_doc, dict) and isinstance(manifest_doc.get("fileId"), str):
                     wire_identity = manifest_doc["fileId"]
             except Exception as e:
+                refuse_if_unauthorized(e)
                 # A lookup blip must not 500 the warm path: serve the cache (wire_identity stays
                 # None), and leave manifest_doc unfetched so the miss path retries the lookup.
                 logger.warning(f"Manifest lookup failed (non-blocking; serving cache): {e}")
@@ -264,6 +278,7 @@ class DatasetService:
                 if isinstance(lid, str):  # only act on a real id (mirrors the manifest fileId guard)
                     latest_legacy_id = lid
             except Exception as e:
+                refuse_if_unauthorized(e)
                 logger.warning(f"{category} latest-file lookup failed (non-blocking; serving cache): {e}")
 
         # Check in-memory cache first (fastest). S5 (#207): a warm forecast is served only if
@@ -435,6 +450,7 @@ class DatasetService:
         try:
             provenance = manager.get_latest_provenance(filters=filters)
         except MetadataLookupError as e:
+            refuse_if_unauthorized(e)
             # The store could not be asked, which is not "no files exist" (C-233, #158). Its
             # error text goes to the log, not the response (C-264).
             logger.error("%s lineage lookup failed: %s", category, e)
@@ -850,7 +866,12 @@ class DatasetService:
             return self._file_cache[file_id]["data"]
         result = manager.download_prediction(file_id)
         if not result.success:
-            raise HTTPException(status_code=500, detail=f"Failed to download {file_id}: {result.error}")
+            logger.error("Download of %s failed (status=%s): %s",
+                         file_id, getattr(result, "status", None), result.error)
+            if getattr(result, "status", None) in (401, 403):
+                # The key passed the metadata lookups but cannot read the bucket (#159 review).
+                raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
+            raise HTTPException(status_code=500, detail=f"Failed to download artifact {file_id}")
         data = result.data if isinstance(result.data, dict) else {}
         file_bytes = data.get("file_bytes")
         if not file_bytes:
@@ -923,6 +944,7 @@ class DatasetService:
             try:
                 manifest_doc = manager.get_latest_manifest()
             except Exception as e:
+                refuse_if_unauthorized(e)
                 # Cold-cache manifest-lookup blip: degrade to legacy rather than 500.
                 logger.warning(f"Manifest lookup failed: {e}")
                 return selection.Refused("manifest_lookup_error", detail=str(e))
@@ -1058,6 +1080,9 @@ class DatasetService:
                 raise RuntimeError("assembled wire value-dir not readable after adopt")
             dataset = disk["dataset"]
         except MetadataLookupError as e:
+            # Raising here is not caught by the sibling `except Exception`; `finally` still
+            # discards the staging dir.
+            refuse_if_unauthorized(e)
             # The shard/sidecar lookup failed: the store could not be asked. Not `ingest_failed`
             # ("artifacts absent from the bucket"), which is what an outage used to look like.
             logger.error("Artifact lookup failed for manifest %s: %s", manifest_file_id, e)
@@ -1065,6 +1090,8 @@ class DatasetService:
                 "artifact_lookup_error", detail=str(e), file_id=manifest_file_id
             )
         except Exception as e:
+            if isinstance(e, HTTPException) and e.status_code == 401:
+                raise  # a refused download: never a reason to serve the last-good run
             # Fail-safe: any ingest failure — a failed integrity assert, an over-capacity run
             # (§4.6), a non-rectangular run, a malformed manifest — falls back to legacy serving
             # rather than 500-ing the UN-facing endpoint. Loud in logs; the bad run is refused.

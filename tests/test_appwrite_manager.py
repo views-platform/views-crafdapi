@@ -1261,3 +1261,12 @@ class TestAFailedCallKeepsItsHttpStatus:
 
     def test_a_success_has_no_status(self):
         assert OperationResult(success=True).status is None
+
+
+    def test_a_failed_download_carries_the_status(self, file_manager):
+        file_manager.storage.get_file_download.side_effect = AppwriteException(
+            "The current user is not authorized", 401, "user_unauthorized"
+        )
+        file_manager.get_file = Mock(return_value=OperationResult(success=False, error="x"))
+        result = file_manager.download_file("bucket1", "f1", use_cache=False, validate_cache=False)
+        assert result.success is False and result.status == 401

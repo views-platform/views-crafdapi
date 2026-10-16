@@ -169,3 +169,35 @@ def test_historical_lookup_outage_cold_is_503_not_404():
         svc.get_latest_dataframe(mgr, "key", "historical")
     assert e.value.status_code == 503
     assert e.value.detail == "Metadata store unavailable"   # the store's own text stays in the log
+
+
+@pytest.mark.parametrize("status,expected", [(401, 401), (403, 401), (503, 500), (None, 500)])
+def test_a_failed_historical_download_says_why_without_the_stores_words(status, expected):
+    """#159 review: a refused download is 401; any other failed download stays a 500 — but the
+    response no longer carries the store's own error text (C-264)."""
+    from views_crafdapi.managers.appwrite import OperationResult
+
+    svc = _service(dataframe_cache={})
+    mgr = MagicMock()
+    mgr.get_latest_file_id.return_value = "hist_1"
+    mgr.get_latest_provenance.return_value = MagicMock(file_id="hist_1", source="x")
+    mgr.download_prediction.return_value = OperationResult(
+        success=False, error="Download failed: storage_secret_detail", code="x", status=status,
+    )
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataframe(mgr, "key", "historical")
+    assert e.value.status_code == expected
+    assert "storage_secret_detail" not in str(e.value.detail)
+
+
+def test_the_historical_provenance_lookup_refuses_on_its_own():
+    """The latest-file lookup answered; only the provenance lookup is refused (#159 guard audit)."""
+    from views_crafdapi.managers.prediction import MetadataLookupError
+
+    svc = _service(dataframe_cache={})
+    mgr = MagicMock()
+    mgr.get_latest_file_id.return_value = "hist_1"
+    mgr.get_latest_provenance.side_effect = MetadataLookupError("no", status=401)
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataframe(mgr, "key", "historical")
+    assert e.value.status_code == 401

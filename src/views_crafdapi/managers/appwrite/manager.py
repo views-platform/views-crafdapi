@@ -837,7 +837,7 @@ class AppWriteFileManager:
 
         except AppwriteException as e:
             return OperationResult(
-                success=False, error=f"Download failed: {e.message}", code=e.type
+                success=False, error=f"Download failed: {e.message}", code=e.type, status=e.code
             )
         except IOError as e:
             return OperationResult(

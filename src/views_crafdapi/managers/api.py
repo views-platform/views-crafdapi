@@ -11,7 +11,11 @@ import tempfile
 import time
 from views_crafdapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
 from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager
-from views_crafdapi.managers.dataset_service import DatasetService
+from views_crafdapi.managers.dataset_service import (
+    UNAUTHORIZED_DETAIL,
+    DatasetService,
+    refuse_if_unauthorized,
+)
 from views_crafdapi.managers.prediction import MetadataLookupError, PredictionStoreManager
 from views_crafdapi.managers import freshness
 from views_crafdapi.data.handlers import ForecastDataset
@@ -390,25 +394,29 @@ class CrafdApiManager(APIManager):
             # Validate the API key by making a simple API call
             validation_result = manager.list_buckets(limit=1)
             if not validation_result.success:
-                raise HTTPException(
-                    status_code=401,
-                    detail=f"Invalid API key: {validation_result.error or 'Authentication failed'}"
-                )
-            
+                status = validation_result.status
+                # The store's own wording stays in the log, not the response (C-264).
+                logger.warning("API key validation failed (status=%s): %s",
+                               status, validation_result.error)
+                if status in (401, 403):
+                    raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
+                # Anything else — no answer, a rate limit, a timeout, a wrong endpoint or project,
+                # a server error — says nothing about the key. Telling the caller "invalid key"
+                # sent them to rotate a key that was fine (#159).
+                raise HTTPException(status_code=503, detail="Metadata store unavailable")
+
             return manager
-            
+
         except ValueError as e:
-            raise HTTPException(
-                status_code=500,
-                detail=str(e)
-            )
+            # A deployment error (e.g. missing APPWRITE_* variables): its detail is for the
+            # operator's log, not for whoever sent the request (C-264).
+            logger.critical("API key validation could not be configured: %s", e)
+            raise HTTPException(status_code=500, detail="Server configuration error") from e
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(
-                status_code=401,
-                detail=f"Invalid API key or Appwrite configuration: {str(e)}"
-            )
+            logger.warning("API key validation could not reach the store: %r", e)
+            raise HTTPException(status_code=503, detail="Metadata store unavailable") from e
 
         
     def _get_appwrite_manager(self, x_api_key: str = Header(..., description="Appwrite API Key")) -> AppWriteFileManager:
@@ -490,11 +498,13 @@ class CrafdApiManager(APIManager):
         try:
             manifest = manager.get_latest_manifest_provenance()
         except Exception as e:  # noqa: BLE001 — same policy as api.py's health probe
+            refuse_if_unauthorized(e)                                       # C-268, #159
             logger.warning("Manifest lineage lookup failed (non-blocking): %s", e)
             manifest, lookup_failed = None, e
         try:
             stored = manager.get_latest_provenance(filters={"category": "forecast"})
         except MetadataLookupError as e:
+            refuse_if_unauthorized(e)
             logger.warning("Stored lineage lookup failed (non-blocking): %s", e)
             stored, lookup_failed = None, e
         data = forecast_provenance.forecast_record(
@@ -673,6 +683,7 @@ class CrafdApiManager(APIManager):
                     try:
                         provenance = manager.get_latest_provenance(filters={"category": category})
                     except MetadataLookupError as e:
+                        refuse_if_unauthorized(e)                               # C-268, #159
                         logger.warning("Historical lineage lookup failed: %s", e)
                         raise HTTPException(
                             status_code=503, detail="Metadata store unavailable"
@@ -1146,6 +1157,10 @@ class CrafdApiManager(APIManager):
             """
             try:
                 result = manager.list_buckets(limit=1)
+                if not result.success and result.status in (401, 403):
+                    # The managers are cached without revalidation (ADR-011 §3), so this probe is
+                    # where a revoked key shows up on /health (C-268, #159).
+                    raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
                 health = {
                     "status": "healthy",
                     "appwrite_connected": result.success,
@@ -1164,7 +1179,8 @@ class CrafdApiManager(APIManager):
                         try:
                             m = prediction_manager.get_latest_manifest()
                             created_at = m.get("$createdAt") if isinstance(m, dict) else None
-                        except Exception:
+                        except Exception as e:
+                            refuse_if_unauthorized(e)   # a refusal is not a freshness blip (#159)
                             created_at = None
                     if not created_at:
                         prov = prediction_manager.get_latest_provenance(filters={"category": "forecast"})
@@ -1179,7 +1195,10 @@ class CrafdApiManager(APIManager):
                             "Forecast STALE: %.1f days old > %.0f-day SLA (created=%s)",
                             fr["age_days"], fr["sla_days"], fr["created_at"],
                         )
+                except HTTPException:
+                    raise   # the 401 above; best-effort never covers an unauthorised key
                 except Exception as e:  # freshness is best-effort; never fail the health check on it
+                    refuse_if_unauthorized(e)
                     logger.warning("Forecast freshness check failed (non-blocking): %s", e)
                     health["forecast_freshness"] = {"error": str(e)}
                 # S4 (#249, ADR-033 §6): a bounded grace fallback (the newest manifested run was

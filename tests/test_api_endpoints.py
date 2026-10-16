@@ -1034,3 +1034,168 @@ class TestDegradedFallbackAcrossARestart:
         health = client.get("/health", headers=HEADERS).json()
         assert health["status"] == "degraded"
         assert health["forecast_serving_state"]["serving"] == "last_good_manifested"
+
+
+# ============================================================
+# C-268 (#159): a revoked key fails closed; a transient failure is not "invalid key"
+# ============================================================
+
+
+class TestARevokedKeyIsRefusedOnItsNextRequest:
+    """The key validated once and its manager is cached (`_manager_cache` has no TTL, ADR-011 §3),
+    so revocation is only ever seen as a 401 from the store's metadata calls. Every forecast
+    request looks up the manifest and every historical one the latest file, so that 401 must
+    end the request — not be served around as a lookup blip, from cache or from the fallback."""
+
+    ROUTES = [
+        "/pg/data/forecast/subset",
+        "/pg/analysis/forecast/hdi-map",
+        "/country/analysis/forecast/hdi-map?aggregate=true",
+        "/pg/data/historical/subset",
+        "/country/data/historical/subset?aggregate=true",
+        "/data/forecast/bulk",
+        "/provenance/forecast",
+        "/provenance/historical",
+    ]
+
+    @pytest.mark.parametrize("route", ROUTES)
+    def test_revoked_key_on_warm_worker_is_401(self, app_client, route):
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, mgr, mock_pm = app_client
+        revoked = MetadataLookupError("general_unauthorized_scope: missing scope", status=401,
+                                      appwrite_type="general_unauthorized_scope")
+        for lookup in ("get_latest_manifest", "get_latest_file_id", "get_latest_provenance",
+                       "get_latest_manifest_provenance", "resolve_artifact_file_ids"):
+            getattr(mock_pm, lookup).side_effect = revoked
+
+        resp = client.get(route, headers=HEADERS)
+        assert resp.status_code == 401, resp.text
+        assert "general_unauthorized_scope" not in resp.text   # nothing about the store (C-264)
+
+    def test_health_is_401_when_only_the_metadata_lookup_is_refused(self, app_client):
+        """A key that lost its database scope but kept buckets.read passes the bucket probe; its
+        refused manifest lookup must not be swallowed as a best-effort freshness check."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, mgr, mock_pm = app_client
+        mgr._dataset_service._last_forecast_provenance = None   # /health must ask the store
+        mock_pm.get_latest_manifest.side_effect = MetadataLookupError("no", status=401)
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("no", status=401)
+        assert client.get("/health", headers=HEADERS).status_code == 401
+
+    def test_the_warm_path_itself_refuses(self, app_client):
+        """Only the per-request manifest lookup is refused; a retry would succeed. The warm path
+        must stop there — not treat the refusal as a blip and go on to try again."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, _, mock_pm = app_client
+        good = mock_pm.get_latest_manifest.return_value
+        answers = iter([MetadataLookupError("no", status=401)])
+
+        def manifest():
+            nxt = next(answers, None)
+            if nxt is not None:
+                raise nxt
+            return good
+        mock_pm.get_latest_manifest.side_effect = manifest
+        assert client.get("/pg/analysis/forecast/hdi-map", headers=HEADERS).status_code == 401
+
+    @pytest.mark.parametrize("refused", ["manifest", "stored"])
+    def test_each_lineage_lookup_refuses_on_its_own(self, app_client, refused):
+        """Either of the two lineage lookups refusing is enough; the other answering is not a way
+        around it (#159 guard audit)."""
+        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
+
+        client, mgr, mock_pm = app_client
+        mgr._dataset_service._last_forecast_provenance = None
+        revoked = MetadataLookupError("no", status=401)
+        record = PredictionProvenance(file_id="m", source="s", created_at="2026-10-01T00:00:00Z",
+                                      filename="run__manifest.json")
+        if refused == "manifest":
+            mock_pm.get_latest_manifest_provenance.side_effect = revoked
+            mock_pm.get_latest_provenance.return_value = record
+        else:
+            mock_pm.get_latest_manifest_provenance.return_value = record
+            mock_pm.get_latest_provenance.side_effect = revoked
+        assert client.get("/provenance/forecast", headers=HEADERS).status_code == 401
+
+    @pytest.mark.parametrize("refused", ["manifest", "stored"])
+    def test_each_health_freshness_lookup_refuses_on_its_own(self, app_client, refused):
+        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
+
+        client, mgr, mock_pm = app_client
+        mgr._dataset_service._last_forecast_provenance = None      # /health must ask the store
+        revoked = MetadataLookupError("no", status=401)
+        if refused == "manifest":
+            mock_pm.get_latest_manifest.side_effect = revoked
+            mock_pm.get_latest_provenance.return_value = PredictionProvenance(
+                file_id="l", source="s", created_at="2026-10-01T00:00:00Z", filename="x")
+        else:
+            mock_pm.get_latest_manifest.return_value = None          # so /health asks for the stored one
+            mock_pm.get_latest_provenance.side_effect = revoked
+        assert client.get("/health", headers=HEADERS).status_code == 401
+
+    def test_health_is_401_when_the_bucket_probe_is_forbidden(self, app_client):
+        client, mgr, _ = app_client
+        appwrite = mgr.app.dependency_overrides[mgr._get_appwrite_manager]()
+        appwrite.list_buckets.return_value = OperationResult(success=False, status=403)
+        assert client.get("/health", headers=HEADERS).status_code == 401
+
+    def test_health_is_401_for_a_revoked_key(self, app_client):
+        client, mgr, _ = app_client
+        appwrite = mgr.app.dependency_overrides[mgr._get_appwrite_manager]()
+        appwrite.list_buckets.return_value = OperationResult(
+            success=False, error="not authorized", code="general_unauthorized_scope", status=401,
+        )
+        assert client.get("/health", headers=HEADERS).status_code == 401
+
+
+class TestKeyValidationTellsAuthFromOutage:
+    """`_validate_api_key` answered every failed `list_buckets` with 401 "Invalid API key" — an
+    Appwrite restart, a 5xx or a network timeout told the caller their key was wrong."""
+
+    @pytest.mark.parametrize("status,expected", [
+        (401, 401), (403, 401),                    # the store refused this key
+        # Anything else says nothing about the key: no answer, rate limit, timeout, a wrong
+        # endpoint or project (404), a server error. Telling the caller "invalid key" for these
+        # sent them to rotate a key that was fine (#159 review).
+        (0, 503), (None, 503), (400, 503), (404, 503), (408, 503), (429, 503), (500, 503), (503, 503),
+    ])
+    def test_status_maps_to_the_right_refusal(self, tmp_path, monkeypatch, status, expected):
+        import views_crafdapi.managers.api as api_module
+
+        mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
+        monkeypatch.setattr(mgr, "_create_appwrite_config", lambda key: MagicMock())
+        appwrite = MagicMock()
+        appwrite.list_buckets.return_value = OperationResult(
+            success=False, error="List buckets failed", code="x", status=status,
+        )
+        monkeypatch.setattr(api_module, "AppWriteFileManager", lambda config: appwrite)
+
+        with pytest.raises(HTTPException) as e:
+            mgr._validate_api_key("some-key")
+        assert e.value.status_code == expected
+        assert "List buckets failed" not in str(e.value.detail)        # C-264
+
+    def test_an_unexpected_exception_is_503_and_missing_config_is_500(self, tmp_path, monkeypatch):
+        import views_crafdapi.managers.api as api_module
+
+        mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
+        monkeypatch.setattr(mgr, "_create_appwrite_config", lambda key: MagicMock())
+
+        def boom(config):
+            raise ConnectionError("connection refused")
+        monkeypatch.setattr(api_module, "AppWriteFileManager", boom)
+        with pytest.raises(HTTPException) as e:
+            mgr._validate_api_key("some-key")
+        assert e.value.status_code == 503
+        assert e.value.detail == "Metadata store unavailable"     # not "connection refused"
+
+        def missing_env(key):
+            raise ValueError("Missing required environment variables: APPWRITE_ENDPOINT")
+        monkeypatch.setattr(mgr, "_create_appwrite_config", missing_env)
+        with pytest.raises(HTTPException) as e:
+            mgr._validate_api_key("some-key")
+        assert e.value.status_code == 500
+        assert "APPWRITE_ENDPOINT" not in str(e.value.detail)   # deployment detail stays in the log

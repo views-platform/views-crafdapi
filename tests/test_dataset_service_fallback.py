@@ -385,3 +385,67 @@ def test_fallback_never_serves_a_last_good_run_the_operator_has_withdrawn(
     assert e.value.status_code == 503
     st = svc.forecast_serving_state()
     assert st["degraded"] is True and st["fallback_available"] is False
+
+
+@pytest.mark.parametrize("where", ["manifest", "artifacts"])
+def test_unauthorized_lookup_never_serves_fallback(tmp_path, where):
+    """C-268 (#159). The good run is on disk and inside the SLA, so a lookup *outage* would be
+    served from the fallback. A 401 is not an outage: the key was revoked. Whether the refusal
+    arrives on the manifest lookup or on the shard/sidecar lookup of a newer run, the answer is 401."""
+    from views_crafdapi.managers.prediction import MetadataLookupError
+
+    run = make_wire_run()
+    svc = _service(tmp_path)
+    mgr, state = _good_then_bad_manager(run, created_at=_iso(5))
+    svc.get_latest_dataset(mgr, "key", "forecast")
+    svc._dataframe_cache.clear()
+
+    revoked = MetadataLookupError("not authorized", status=401)
+    if where == "manifest":
+        mgr.get_latest_manifest.side_effect = revoked
+    else:
+        state["phase"] = "bad"                       # a newer manifest, whose artifacts 401
+        mgr.resolve_artifact_file_ids.side_effect = revoked
+
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataset(mgr, "key", "forecast")
+    assert e.value.status_code == 401
+
+
+def test_a_refused_artifact_download_is_401_not_a_fallback(tmp_path):
+    """#159 review. The key passes the metadata lookups but the store refuses the download of the
+    newer run's bytes (its bucket access was taken away). That is not `ingest_failed` — which would
+    serve the last-good run to a key that may no longer read the bucket — it is 401."""
+    from views_crafdapi.managers.appwrite import OperationResult
+
+    run = make_wire_run()
+    svc = _service(tmp_path)
+    mgr, state = _good_then_bad_manager(run, created_at=_iso(5))
+    svc.get_latest_dataset(mgr, "key", "forecast")
+    svc._dataframe_cache.clear()
+    svc._file_cache.clear()
+
+    state["phase"] = "bad"
+    mgr.download_prediction.side_effect = lambda fid, *a, **k: OperationResult(
+        success=False, error="Download failed: user_unauthorized", code="user_unauthorized",
+        status=401,
+    )
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataset(mgr, "key", "forecast")
+    assert e.value.status_code == 401
+
+
+def test_the_cold_manifest_refetch_refuses_on_its_own(tmp_path):
+    """The per-request manifest lookup failed transiently (an outage, so the cache tiers are tried);
+    the cold path's own refetch is then refused. That second answer decides it (#159 guard audit)."""
+    from views_crafdapi.managers.prediction import MetadataLookupError
+
+    run = make_wire_run()
+    svc = _service(tmp_path)
+    mgr, _ = _good_then_bad_manager(run, created_at=_iso(5))
+    answers = iter([MetadataLookupError("blip", status=503), MetadataLookupError("no", status=401)])
+    mgr.get_latest_manifest.side_effect = lambda: (_ for _ in ()).throw(next(answers))
+
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataset(mgr, "key", "forecast")        # cold: nothing warm, nothing on disk
+    assert e.value.status_code == 401
