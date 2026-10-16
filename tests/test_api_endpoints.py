@@ -157,6 +157,70 @@ class TestHealthEndpoint:
         assert body["forecast_serving_state"]["fallback_available"] is True
 
 
+class TestHealthAfterAnUnverifiedServe:
+
+    def test_a_past_unverified_serve_does_not_page_once_the_store_answers_again(self, app_client):
+        """One lookup failure leaves `cached_unverified` on the worker until its next forecast
+        request. If /health's own store probe succeeds, the store is back: that flag describes a
+        past response, not the service, and must not keep /health degraded (#158 review)."""
+        client, mgr, _ = app_client
+        self._unverified(mgr)
+        body = client.get("/health", headers=HEADERS).json()
+        assert body["status"] == "healthy"
+        assert body["forecast_serving_state"]["serving"] == "cached_unverified"   # still visible
+
+    def test_an_unverified_serve_still_degrades_health_while_the_store_is_unreachable(self, app_client):
+        client, mgr, _ = app_client
+        self._unverified(mgr)
+        mgr.app.dependency_overrides[mgr._get_appwrite_manager]().list_buckets.return_value = (
+            MagicMock(success=False)
+        )
+        body = client.get("/health", headers=HEADERS).json()
+        assert body["status"] == "degraded"
+
+    @staticmethod
+    def _unverified(mgr):
+        # A fresh served run, so freshness cannot be what decides the status.
+        mgr._dataset_service._last_forecast_provenance = {
+            "file_id": "wire_run_9", "mode": "wire", "source": "rusty_bucket",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        mgr._dataset_service._forecast_serving_state = {
+            "degraded": True, "reason": "manifest_lookup_error",
+            "fallback_available": True, "serving": "cached_unverified",
+        }
+
+
+class TestHealthCarriesNoStoreText:
+    """ADR-033 §6a rule 6 / C-264: no response carries the store's own error text — /health
+    included, which had put `str(e)` in its freshness error and its 503 detail (#160 review)."""
+
+    def test_the_freshness_error_is_generic(self, app_client):
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, mgr, mock_pm = app_client
+        mgr._dataset_service._last_forecast_provenance = None
+        mock_pm.get_latest_manifest.return_value = None
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError(
+            "storage_secret_detail", status=503)
+        resp = client.get("/health", headers=HEADERS)
+        assert resp.status_code == 200
+        assert "storage_secret_detail" not in resp.text
+        assert resp.json()["forecast_freshness"] == {"error": "freshness check failed"}
+
+    def test_the_unhealthy_detail_is_generic(self, app_client, caplog):
+        client, mgr, _ = app_client
+        appwrite = mgr.app.dependency_overrides[mgr._get_appwrite_manager]()
+        appwrite.list_buckets.side_effect = RuntimeError("storage_secret_detail")
+        with caplog.at_level("ERROR"):
+            resp = client.get("/health", headers=HEADERS)
+        assert resp.status_code == 503
+        assert resp.json()["detail"] == "Service unhealthy"   # fixed: not even the error's type
+        # The cause goes to the log, with where it happened.
+        logged = [r for r in caplog.records if r.getMessage() == "Health check failed"]
+        assert logged and logged[0].exc_info is not None
+
+
 class TestCacheStatsEndpoint:
 
     def test_cache_stats_returns_200(self, app_client):
@@ -707,14 +771,16 @@ class TestProvenanceEndpoint:
         assert mock_pm.get_latest_manifest_provenance.called, "the manifest must always be consulted"
 
     def test_provenance_degrades_to_legacy_when_the_manifest_lookup_raises(self, app_client):
-        """An Appwrite blip must not 500 the endpoint an operator uses to diagnose it.
+        """A store outage must not 500 the endpoint an operator uses to diagnose it.
 
-        `/health` and `_load_wire_run` both wrap this same call defensively; so does this.
+        `_load_wire_run` refuses with the reason and `/health` is best-effort; this degrades.
         """
-        from views_crafdapi.managers.prediction import PredictionProvenance
+        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
 
         client, mgr, mock_pm = app_client
-        mock_pm.get_latest_manifest_provenance.side_effect = RuntimeError("appwrite is down")
+        mock_pm.get_latest_manifest_provenance.side_effect = MetadataLookupError(
+            "appwrite is down", status=503
+        )
         mock_pm.get_latest_provenance.return_value = PredictionProvenance(
             file_id="legacy_001", source="orange_ensemble",
             created_at="2026-03-01T00:00:00.000Z", filename="old.parquet",
@@ -724,6 +790,121 @@ class TestProvenanceEndpoint:
         resp = client.get("/provenance/forecast", headers=HEADERS)
         assert resp.status_code == 200, "must degrade to the legacy record, not 500"
         assert resp.json()["data"]["file_id"] == "legacy_001"
+        # #158 review: but it must say the manifest could not be checked — a legacy record is
+        # not "the forecast" when the manifest that would outrank it is unknown.
+        assert resp.json()["data"]["manifest_lookup_failed"] is True
+
+    @pytest.mark.parametrize("error", [RuntimeError, ValueError, KeyError, TypeError])
+    def test_a_non_store_error_in_the_manifest_lineage_lookup_is_not_a_503(
+        self, app_client, caplog, error
+    ):
+        """Only a store failure degrades lineage; a bug or a config error is not reported as
+        "Metadata store unavailable" (the policy `DatasetService` follows, ADR-033 §6a). Its
+        text goes to the log, not the response (C-264)."""
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.side_effect = error("collection not configured")
+        mock_pm.get_latest_provenance.return_value = None
+        mgr._dataset_service._last_forecast_provenance = None
+
+        with caplog.at_level("ERROR"):
+            resp = client.get("/provenance/forecast", headers=HEADERS)
+        assert resp.status_code == 500, resp.text
+        assert "collection not configured" not in resp.text, "internal text leaked (C-264)"
+        assert resp.json()["detail"] == "Provenance lookup failed", "fixed: not even the error's type"
+        # The cause goes to the log, with where it happened — on this route's own record.
+        logged = [r for r in caplog.records if r.getMessage() == "forecast provenance failed"]
+        assert logged, "the route must log the failure"
+        assert logged[0].exc_info is not None, "a bug must be logged with its traceback"
+        assert "collection not configured" in str(logged[0].exc_info[1]), "the cause must reach the log"
+
+    def test_a_non_store_error_in_the_historical_lineage_lookup_is_not_a_503(
+        self, app_client, caplog
+    ):
+        """The historical branch follows the same rule: a bug is a 500 with a generic detail and
+        a logged traceback, not "Metadata store unavailable" (C-233, C-264)."""
+        client, _, mock_pm = app_client
+        mock_pm.get_latest_provenance.side_effect = RuntimeError("collection not configured")
+
+        with caplog.at_level("ERROR"):
+            resp = client.get("/provenance/historical", headers=HEADERS)
+        assert resp.status_code == 500, resp.text
+        assert "collection not configured" not in resp.text, "internal text leaked (C-264)"
+        assert resp.json()["detail"] == "Provenance lookup failed", "fixed: not even the error's type"
+        logged = [r for r in caplog.records if r.getMessage() == "historical provenance failed"]
+        assert logged and logged[0].exc_info is not None
+
+    def test_historical_provenance_is_503_when_the_store_lookup_fails(self, app_client):
+        """C-233 (#158): a failed lookup is "store unavailable", not "no historical files"."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, _, mock_pm = app_client
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("down", status=503)
+        resp = client.get("/provenance/historical", headers=HEADERS)
+        assert resp.status_code == 503, resp.text
+        assert "down" not in resp.text      # the store's own error text stays in the log (C-264)
+
+    def test_forecast_provenance_is_503_when_every_lookup_fails_and_nothing_is_served(self, app_client):
+        """With nothing served on this worker and both store lookups failing there is no answer to
+        give — but the honest refusal is 503, not a 404 claiming no forecast exists (#158)."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.side_effect = MetadataLookupError("down", status=503)
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("down", status=503)
+        mgr._dataset_service._last_forecast_provenance = None
+        resp = client.get("/provenance/forecast", headers=HEADERS)
+        assert resp.status_code == 503, resp.text
+        assert resp.json()["detail"] == "Metadata store unavailable"
+
+    def test_no_manifest_lookup_flag_when_a_forecast_is_being_served(self, app_client):
+        """The flag means "nothing here could be checked against the manifest". A worker that is
+        serving a forecast reports that run, so a failed manifest lookup does not taint it."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.side_effect = MetadataLookupError("down", status=503)
+        mock_pm.get_latest_provenance.return_value = None
+        mgr._dataset_service._last_forecast_provenance = {
+            "file_id": "wire_run_9", "mode": "wire", "source": "rusty_bucket",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
+        assert "manifest_lookup_failed" not in data
+
+    def test_no_manifest_lookup_flag_when_only_the_stored_lookup_failed(self, app_client):
+        """The manifest was checked and answered; only the outranked legacy lookup failed. The
+        answer is the manifest's, so it is not unchecked."""
+        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
+
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.side_effect = None
+        mock_pm.get_latest_manifest_provenance.return_value = PredictionProvenance(
+            file_id="manifest_001", source="rusty_bucket",
+            created_at=datetime.now(timezone.utc).isoformat(), filename="run__manifest.json",
+        )
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("down", status=503)
+        mgr._dataset_service._last_forecast_provenance = None
+        resp = client.get("/provenance/forecast", headers=HEADERS)
+        assert resp.status_code == 200, resp.text
+        assert "manifest_lookup_failed" not in resp.json()["data"]
+
+    def test_an_unverified_serve_is_not_reported_as_a_refusal(self, app_client):
+        """`refusal_reason` means a run was refused. Serving the cached run unverified during a
+        lookup outage is not a refusal, so it must not appear (#158 review)."""
+        client, mgr, mock_pm = app_client
+        mock_pm.get_latest_manifest_provenance.return_value = None
+        mock_pm.get_latest_provenance.return_value = None
+        mgr._dataset_service._last_forecast_provenance = {
+            "file_id": "wire_run_9", "mode": "wire", "source": "rusty_bucket",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        mgr._dataset_service._forecast_serving_state = {
+            "degraded": True, "reason": "manifest_lookup_error",
+            "fallback_available": True, "serving": "cached_unverified",
+        }
+        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
+        assert "refusal_reason" not in data
+        assert data["serving_state"]["serving"] == "cached_unverified"
 
     def test_provenance_404s_when_the_store_answers_with_nothing_usable(self, app_client):
         """An unstubbed MagicMock's `to_dict()` collapses to `{}` — a truthy object carrying no
@@ -869,3 +1050,223 @@ class TestHealthKeysTheFreshnessMonitorParses:
         assert "appwrite_connected" in body
         assert "forecast_freshness" in body
         assert "is_stale" in body["forecast_freshness"]
+
+
+# ============================================================
+# C-356 (#156): the degraded fallback through HTTP, across a restart
+# ============================================================
+
+
+def _cold_app(cache_dir, pm):
+    """A freshly started CrafdApiManager over an existing disk cache — what systemd's
+    Restart=always produces on every deploy. Nothing warm; only `pm` (the store) is mocked."""
+    mgr = CrafdApiManager.from_config({}, cache_dir=cache_dir)
+    mgr.app = FastAPI()
+    mgr._register_routes()
+    appwrite = MagicMock()
+    appwrite.list_buckets.return_value = MagicMock(success=True)
+    appwrite.get_cache_stats.return_value = {}
+    mgr._validate_api_key = MagicMock(return_value=appwrite)
+    mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: pm
+    mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: appwrite
+    return TestClient(mgr.app)
+
+
+class TestDegradedFallbackAcrossARestart:
+    """A good run is served, the service restarts, and the next delivery is refused (``bad``) or
+    absent (``none``). ADR-033 §6 says the last-good run is served, degraded and loudly. Before
+    #156 every data route answered 500 instead, because the route re-read a warm cache slot the
+    fallback never fills."""
+
+    ROUTES = ["/pg/analysis/forecast/hdi-map", "/data/forecast/bulk"]
+
+    @pytest.fixture
+    def restarted(self, tmp_path):
+        from tests.forecast._wire_fixtures import make_wire_run
+        from tests.test_dataset_service_fallback import _good_then_bad_manager, _iso
+
+        pm, state = _good_then_bad_manager(make_wire_run(), created_at=_iso(5))
+        pm.get_latest_provenance.return_value = None   # no historical: bulk serves s_actual as NaN
+        cache = tmp_path / "cache"
+        first = _cold_app(cache, pm)
+        assert first.get(self.ROUTES[0], headers=HEADERS).status_code == 200  # good run on disk
+        return cache, pm, state
+
+    @pytest.mark.parametrize("phase", ["bad", "none"])
+    @pytest.mark.parametrize("route", ROUTES)
+    def test_route_serves_last_good_after_restart(self, restarted, phase, route):
+        cache, pm, state = restarted
+        state["phase"] = phase
+        client = _cold_app(cache, pm)
+
+        resp = client.get(route, headers=HEADERS)
+        assert resp.status_code == 200, resp.text
+
+        health = client.get("/health", headers=HEADERS).json()
+        assert health["status"] == "degraded"
+        assert health["forecast_serving_state"]["serving"] == "last_good_manifested"
+
+
+# ============================================================
+# C-268 (#159): a revoked key fails closed; a transient failure is not "invalid key"
+# ============================================================
+
+
+class TestARevokedKeyIsRefusedOnItsNextRequest:
+    """The key validated once and its manager is cached (`_manager_cache` has no TTL, ADR-011 §3),
+    so revocation is only ever seen as a 401 from the store's metadata calls. Every forecast
+    request looks up the manifest and every historical one the latest file, so that 401 must
+    end the request — not be served around as a lookup blip, from cache or from the fallback."""
+
+    ROUTES = [
+        "/pg/data/forecast/subset",
+        "/pg/analysis/forecast/hdi-map",
+        "/country/analysis/forecast/hdi-map?aggregate=true",
+        "/pg/data/historical/subset",
+        "/country/data/historical/subset?aggregate=true",
+        "/data/forecast/bulk",
+        "/provenance/forecast",
+        "/provenance/historical",
+    ]
+
+    @pytest.mark.parametrize("route", ROUTES)
+    def test_revoked_key_on_warm_worker_is_401(self, app_client, route):
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, mgr, mock_pm = app_client
+        revoked = MetadataLookupError("general_unauthorized_scope: missing scope", status=401,
+                                      appwrite_type="general_unauthorized_scope")
+        for lookup in ("get_latest_manifest", "get_latest_file_id", "get_latest_provenance",
+                       "get_latest_manifest_provenance", "resolve_artifact_file_ids"):
+            getattr(mock_pm, lookup).side_effect = revoked
+
+        resp = client.get(route, headers=HEADERS)
+        assert resp.status_code == 401, resp.text
+        assert "general_unauthorized_scope" not in resp.text   # nothing about the store (C-264)
+
+    def test_health_is_401_when_only_the_metadata_lookup_is_refused(self, app_client):
+        """A key that lost its database scope but kept buckets.read passes the bucket probe; its
+        refused manifest lookup must not be swallowed as a best-effort freshness check."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, mgr, mock_pm = app_client
+        mgr._dataset_service._last_forecast_provenance = None   # /health must ask the store
+        mock_pm.get_latest_manifest.side_effect = MetadataLookupError("no", status=401)
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("no", status=401)
+        assert client.get("/health", headers=HEADERS).status_code == 401
+
+    def test_the_warm_path_itself_refuses(self, app_client):
+        """Only the per-request manifest lookup is refused; a retry would succeed. The warm path
+        must stop there — not treat the refusal as a blip and go on to try again."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, _, mock_pm = app_client
+        good = mock_pm.get_latest_manifest.return_value
+        answers = iter([MetadataLookupError("no", status=401)])
+
+        def manifest():
+            nxt = next(answers, None)
+            if nxt is not None:
+                raise nxt
+            return good
+        mock_pm.get_latest_manifest.side_effect = manifest
+        assert client.get("/pg/analysis/forecast/hdi-map", headers=HEADERS).status_code == 401
+
+    @pytest.mark.parametrize("refused", ["manifest", "stored"])
+    def test_each_lineage_lookup_refuses_on_its_own(self, app_client, refused):
+        """Either of the two lineage lookups refusing is enough; the other answering is not a way
+        around it (#159 guard audit)."""
+        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
+
+        client, mgr, mock_pm = app_client
+        mgr._dataset_service._last_forecast_provenance = None
+        revoked = MetadataLookupError("no", status=401)
+        record = PredictionProvenance(file_id="m", source="s", created_at="2026-10-01T00:00:00Z",
+                                      filename="run__manifest.json")
+        if refused == "manifest":
+            mock_pm.get_latest_manifest_provenance.side_effect = revoked
+            mock_pm.get_latest_provenance.return_value = record
+        else:
+            mock_pm.get_latest_manifest_provenance.return_value = record
+            mock_pm.get_latest_provenance.side_effect = revoked
+        assert client.get("/provenance/forecast", headers=HEADERS).status_code == 401
+
+    @pytest.mark.parametrize("refused", ["manifest", "stored"])
+    def test_each_health_freshness_lookup_refuses_on_its_own(self, app_client, refused):
+        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
+
+        client, mgr, mock_pm = app_client
+        mgr._dataset_service._last_forecast_provenance = None      # /health must ask the store
+        revoked = MetadataLookupError("no", status=401)
+        if refused == "manifest":
+            mock_pm.get_latest_manifest.side_effect = revoked
+            mock_pm.get_latest_provenance.return_value = PredictionProvenance(
+                file_id="l", source="s", created_at="2026-10-01T00:00:00Z", filename="x")
+        else:
+            mock_pm.get_latest_manifest.return_value = None          # so /health asks for the stored one
+            mock_pm.get_latest_provenance.side_effect = revoked
+        assert client.get("/health", headers=HEADERS).status_code == 401
+
+    def test_health_is_401_when_the_bucket_probe_is_forbidden(self, app_client):
+        client, mgr, _ = app_client
+        appwrite = mgr.app.dependency_overrides[mgr._get_appwrite_manager]()
+        appwrite.list_buckets.return_value = OperationResult(success=False, status=403)
+        assert client.get("/health", headers=HEADERS).status_code == 401
+
+    def test_health_is_401_for_a_revoked_key(self, app_client):
+        client, mgr, _ = app_client
+        appwrite = mgr.app.dependency_overrides[mgr._get_appwrite_manager]()
+        appwrite.list_buckets.return_value = OperationResult(
+            success=False, error="not authorized", code="general_unauthorized_scope", status=401,
+        )
+        assert client.get("/health", headers=HEADERS).status_code == 401
+
+
+class TestKeyValidationTellsAuthFromOutage:
+    """`_validate_api_key` answered every failed `list_buckets` with 401 "Invalid API key" — an
+    Appwrite restart, a 5xx or a network timeout told the caller their key was wrong."""
+
+    @pytest.mark.parametrize("status,expected", [
+        (401, 401), (403, 401),                    # the store refused this key
+        # Anything else says nothing about the key: no answer, rate limit, timeout, a wrong
+        # endpoint or project (404), a server error. Telling the caller "invalid key" for these
+        # sent them to rotate a key that was fine (#159 review).
+        (0, 503), (None, 503), (400, 503), (404, 503), (408, 503), (429, 503), (500, 503), (503, 503),
+    ])
+    def test_status_maps_to_the_right_refusal(self, tmp_path, monkeypatch, status, expected):
+        import views_crafdapi.managers.api as api_module
+
+        mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
+        monkeypatch.setattr(mgr, "_create_appwrite_config", lambda key: MagicMock())
+        appwrite = MagicMock()
+        appwrite.list_buckets.return_value = OperationResult(
+            success=False, error="List buckets failed", code="x", status=status,
+        )
+        monkeypatch.setattr(api_module, "AppWriteFileManager", lambda config: appwrite)
+
+        with pytest.raises(HTTPException) as e:
+            mgr._validate_api_key("some-key")
+        assert e.value.status_code == expected
+        assert "List buckets failed" not in str(e.value.detail)        # C-264
+
+    def test_an_unexpected_exception_is_503_and_missing_config_is_500(self, tmp_path, monkeypatch):
+        import views_crafdapi.managers.api as api_module
+
+        mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
+        monkeypatch.setattr(mgr, "_create_appwrite_config", lambda key: MagicMock())
+
+        def boom(config):
+            raise ConnectionError("connection refused")
+        monkeypatch.setattr(api_module, "AppWriteFileManager", boom)
+        with pytest.raises(HTTPException) as e:
+            mgr._validate_api_key("some-key")
+        assert e.value.status_code == 503
+        assert e.value.detail == "Metadata store unavailable"     # not "connection refused"
+
+        def missing_env(key):
+            raise ValueError("Missing required environment variables: APPWRITE_ENDPOINT")
+        monkeypatch.setattr(mgr, "_create_appwrite_config", missing_env)
+        with pytest.raises(HTTPException) as e:
+            mgr._validate_api_key("some-key")
+        assert e.value.status_code == 500
+        assert "APPWRITE_ENDPOINT" not in str(e.value.detail)   # deployment detail stays in the log

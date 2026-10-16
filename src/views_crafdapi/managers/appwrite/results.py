@@ -14,6 +14,9 @@ class OperationResult:
     data: Any = None
     error: Optional[str] = None
     code: Optional[str] = None
+    # The HTTP status of a failed SDK call (`AppwriteException.code`): 401/403 not authorised,
+    # 0 or None no response at all, 5xx server-side. `code` above is Appwrite's *type* string.
+    status: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -21,6 +24,7 @@ class OperationResult:
             "data": self.data,
             "error": self.error,
             "code": self.code,
+            "status": self.status,
         }
 
 

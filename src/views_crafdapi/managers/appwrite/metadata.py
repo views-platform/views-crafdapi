@@ -481,7 +481,7 @@ class MetadataManager:
         except AppwriteException as e:
             logger.error(f"Search failed: {e.message}")
             return OperationResult(
-                success=False, error=f"Search failed: {e.message}", code=e.type
+                success=False, error=f"Search failed: {e.message}", code=e.type, status=e.code
             )
 
     def update_file_metadata(

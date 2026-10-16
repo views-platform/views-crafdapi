@@ -31,14 +31,17 @@ from views_crafdapi.managers import freshness, selection
 from views_crafdapi.managers.prediction import (
     SHARD_ARTIFACT_TYPE,
     SIDECAR_ARTIFACT_TYPE,
+    MetadataLookupError,
     PredictionStoreManager,
+    _get_approved_file_ids,
+    _get_quarantined_file_ids,
 )
 
 logger = logging.getLogger(__name__)
 
 # §4.6 (S4, #206) — the documented capacity bound. A wire run whose fully-assembled
 # `_sample_store` (one (rows, S) float32 block per target, rows = months × cells) would
-# exceed this is refused (→ fail-safe legacy) rather than materialized. Default 4 GiB: safe
+# exceed this is refused (→ `Refused`, then the last-good fallback or a 503) rather than materialized. Default 4 GiB: safe
 # on the 16–24 GB host alongside the ~4 GB historical dataset. Production-scale serving of a
 # full-S run (≈28.6 GB) is delivered by lazy per-month loading in S6 (#208), not here.
 _MAX_ASSEMBLED_BYTES_ENV = "CRAFDAPI_MAX_ASSEMBLED_BYTES"
@@ -84,6 +87,51 @@ def _unidentifiable_reason(provenance: Optional[Dict[str, Any]]) -> Optional[str
     if not source or source == "unknown":
         return f"served run has no identifiable source (source={source!r})"
     return None
+
+
+UNAUTHORIZED_DETAIL = "API key not authorized"
+
+
+def refuse_if_unauthorized(e: Exception) -> None:
+    """A metadata lookup the store refused (401/403) is not a blip: the key was revoked or never
+    had access. Nothing is served — not from the warm cache, the disk or the fallback — and the
+    caller gets 401 on this very request (C-268, #159). Anything else returns, to be handled as
+    the outage it is. Used at every lookup handler on the serving path, in this module and in
+    the routes."""
+    if isinstance(e, MetadataLookupError) and e.is_unauthorized:
+        raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL) from e
+
+
+def _withdrawn_by_operator(file_id: Optional[str]) -> bool:
+    """Has the operator withdrawn this run with the C-71 controls — quarantined it, or left it off
+    an active approval allowlist? Both are environment variables, so this needs no store and
+    holds even when the metadata store cannot be reached."""
+    approved = _get_approved_file_ids()
+    return file_id in _get_quarantined_file_ids() or bool(approved and file_id not in approved)
+
+
+def _within_sla(provenance: Optional[Dict[str, Any]]) -> bool:
+    """Is this run positively within the freshness SLA? Unknown age counts as no (ADR-033 §6)."""
+    created_at = (provenance or {}).get("created_at")
+    return freshness.forecast_freshness(created_at, freshness.freshness_sla_days()).get(
+        "is_stale"
+    ) is False
+
+
+def _cache_hit_serving_state(manifest_known: bool) -> Dict[str, Any]:
+    """The serving state of a forecast answered from the warm or disk cache.
+
+    Healthy when the cached run was checked against the current manifest. When the manifest
+    lookup itself failed, the cached run is still served — never drop a good entry on a lookup
+    failure — but it is *unverified*: the store could not say whether it is still current, or
+    whether it was quarantined. /health reports that as degraded (C-233, #158).
+    """
+    if manifest_known:
+        return {"degraded": False}
+    return {
+        "degraded": True, "reason": "manifest_lookup_error",
+        "fallback_available": True, "serving": "cached_unverified",
+    }
 
 
 def _identifiable_gate(served: selection.Served) -> selection.SelectionResult:
@@ -147,22 +195,27 @@ class DatasetService:
     def served_forecast_provenance(self) -> Optional[Dict[str, Any]]:
         """S7 (#252): provenance of the forecast currently being served — the authoritative source
         for /provenance's ``{artifact_id, mode, status, created_at, source}``. Carries ``mode``
-        (``"wire"``/``"legacy"``) and, for a wire run, the producer-declared ``status`` (maturity).
+        (always ``"wire"`` for a forecast since S1/#264) and the producer-declared ``status``.
         ``None`` until the first forecast serve."""
         return self._last_forecast_provenance
 
-    def get_latest_dataframe(
+    def get_latest_dataset(
         self,
         manager: PredictionStoreManager,
         x_api_key: str,
         category: str,
         force_refresh: bool = False,
-    ) -> pd.DataFrame:
+    ) -> ForecastDataset:
         """
-        Get the latest dataframe from the prediction bucket, using a multi-tier cache:
+        Get the latest dataset from the prediction bucket, using a multi-tier cache:
         1. In-memory cache (fastest, per-worker)
         2. Disk cache (shared across workers)
         3. Remote download from Appwrite (slowest)
+
+        Every return point returns the dataset that *this* request selected. Callers must never
+        re-read the warm cache afterwards to find it: the last-good fallback deliberately leaves
+        the warm cache empty (ADR-033 decision (i)), so on a cold worker that slot is ``None`` and
+        on a warm one it can hold a different run (C-356, #156).
 
         Args:
             manager: The PredictionStoreManager instance
@@ -171,7 +224,7 @@ class DatasetService:
             force_refresh: Whether to force refresh the cache
 
         Returns:
-            The latest dataframe as a pandas DataFrame
+            The selected ForecastDataset (a copy; safe for the caller to subset)
         """
         api_key_hash = self._api_key_hash(x_api_key)
         current_time = time.time()
@@ -194,9 +247,7 @@ class DatasetService:
         # very next request rather than up to a TTL late. Fail-safe: a lookup blip must NOT 500
         # the warm path — it degrades to serving the existing cache (wire_identity stays None).
         # Computed for EVERY forecast request (incl. force_refresh) so the write-backs below key
-        # the entry on the manifest identity uniformly — even a force_refresh that falls back to
-        # legacy under a present-but-unservable manifest keys on the manifest fileId, not the
-        # legacy artifact id (else the next request would needlessly re-ingest). The tier gates
+        # the entry on the manifest identity uniformly. The tier gates
         # themselves stay force_refresh-guarded, so force_refresh still bypasses warm + disk.
         manifest_doc = _MANIFEST_UNFETCHED
         wire_identity = None
@@ -205,9 +256,11 @@ class DatasetService:
                 manifest_doc = manager.get_latest_manifest()
                 if isinstance(manifest_doc, dict) and isinstance(manifest_doc.get("fileId"), str):
                     wire_identity = manifest_doc["fileId"]
-            except Exception as e:
+            except MetadataLookupError as e:
+                refuse_if_unauthorized(e)
                 # A lookup blip must not 500 the warm path: serve the cache (wire_identity stays
                 # None), and leave manifest_doc unfetched so the miss path retries the lookup.
+                # Only a store failure is a blip; a config error or a bug propagates (#160).
                 logger.warning(f"Manifest lookup failed (non-blocking; serving cache): {e}")
                 manifest_doc = _MANIFEST_UNFETCHED
 
@@ -223,7 +276,8 @@ class DatasetService:
                 lid = manager.get_latest_file_id({"category": category})
                 if isinstance(lid, str):  # only act on a real id (mirrors the manifest fileId guard)
                     latest_legacy_id = lid
-            except Exception as e:
+            except MetadataLookupError as e:
+                refuse_if_unauthorized(e)
                 logger.warning(f"{category} latest-file lookup failed (non-blocking; serving cache): {e}")
 
         # Check in-memory cache first (fastest). S5 (#207): a warm forecast is served only if
@@ -232,11 +286,12 @@ class DatasetService:
         # *forecast* entry must additionally be a WIRE entry — a legacy forecast entry is never
         # served (that would re-open the loose-artifact seam this story closes).
         if (not force_refresh and
-            cache["data"] is not None and
+            cache["dataset"] is not None and
             cache["timestamp"] is not None and
             current_time - cache["timestamp"] <= cache_ttl and
             self._forecast_entry_servable(category, cache.get("source_kind")) and
-            self._identity_ok(cache, wire_identity, manifest_doc is not _MANIFEST_UNFETCHED) and
+            self._identity_ok(category, cache, wire_identity,
+                              manifest_doc is not _MANIFEST_UNFETCHED) and
             self._legacy_identity_ok(category, cache, latest_legacy_id)):
             logger.debug(f"In-memory cache hit for {api_key_hash}/{category}")
             try:
@@ -249,11 +304,14 @@ class DatasetService:
             except Exception as e:
                 logger.debug(f"Staleness check failed (non-blocking): {e}")
             # S4 (#249): a warm hit means the current manifest's run is what's cached — servable,
-            # so any prior degraded/fallback state is cleared (e.g. a rollback to the prior run).
+            # so any prior degraded/fallback state is cleared (e.g. a rollback to the prior run) —
+            # unless the manifest lookup failed, when what is cached is served unverified.
             if category == "forecast":
-                self._forecast_serving_state = {"degraded": False}
+                self._forecast_serving_state = _cache_hit_serving_state(
+                    manifest_doc is not _MANIFEST_UNFETCHED
+                )
                 self._last_forecast_provenance = cache.get("provenance")  # S7 (#252)
-            return cache["data"].copy()
+            return cache["dataset"].copy()
 
         # Check disk cache second (shared across workers). Post-S5 (#154) a hit returns a
         # dataset reconstructed from its persisted VALUE (ForecastDataset.from_value) — no
@@ -281,12 +339,14 @@ class DatasetService:
             # SAME identity guard as a warm entry. This matters once wire runs live on disk: when
             # the manifest is quarantined-to-nothing (wire_identity None), check_file_id above is
             # bypassed, so without this a stale disk WIRE entry would still be served. _identity_ok
-            # on the entry's (file_id, source_kind) refuses it and falls through to re-ingest/legacy.
+            # on the entry's (file_id, source_kind) refuses it and falls through to re-ingest.
             if disk_cache is not None and self._forecast_entry_servable(
                 category, disk_cache.get("source_kind", "legacy")
             ) and self._identity_ok(
+                category,
                 {"file_id": disk_cache["file_id"],
-                 "source_kind": disk_cache.get("source_kind", "legacy")},
+                 "source_kind": disk_cache.get("source_kind", "legacy"),
+                 "provenance": disk_cache.get("provenance")},
                 wire_identity, manifest_doc is not _MANIFEST_UNFETCHED,
             ):
                 dataset = disk_cache['dataset']
@@ -305,19 +365,22 @@ class DatasetService:
                 cache["provenance"] = disk_cache.get("provenance")
 
                 logger.info(f"Loaded {category} dataset from disk cache ({len(dataset.dataframe)} rows)")
-                # S4 (#249): an identity-matched disk hit is a normal serve — clear degraded state.
+                # S4 (#249): an identity-matched disk hit is a normal serve — clear degraded state
+                # (or, with the manifest lookup failed, an unverified one — see above).
                 if category == "forecast":
-                    self._forecast_serving_state = {"degraded": False}
+                    self._forecast_serving_state = _cache_hit_serving_state(
+                        manifest_doc is not _MANIFEST_UNFETCHED
+                    )
                     self._last_forecast_provenance = cache.get("provenance")  # S7 (#252)
-                return cache["data"].copy()
+                return dataset.copy()
 
         # Need to download from remote
         logger.info(f"Refreshing latest {category} dataframe cache for API key: {api_key_hash}")
 
-        # S2 (#204, ADR-013 §4.3): manifest-first wire-contract path. For forecasts, if a
-        # Sampled-Forecast Wire Contract *run manifest* exists in the bucket, serve that
-        # manifested run; otherwise fall through to the legacy provenance path below,
-        # entirely unchanged (no-regression for existing type="model" artifacts).
+        # S2 (#204, ADR-013 §4.3): manifest-first wire-contract path. A forecast is served only
+        # from a manifested run — or, bounded and flagged, the last-good one — and never from
+        # the legacy provenance path below, which is `/historical`-only (S1/#264). The composed
+        # policy is ADR-033 §6a.
         if category == "forecast":
             result = self._load_wire_run(
                 manager, api_key_hash, category, cache, current_time, manifest_doc=manifest_doc
@@ -325,19 +388,17 @@ class DatasetService:
             # S2 (#247, ADR-033 §2/§3): serve the newest complete manifested run for the line,
             # gated (identifiable source, §3), then act on the typed decision:
             #   Served  → serve.
-            #   Refused → a manifested run exists but is NOT servable: FAIL VISIBLE. Do NOT silently
-            #             serve the legacy artifact (the C-170 fix). Interim degraded form is a 5xx
-            #             carrying the reason; the last-good/flagged form is S4/D3. Decision (i)
-            #             (ADR-033 §2): a persistently-unservable run re-ingests + re-refuses each
-            #             request (no fallback-caching); refusal-caching is deferred to S4.
-            #   NoRun   → no manifested run for this line: fall through to the legacy path
-            #             (transition-safe, until legacy is retired).
+            #   Refused → a manifested run exists but is NOT servable: the last-good manifested run
+            #             within the SLA, flagged degraded (§6), else 503 — never the legacy
+            #             artifact (the C-170 fix). Decision (i): a persistently-unservable run is
+            #             re-evaluated and re-refused on each request (no refusal caching).
+            #   NoRun   → no manifested run: the same bounded fallback, else 503 (S1/#264).
             result = selection.run_gates(result, (_identifiable_gate,))
             if isinstance(result, selection.Served):
                 # Normal serve — clear any prior degraded/fallback state (producer recovered).
                 self._forecast_serving_state = {"degraded": False}
                 self._last_forecast_provenance = result.provenance  # S7 (#252): served-run lineage
-                return result.dataframe
+                return result.dataset.copy()
             if isinstance(result, selection.Refused):
                 logger.error(
                     "Wire run refused (reason=%s, file_id=%s): %s",
@@ -383,7 +444,14 @@ class DatasetService:
         # Resolve provenance (C-86) in the same query: this records *which* artifact and
         # *which upstream source/pipeline* is being brought into service.
         filters = {"category": category}
-        provenance = manager.get_latest_provenance(filters=filters)
+        try:
+            provenance = manager.get_latest_provenance(filters=filters)
+        except MetadataLookupError as e:
+            refuse_if_unauthorized(e)
+            # The store could not be asked, which is not "no files exist" (C-233, #158). Its
+            # error text goes to the log, not the response (C-264).
+            logger.error("%s lineage lookup failed: %s", category, e)
+            raise HTTPException(status_code=503, detail="Metadata store unavailable") from e
         if not provenance:
             raise HTTPException(
                 status_code=404,
@@ -527,24 +595,17 @@ class DatasetService:
                 detail="Failed to process downloaded data into a valid dataset."
             )
 
-        # Write processed dataset to disk cache for other workers to use. Keyed on the legacy
-        # ARTIFACT file_id (not the manifest identity): when a manifest is present the disk gate
-        # deliberately misses (check_file_id vs the manifest fileId) so a cold worker re-attempts
-        # the wire ingest rather than serving a persisted legacy fallback (correct for the S6
-        # transition, when a now-servable run must win over a stale legacy disk entry).
+        # Write processed dataset to disk cache for other workers to use, keyed on the artifact's
+        # file id. Since S1/#264 this path is `/historical`-only: a forecast never reaches it.
         self._disk_cache.write(
             api_key_hash, category, dataset, file_id,
             source_kind="legacy", provenance=provenance.to_dict(),
         )
 
-        # Update in-memory cache with the processed dataframe from the dataset. S5 (#207): when a
-        # manifest is present but its run was NOT servable (over-capacity, malformed, or missing
-        # artifacts → _load_wire_run returned `Refused`/`NoRun`), key the warm entry on the MANIFEST
-        # fileId, not
-        # the legacy artifact id — otherwise the next request's identity check (which compares to
-        # the manifest fileId) misses and the legacy forecast is re-downloaded on EVERY request.
+        # Update in-memory cache with the processed dataframe from the dataset, keyed on the
+        # artifact's own file id (this path is historical-only, so there is no manifest identity).
         cache["data"] = dataset.dataframe
-        cache["file_id"] = wire_identity if wire_identity is not None else file_id
+        cache["file_id"] = file_id
         cache["timestamp"] = current_time
         cache["dataset"] = dataset
         cache["source_kind"] = "legacy"  # S5 (#207): powers the §4.4 zero-manifest guard
@@ -555,7 +616,7 @@ class DatasetService:
         # S1 (#264): the legacy path is `/historical`-only now — a forecast never reaches here (it is
         # served from a manifested run or fails visible above), so no forecast serving-state is set.
 
-        return cache["data"].copy()
+        return dataset.copy()
 
     def _try_stream_historical(
         self,
@@ -566,10 +627,10 @@ class DatasetService:
         provenance,
         cache: Dict[str, Any],
         current_time: float,
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[ForecastDataset]:
         """C-263 (#98): assemble the historical value-dir without decoding the artifact whole.
 
-        Returns the served dataframe on success, or ``None`` to fall through to the in-memory
+        Returns the served dataset on success, or ``None`` to fall through to the in-memory
         path — which is what happens for any artifact that is not already dense and in
         ``sort_index()`` order, and for any failure at all. This is a memory optimisation, so
         it is never allowed to be the reason a request fails: everything it can raise is caught
@@ -626,7 +687,7 @@ class DatasetService:
                 f"Streamed {category} value-dir: {rows} rows, targets={targets} "
                 f"(C-263 low-memory path)"
             )
-            return cache["data"].copy()
+            return dataset.copy()
         except historical_stream.ImplausibleArtifact as e:
             # C-72 is not a streaming problem, so it must not be answered by trying the other
             # streamer. The in-memory path would reach the same verdict after paying the full
@@ -657,7 +718,7 @@ class DatasetService:
 
     def _serve_last_good_within_sla(
         self, api_key_hash: str, category: str, reason: str
-    ) -> Optional[pd.DataFrame]:
+    ) -> Optional[ForecastDataset]:
         """S4 (#249, ADR-033 §6, D-24) + S1 (#264): the bounded, alarmed grace fallback.
 
         There is no currently-servable manifested run — either the newest run was ``Refused``
@@ -666,15 +727,17 @@ class DatasetService:
         **manifested** run is still on disk AND still within the freshness SLA (S3), serve it —
         bounding a transient gap without going dark — but *loudly*: a WARNING alarm and a degraded
         serving-state that flips /health to ``degraded`` and flags /provenance. Returns the last-good
-        dataframe, or ``None`` to fail visible (past the SLA, unknown age, or no manifested last-good).
+        dataset, or ``None`` to fail visible (past the SLA, unknown age, or no manifested last-good).
 
         Deliberately does **not** repopulate the warm in-memory cache: every request re-evaluates the
         newest run (decision (i), ADR-033 §2), so recovery is picked up immediately and the fallback
-        never becomes sticky. A failed ingest discards only its staging dir (§4.6), so the last-good
-        value-dir this reads is intact.
+        never becomes sticky. That is why the dataset is *returned* rather than left in the cache
+        for the caller to find (C-356). A failed ingest discards only its staging dir (§4.6), so the
+        last-good value-dir this reads is intact.
         """
         try:
-            disk = self._disk_cache.read(api_key_hash, category)
+            # The SLA below bounds this read, not the disk TTL (ADR-033 §6; C-360, #157).
+            disk = self._disk_cache.read(api_key_hash, category, enforce_ttl=False)
         except Exception as e:  # a corrupt/unreadable last-good must not mask the refusal
             logger.warning("Last-good disk read failed during grace fallback: %s", e)
             disk = None
@@ -683,6 +746,19 @@ class DatasetService:
         if disk is None or disk.get("source_kind") != "wire":
             self._forecast_serving_state = {
                 "degraded": True, "reason": reason, "fallback_available": False,
+            }
+            return None
+        # The operator's C-71 rollback controls bind the fallback as they bind selection. With
+        # no other manifest left (NoRun), the slot holds exactly the run that was withdrawn, so
+        # without this check quarantining it would re-serve it for the whole SLA (#157 review).
+        if _withdrawn_by_operator(disk.get("file_id")):
+            logger.error(
+                "Grace fallback refused: last-good run %s is quarantined or not approved "
+                "(C-71); failing visible", disk.get("file_id"),
+            )
+            self._forecast_serving_state = {
+                "degraded": True, "reason": reason, "fallback_available": False,
+                "last_good_file_id": disk.get("file_id"), "last_good_withdrawn": True,
             }
             return None
         prov = dict(disk.get("provenance") or {})
@@ -720,7 +796,7 @@ class DatasetService:
             "(%.1f days old, within %.0f-day SLA) as a bounded grace fallback",
             reason, disk.get("file_id"), verdict.get("age_days"), verdict.get("sla_days"),
         )
-        return dataset.dataframe.copy()
+        return dataset.copy()  # same contract as every other return point
 
     @staticmethod
     def _forecast_entry_servable(category: str, source_kind: Optional[str]) -> bool:
@@ -735,19 +811,25 @@ class DatasetService:
         return source_kind == "wire"
 
     @staticmethod
-    def _identity_ok(cache: Dict[str, Any], wire_identity, manifest_known: bool) -> bool:
+    def _identity_ok(category: str, cache: Dict[str, Any], wire_identity,
+                     manifest_known: bool) -> bool:
         """S5 (#207): may the warm in-memory entry still be served given the current wire
         identity?
 
-        - ``manifest_known`` False (the lookup threw — a blip): we could not determine the
-          identity, so degrade to serving whatever is warm (TTL still governs). Never drop a
-          good entry because the metadata query flickered.
+        - ``manifest_known`` False (the lookup failed): we could not determine the identity, so
+          serve the cached WIRE run *unverified* — never drop a good entry because the store
+          flickered — but within the two bounds the last-good fallback has: not withdrawn by the
+          operator (C-71, readable without the store) and positively within the freshness SLA
+          (#158). Historical entries are never manifest-checked and are unaffected.
         - a manifest is present (``wire_identity`` set): the entry must carry that exact fileId.
         - the lookup confirmed NO manifest (``wire_identity`` None, ``manifest_known`` True): a
           legacy/historical entry serves on TTL, but a stale WIRE entry is refused (§4.4:
           manifest gone/quarantined ⇒ do not keep serving the old run)."""
         if not manifest_known:
-            return True
+            if category != "forecast":       # historical is never manifest-checked
+                return True
+            return (not _withdrawn_by_operator(cache.get("file_id"))
+                    and _within_sla(cache.get("provenance")))
         if wire_identity is not None:
             return cache.get("file_id") == wire_identity
         return cache.get("source_kind") != "wire"
@@ -774,7 +856,12 @@ class DatasetService:
             return self._file_cache[file_id]["data"]
         result = manager.download_prediction(file_id)
         if not result.success:
-            raise HTTPException(status_code=500, detail=f"Failed to download {file_id}: {result.error}")
+            logger.error("Download of %s failed (status=%s): %s",
+                         file_id, getattr(result, "status", None), result.error)
+            if getattr(result, "status", None) in (401, 403):
+                # The key passed the metadata lookups but cannot read the bucket (#159 review).
+                raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
+            raise HTTPException(status_code=500, detail=f"Failed to download artifact {file_id}")
         data = result.data if isinstance(result.data, dict) else {}
         file_bytes = data.get("file_bytes")
         if not file_bytes:
@@ -785,7 +872,7 @@ class DatasetService:
     def _guard_run_capacity(self, manifest, first_shard_state) -> None:
         """§4.6 (S4): refuse a run whose fully-assembled ``_sample_store`` would exceed the
         documented capacity bound. Estimated from the manifest (targets × months × cells) and
-        the first shard's S; raises (→ fail-safe legacy) before the rest is downloaded."""
+        the first shard's S; raises (→ ``Refused``, then the last-good fallback (ADR-033 §6) or a 503) before the rest is downloaded."""
         if manifest.expected_cell_count is None or not manifest.expected_months or not manifest.targets:
             return  # cannot estimate; correctness asserts still bound the run
         s = int(first_shard_state["values"].shape[1])
@@ -824,15 +911,16 @@ class DatasetService:
 
         Returns a typed ``selection.SelectionResult`` (S1/#245, ADR-033 §1): ``Served`` on
         success, ``Refused(reason)`` for any reason the run cannot be served, or ``NoRun``
-        when no manifested run exists. The caller serves ``Served`` and falls back to the
-        legacy path on ``Refused``/``NoRun`` (behaviour-preserving), with the reason captured.
+        when no manifested run exists. The caller serves ``Served``; on ``Refused``/``NoRun`` it
+        serves the last-good fallback (ADR-033 §6) or a 503, with the reason captured. Never a legacy artifact.
 
         **Fail-safe (code-review 2026-07-20):** a ``Refused``/``NoRun`` result is not only "no
         manifest" — it is *any* reason the wire run cannot be served. Once a manifest is detected,
         the entire ingest is guarded; a malformed manifest, an absent shard/sidecar, or a
-        build/validate error all LOG and return ``Refused(reason)`` so the UN-facing forecast
-        endpoint keeps serving the last-good legacy forecast instead of 500-ing the whole fleet
-        during a producer's upload window.
+        build/validate error all LOG and return ``Refused(reason)``, so the forecast endpoint
+        serves the last-good *manifested* run (bounded, flagged) instead of 500-ing the whole fleet
+        during a producer's upload window. One failure is raised rather than refused: the store
+        refusing this key (401, ADR-033 §6a rule 2), which is never served around.
 
         S3 (#205) adds the remaining fail-loud integrity asserts (sample_count-vs-manifest,
         shard content-hash, header-vs-manifest target/time_id); the §4.5(b) sample-ordering
@@ -846,8 +934,9 @@ class DatasetService:
         if manifest_doc is _MANIFEST_UNFETCHED:
             try:
                 manifest_doc = manager.get_latest_manifest()
-            except Exception as e:
-                # Cold-cache manifest-lookup blip: degrade to legacy rather than 500.
+            except MetadataLookupError as e:
+                refuse_if_unauthorized(e)
+                # Cold-cache manifest-lookup outage: refuse with the reason (→ fallback or 503).
                 logger.warning(f"Manifest lookup failed: {e}")
                 return selection.Refused("manifest_lookup_error", detail=str(e))
         # A real store manifest is a dict (or None); anything else ⇒ no manifested run.
@@ -859,8 +948,8 @@ class DatasetService:
                 "manifest_malformed", detail="run manifest has no string fileId"
             )
 
-        # A manifest exists — attempt to serve it, but transition-safely: ANY failure below
-        # falls back to legacy (return None) rather than raising to the endpoint.
+        # A manifest exists — attempt to serve it. Any failure below returns `Refused(reason)`
+        # rather than raising to the endpoint (except a 401, which is never served around).
         staging = None  # the wire assembler's on-disk staging dir; cleaned in `finally`
         try:
             logger.info(f"Ingesting manifested wire-contract run (manifest file_id={manifest_file_id})")
@@ -890,7 +979,7 @@ class DatasetService:
                     f"(shards missing: {missing}; sidecar present: {manifest.sidecar_name in sidecar_ids})"
                 )
             # §4.5(c): verify each artifact's content hash against the manifest BEFORE trusting
-            # its bytes (fail-loud → legacy fallback). §4.6 (S6b-2, #208): assemble the run to a
+            # its bytes (fail-loud → `Refused`). §4.6 (S6b-2, #208): assemble the run to a
             # disk value-dir ONE MONTH at a time — peak RAM is one month's dataset (+ one in-flight
             # shard), never the whole ~28.6 GB run — then serve it back mmap'd (S6b-1). The
             # capacity guard (now per-month) still fires after the first shard reveals S.
@@ -981,10 +1070,22 @@ class DatasetService:
             if disk is None:
                 raise RuntimeError("assembled wire value-dir not readable after adopt")
             dataset = disk["dataset"]
+        except MetadataLookupError as e:
+            # Raising here is not caught by the sibling `except Exception`; `finally` still
+            # discards the staging dir.
+            refuse_if_unauthorized(e)
+            # The shard/sidecar lookup failed: the store could not be asked. Not `ingest_failed`
+            # ("artifacts absent from the bucket"), which is what an outage used to look like.
+            logger.error("Artifact lookup failed for manifest %s: %s", manifest_file_id, e)
+            return selection.Refused(
+                "artifact_lookup_error", detail=str(e), file_id=manifest_file_id
+            )
         except Exception as e:
+            if isinstance(e, HTTPException) and e.status_code == 401:
+                raise  # a refused download: never a reason to serve the last-good run
             # Fail-safe: any ingest failure — a failed integrity assert, an over-capacity run
-            # (§4.6), a non-rectangular run, a malformed manifest — falls back to legacy serving
-            # rather than 500-ing the UN-facing endpoint. Loud in logs; the bad run is refused.
+            # (§4.6), a non-rectangular run, a malformed manifest — is refused, so the caller serves
+            # the last-good fallback (ADR-033 §6) or a 503 rather than a 500. Loud in logs; the bad run is refused.
             logger.error(
                 f"Wire-contract ingest failed for manifest {manifest_file_id}: {e}",
                 exc_info=True,
@@ -1009,35 +1110,22 @@ class DatasetService:
             f"targets={dataset.targets}"
         )
         return selection.Served(
-            dataframe=cache["data"].copy(),
             dataset=dataset,
             file_id=manifest_file_id,
             mode="wire",
             provenance=provenance,
         )
 
-    def get_latest_dataset(
+    def get_latest_dataframe(
         self,
         manager: PredictionStoreManager,
         x_api_key: str,
         category: str,
         force_refresh: bool = False,
-    ) -> ForecastDataset:
+    ) -> pd.DataFrame:
+        """The selected dataset's index/metadata frame — `get_latest_dataset(...).dataframe`.
+
+        No route uses this; it is kept as the seam the tests drive the pipeline through. The
+        `.copy()` keeps the deep-copy semantics it always had (`ForecastDataset.copy()` is shallow).
         """
-        Get the latest ViewsDataset from the prediction bucket, using a per-API-key cache.
-
-        Args:
-            manager: The PredictionStoreManager instance
-            x_api_key: The API key for cache keying
-            category: Either "historical" or "forecast"
-            force_refresh: Whether to force refresh the cache
-
-        Returns:
-            The latest ViewsDataset
-        """
-        api_key_hash = self._api_key_hash(x_api_key)
-
-        # Ensure the dataframe is loaded
-        self.get_latest_dataframe(manager, x_api_key, category, force_refresh)
-
-        return self._dataframe_cache[api_key_hash][category]["dataset"].copy()
+        return self.get_latest_dataset(manager, x_api_key, category, force_refresh).dataframe.copy()

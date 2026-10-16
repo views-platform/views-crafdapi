@@ -3,7 +3,7 @@
 **Status:** Active
 **Owner:** Project maintainers
 **Last reviewed:** 2026-06-03
-**Related ADRs:** None
+**Related ADRs:** ADR-003 (fail loud: the filter refusals), ADR-006 (this contract), ADR-028 (the producer's artifact is a checked input: C-71 quarantine/allowlist, C-86 lineage), ADR-033 (§2 manifest-first selection; §6a degraded serving); views-postprocessing ADR-013 §4.3/§11.4 (wire-run resolution, the Hop-B transition guard — the producer's ADR, not this repo's ADR-013)
 
 ---
 
@@ -116,9 +116,15 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 - `NotImplementedError` from `upload_predictions` if a `pd.DataFrame` is passed directly as the `file` argument (not yet supported).
 - `TypeError` from `upload_predictions` if `file` is not a `Path`, `str`, or `pd.DataFrame`.
 
+### A failed search raises; an empty one does not (C-233, #158)
+- `get_predictions_by_metadata` raises **`MetadataLookupError`** when the metadata search fails — an Appwrite HTTP error, a network error or a timeout (which the pinned SDK all report as the same `AppwriteException`), or any other exception raised inside the search. The error carries `status` (the HTTP status: 401/403 not authorised, 0/None no response, 5xx server-side), `appwrite_type`, and `is_unauthorized`. It returns `[]` **only** when the search succeeded and matched nothing. Every `get_latest_*` helper and `resolve_artifact_file_ids` inherit this: they raise on a failed search and return `None` / `{}` only for a genuine absence.
+- *Why:* returning `[]` for both made an outage, a revoked key and "no documents" identical, so the serving path reported an outage as "no manifest" (ADR-008: errors must not be silently swallowed; ADR-033: "run present but unservable" must not look like "no run").
+- `get_predictions_by_metadata` copies the caller's `filters`; the name filter and §11.4 type pin never leak into the caller's dict (C-359).
+
 ### Soft failures (OperationResult)
-- Appwrite API failures (network errors, permission errors, missing resources) are returned as `OperationResult(success=False, error=...)` rather than raised as exceptions, except where noted above.
-- `get_predictions_by_metadata` returns an empty list if the search fails or finds no matching documents.
+- Other Appwrite API failures (on the file and upload surface) are returned as `OperationResult(success=False, error=..., code=<Appwrite type>)` rather than raised, except where noted above. `status` (the HTTP status) is set only by `search_files_by_metadata` and `list_buckets` — the two calls the serving path classifies; elsewhere it is `None`, which there means *not recorded*, not *no response*.
+- `list_all_predictions_unfiltered` calls the search directly and still returns `[]` on failure; it has no serving-path caller.
+- A missing database/collection id raises `RuntimeError` (a deployment error), not `MetadataLookupError`.
 - `get_latest_file_id` returns `None` if no matching files exist.
 - `get_file_metadata` returns `OperationResult(success=False, code="NOT_FOUND")` if no metadata exists for the given file ID, and `OperationResult(success=False, code="UNKNOWN_ERROR")` for unexpected exceptions.
 

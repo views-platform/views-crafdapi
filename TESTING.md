@@ -1,6 +1,6 @@
 # Test Architecture
 
-The test suite has **1,126 tests across 95 files** (verified 2026-08-15 via `uv run pytest --collect-only -o addopts=""`), organized in 5 layers. *The previous figure here — 674 across 53, from 2026-06-26 — had drifted by two thirds; a count nobody re-derives is a claim, not a measurement (ADR-014 §1).* Each layer catches a different class of bug; removing any layer creates a blind spot.
+The test suite has **1,295 tests across 103 files** (verified 2026-10-16 via `uv run pytest --collect-only -o addopts=""`), organized in 5 layers. *Earlier figures here — 674 across 53 (2026-06-26), then 1,126 across 95 (2026-08-15) — each drifted within weeks; a count nobody re-derives is a claim, not a measurement (ADR-014 §1).* Each layer catches a different class of bug; removing any layer creates a blind spot.
 
 > **Counts drift.** The totals below are a dated snapshot. Re-verify with the commands in [Verifying the counts](#verifying-the-counts) rather than trusting a stale number — and update this file when a story changes them.
 
@@ -8,13 +8,13 @@ The test suite has **1,126 tests across 95 files** (verified 2026-08-15 via `uv 
 
 | Layer | Marker | Red/Beige/Green (ADR-005) | Tests | Proves |
 |-------|--------|---------------------------|-------|--------|
-| 1 — Storage I/O | `layer1_storage` + `integration` | Beige / Red | 34 | Files upload, download, round-trip byte-identical; metadata dedup; cache hit/miss; session auth; failure modes return `OperationResult(success=False)`. **Cannot** prove fetched data is correct/served correctly. |
-| 2 — Data Processing | `layer2_data` | Green / Beige | 195 | DataFrames validated; aggregation math; MAP/HDI statistics; format-detection cascade; the `forecast/` package (ingestion, frames, summarize, geography, aggregate, serialize, conformance). |
-| 3 — HTTP API Contract | `layer3_http` | Beige / Red | 58 | Endpoints exist, correct status codes, response shapes match contract, query parsing, auth, error→HTTP-code mapping. |
-| 4 — Infrastructure | `layer4_infra` | Green / Beige | 247 | SDK normalization, cache bounds, import safety, deployment config, model-config loading, disk-cache versioning + concurrency. |
-| 5 — Audit & Regression | `layer5_audit` | Red | 52 | Prior bugs stay fixed; documented gaps tracked; SDK-compat assumptions hold; the `test_falsify_*` falsification suite. |
-| *(unmarked)* | *(none)* | — | 88 | Tests without a layer marker — many `test_falsify_*` probes, `test_client`, `test_time`, `test_cache_isolation`, etc. See [Marker hygiene](#marker-hygiene). |
-| **Total** | | | **1,126** | of which **48 are deselected by default** (`integration`). |
+| 1 — Storage I/O | `layer1_storage` + `integration` | Beige / Red | 30 | Files upload, download, round-trip byte-identical; metadata dedup; cache hit/miss; session auth; failure modes return `OperationResult(success=False)`. **Cannot** prove fetched data is correct/served correctly. |
+| 2 — Data Processing | `layer2_data` | Green / Beige | 427 | DataFrames validated; aggregation math; MAP/HDI statistics; format-detection cascade; the `forecast/` package (ingestion, frames, summarize, geography, aggregate, serialize, conformance). |
+| 3 — HTTP API Contract | `layer3_http` | Beige / Red | 128 | Endpoints exist, correct status codes, response shapes match contract, query parsing, auth, error→HTTP-code mapping. |
+| 4 — Infrastructure | `layer4_infra` | Green / Beige | 514 | SDK normalization, cache bounds, import safety, deployment config, model-config loading, disk-cache versioning + concurrency. |
+| 5 — Audit & Regression | `layer5_audit` | Red | 57 | Prior bugs stay fixed; documented gaps tracked; SDK-compat assumptions hold; the `test_falsify_*` falsification suite. |
+| *(unmarked)* | *(none)* | — | 139 | Tests without a layer marker — many `test_falsify_*` probes, `test_client`, `test_time`, `test_cache_isolation`, etc. See [Marker hygiene](#marker-hygiene). |
+| **Total** | | | **1,295** | of which **49 are deselected by default** (`integration`). |
 
 The red/beige/green column is the ADR-005 taxonomy (adversarial / realistic-misuse / supportive); the `layerN` markers are the operational selectors. See `docs/ADRs/active/005_testing_as_mandatory_critical_infrastructure.md` for the taxonomy definitions and the five named beige decision-support scenarios.
 
@@ -23,18 +23,21 @@ The red/beige/green column is the ADR-005 taxonomy (adversarial / realistic-misu
 `uv run pytest` (which applies `addopts = "-m 'not integration'"`) is **green-by-default**:
 
 ```
-588 passed, 8 skipped, 53 deselected, 25 xfailed, 0 failed
+1212 passed, 10 skipped, 49 deselected, 23 xfailed, 1 xpassed, 0 failed
 ```
 
-- **deselected (53):** the `integration` tests — need live Appwrite creds (below).
-- **xfailed (25):** falsification probes that *document a genuinely-open concern* (mostly the priogrid-naming cluster, register C-61..C-65). An `xfail` here is expected, not a failure.
-- **skipped (8):** tests whose required *environment/resource* is absent (e.g. a sibling repo, see the marker below; or no cached parquet).
+- **deselected (49):** the `integration` tests — need live Appwrite creds (below).
+- **xfailed (23):** falsification probes that *document a genuinely-open concern* — 7 of them the priogrid-naming cluster (C-61..C-65), the rest spread across the dual-SDK, rename and provenance probes. An `xfail` here is expected, not a failure.
+- **skipped (10):** tests whose required *environment/resource* is absent (e.g. a sibling repo, see the marker below; or a cached artifact).
+- **xpassed (1):** the views-datafactory naming probe, which passes wherever that sibling is checked out (it skips in CI); see its comment.
+
+*Measured 2026-10-16 on a maintainer machine with sibling repos and the delivered run present; a clean/CI checkout skips more and xpasses none.*
 
 A **failure** (not xfail, not skip) is the only red signal that should ever stop a merge.
 
 ## Coverage
 
-**Baseline: 66%** (line + branch), measured 2026-06-26 on the default non-integration suite (`src/views_crafdapi`, 3122 statements / 1038 branches). Coverage is a **signal, not a gate** — there is deliberately **no `fail_under`** (a hard coverage gate would recreate the red-by-default trap C-74/C-76 warn against). Config lives in `[tool.coverage.*]` in `pyproject.toml`.
+**Baseline: 81%** (line + branch), measured 2026-10-16 on the default non-integration suite (`src/views_crafdapi`, 5058 statements / 1666 branches). Coverage is a **signal, not a gate** — there is deliberately **no `fail_under`** (a hard coverage gate would recreate the red-by-default trap C-74/C-76 warn against). Config lives in `[tool.coverage.*]` in `pyproject.toml`.
 
 ```bash
 # Measure coverage (term report with missing lines)
@@ -44,15 +47,21 @@ uv run pytest --cov=src/views_crafdapi --cov-report=term-missing
 uv run pytest --cov=src/views_crafdapi --cov-report=html   # -> htmlcov/index.html
 ```
 
-Well-covered: the `forecast/` package (95–100% — the value-object pipeline), `client.py`, `prediction.py` (93%), `disk_cache.py` (89%). Known low-coverage modules, tracked for follow-up:
+Well-covered: the `forecast/` package (mostly ≥90% — the value-object pipeline), `client.py` (95%), `managers/disk_cache.py` (95%), `managers/prediction/` (86–100%). Modules below 80%:
 
-| Module | Cover | Tracked by |
-|--------|-------|-----------|
-| `wandb/utils.py` | 0% | #81 (S8 — `wandb_alert` redaction is security-relevant) |
-| `managers/log.py` | 19% | #81 (S8 — logging setup) |
-| `managers/model.py` | 48% | — |
-| `managers/appwrite.py` | 53% | — (the SDK god-class; large surface) |
-| `managers/api.py` | 67% | partly #78 (S9 — decision-support response paths) |
+| Module | Cover |
+|--------|-------|
+| `managers/appwrite/metadata.py` | 45% |
+| `managers/appwrite/manager.py` | 51% |
+| `smoke.py` | 66% |
+| `managers/model.py` | 72% |
+| `managers/appwrite/file_cache.py` | 74% |
+| `data/handlers/grid_dataset.py` | 75% |
+| `managers/api.py` | 77% |
+| `forecast/frames/builder.py` | 78% |
+| `managers/log.py` | 78% |
+
+*(The earlier table cited issues #78/#81 as trackers; in this repository those numbers resolve to unrelated work, inherited from views-faoapi — register C-241 — and are dropped.)*
 
 Re-measure and update the baseline when a story moves it materially.
 
@@ -72,7 +81,7 @@ Use the **narrowest** marker that states *why* a test is not an ordinary green t
 
 ## Marker hygiene
 
-88 tests currently carry **no** `layerN` marker. This is a known backlog, not a convention: new tests **must** carry a layer marker (below). Backfilling the unmarked set is tracked separately; until then, `pytest -m layerN` undercounts the true suite, so use the total from `--collect-only` for headline figures.
+139 tests currently carry **no** `layerN` marker (2026-10-16). This is a known backlog, not a convention: new tests **must** carry a layer marker (below). Backfilling the unmarked set is tracked separately; until then, `pytest -m layerN` undercounts the true suite, so use the total from `--collect-only` for headline figures.
 
 ## What happens if you remove a layer
 

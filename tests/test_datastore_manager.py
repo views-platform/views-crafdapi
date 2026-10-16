@@ -430,16 +430,64 @@ class TestPredictionStoreManager:
         assert call_args[1]["filters"]["name"] == "test_model"
 
     def test_get_predictions_by_metadata_search_fails(self, prediction_store, mock_appwrite_manager):
-        """Test handling of search failure"""
+        """A failed search is an error, not an empty answer (C-233, #158). It used to return `[]`,
+        so an Appwrite outage, a revoked key and "no documents" all looked the same to callers."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
         mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
             success=False,
             error="Search failed",
-            code="ERROR"
+            code="general_server_error",
+            status=503,
         )
-        
-        result = prediction_store.get_predictions_by_metadata()
-        
-        assert result == []
+
+        with pytest.raises(MetadataLookupError) as e:
+            prediction_store.get_predictions_by_metadata()
+        assert e.value.status == 503 and e.value.appwrite_type == "general_server_error"
+        assert not e.value.is_unauthorized
+
+    def test_an_unauthorised_search_is_marked_unauthorised(self, prediction_store, mock_appwrite_manager):
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
+            success=False, error="not authorized", code="general_unauthorized_scope", status=401,
+        )
+        with pytest.raises(MetadataLookupError) as e:
+            prediction_store.get_predictions_by_metadata()
+        assert e.value.is_unauthorized
+
+    def test_any_failure_inside_the_search_is_a_lookup_error(self, prediction_store, mock_appwrite_manager):
+        """#158 review: the search catches only `AppwriteException`; an SDK edge case (a malformed
+        error body, a missing header) escapes as something else. It is still a failed lookup."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        mock_appwrite_manager.metadata_manager.search_files_by_metadata.side_effect = KeyError("Content-Type")
+        with pytest.raises(MetadataLookupError):
+            prediction_store.get_predictions_by_metadata()
+
+    def test_a_missing_collection_config_is_a_config_error_not_an_outage(self, prediction_store, mock_appwrite_manager):
+        """An unset database/collection id is a deployment error. Reporting it as "store
+        unavailable" (503) would send the operator looking for an Appwrite outage."""
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
+            success=False, error="Database ID and collection ID must be provided", code="MISSING_CONFIG",
+        )
+        with pytest.raises(RuntimeError) as e:
+            prediction_store.get_predictions_by_metadata()
+        assert not isinstance(e.value, MetadataLookupError)
+
+    def test_get_predictions_by_metadata_does_not_mutate_caller_filters(
+        self, prediction_store, mock_appwrite_manager
+    ):
+        """C-359: the consumer-name filter and the §11.4 type pin must not leak into the caller's
+        dict — reusing it for a second, typed query would otherwise inherit `type="model"`."""
+        mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
+            success=True, data={"documents": [], "total": 0}
+        )
+        filters = {"category": "forecast"}
+        prediction_store.get_predictions_by_metadata(filters=filters)
+        assert filters == {"category": "forecast"}
 
     def test_get_predictions_by_metadata_no_results(self, prediction_store, mock_appwrite_manager):
         """Test getting predictions when no results found"""

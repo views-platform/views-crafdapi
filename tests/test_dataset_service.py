@@ -56,15 +56,16 @@ def _mock_manager(file_bytes, *, has_forecast=True):
 
 class TestCacheTiers:
     def test_memory_cache_hit_skips_download(self):
-        df = make_fao_df()
-        cache = {HASH: {"historical": {"data": df, "file_id": "f", "timestamp": time.time(), "dataset": None}}}
+        # A warm entry always carries its dataset — every writer sets `data` and `dataset` together.
+        ds = ForecastDataset(make_fao_df())
+        cache = {HASH: {"historical": {"data": ds.dataframe, "file_id": "f", "timestamp": time.time(), "dataset": ds}}}
         svc = _service(dataframe_cache=cache)
         mgr = MagicMock()
         mgr.get_latest_file_id.return_value = "f"  # C-172: cached entry IS still the newest historical
         out = svc.get_latest_dataframe(mgr, "key", "historical")
         mgr.get_latest_provenance.assert_not_called()
         mgr.download_prediction.assert_not_called()
-        assert out.equals(df) and out is not df  # returns a copy
+        assert out.equals(ds.dataframe) and out is not ds.dataframe  # returns a copy
 
     def test_disk_cache_fallback_skips_download(self):
         ds = ForecastDataset(make_fao_df())
@@ -151,3 +152,75 @@ class TestGetLatestDataset:
         mgr = _mock_manager(parquet_bytes)
         ds = svc.get_latest_dataset(mgr, "key", "historical")
         assert isinstance(ds, ForecastDataset)
+
+
+def test_historical_lookup_outage_cold_is_503_not_404():
+    """C-233 (#158): on a cold worker, a failed historical metadata lookup is "the store is
+    unavailable" (503) — not "no historical files exist" (404), which is what the empty result an
+    outage used to produce made it look like."""
+    from views_crafdapi.managers.prediction import MetadataLookupError
+
+    svc = _service(dataframe_cache={})
+    mgr = MagicMock()
+    mgr.get_latest_file_id.side_effect = MetadataLookupError("search failed", status=503)
+    mgr.get_latest_provenance.side_effect = MetadataLookupError("search failed", status=503)
+
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataframe(mgr, "key", "historical")
+    assert e.value.status_code == 503
+    assert e.value.detail == "Metadata store unavailable"   # the store's own text stays in the log
+
+
+@pytest.mark.parametrize("status,expected", [(401, 401), (403, 401), (503, 500), (None, 500)])
+def test_a_failed_historical_download_says_why_without_the_stores_words(status, expected):
+    """#159 review: a refused download is 401; any other failed download stays a 500 — but the
+    response no longer carries the store's own error text (C-264)."""
+    from views_crafdapi.managers.appwrite import OperationResult
+
+    svc = _service(dataframe_cache={})
+    mgr = MagicMock()
+    mgr.get_latest_file_id.return_value = "hist_1"
+    mgr.get_latest_provenance.return_value = MagicMock(file_id="hist_1", source="x")
+    mgr.download_prediction.return_value = OperationResult(
+        success=False, error="Download failed: storage_secret_detail", code="x", status=status,
+    )
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataframe(mgr, "key", "historical")
+    assert e.value.status_code == expected
+    assert "storage_secret_detail" not in str(e.value.detail)
+
+
+def test_the_historical_provenance_lookup_refuses_on_its_own():
+    """The latest-file lookup answered; only the provenance lookup is refused (#159 guard audit)."""
+    from views_crafdapi.managers.prediction import MetadataLookupError
+
+    svc = _service(dataframe_cache={})
+    mgr = MagicMock()
+    mgr.get_latest_file_id.return_value = "hist_1"
+    mgr.get_latest_provenance.side_effect = MetadataLookupError("no", status=401)
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataframe(mgr, "key", "historical")
+    assert e.value.status_code == 401
+
+
+def test_a_non_store_error_in_the_historical_lookup_is_not_served_around():
+    """#160 guard audit: with the historical cache warm, a config error or a bug in the latest-file
+    lookup surfaces; only a store failure (MetadataLookupError) is answered from the cache."""
+    ds = ForecastDataset(make_fao_df())
+    cache = {HASH: {"historical": {"data": ds.dataframe, "file_id": "f", "timestamp": time.time(),
+                                   "dataset": ds}}}
+    svc = _service(dataframe_cache=cache)
+    mgr = MagicMock()
+    mgr.get_latest_file_id.side_effect = RuntimeError("metadata collection is not configured")
+    with pytest.raises(RuntimeError):
+        svc.get_latest_dataframe(mgr, "key", "historical")
+
+
+def test_a_non_store_error_in_the_historical_provenance_lookup_is_not_a_503():
+    """Same rule at the provenance lookup: a config error is not "metadata store unavailable"."""
+    svc = _service(dataframe_cache={})
+    mgr = MagicMock()
+    mgr.get_latest_file_id.return_value = "hist_1"
+    mgr.get_latest_provenance.side_effect = RuntimeError("metadata collection is not configured")
+    with pytest.raises(RuntimeError):
+        svc.get_latest_dataframe(mgr, "key", "historical")

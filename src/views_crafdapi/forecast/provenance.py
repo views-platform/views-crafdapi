@@ -100,7 +100,7 @@ def _apply_served(data: Dict[str, Any], served: Optional[Mapping[str, Any]]) -> 
         return
 
     data["artifact_id"] = served.get("file_id")
-    data["mode"] = served.get("mode")          # "wire" | "legacy"
+    data["mode"] = served.get("mode")          # "wire" (the only forecast mode since S1/#264)
     data["status"] = served.get("status")      # producer-declared maturity
     data["source"] = served.get("source", data.get("source"))
     # #290: the served run is authoritative — overlay its identity/time labels too, so the

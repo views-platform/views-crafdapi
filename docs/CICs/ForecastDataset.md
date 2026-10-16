@@ -4,7 +4,7 @@
 **Owner:** Project maintainers
 **Last reviewed:** 2026-06-26
 **Related ADRs:** ADR-006 (this contract), ADR-021 (fill semantics), ADR-023 (re-baselining), ADR-024 (raw counts), ADR-025 (output schema); register C-81/C-87/C-136..C-142
-**Supersedes (as the public leaf):** `ForecastDataset.md` (the class was renamed `ForecastDataset → ForecastDataset` in Phase 4a of #87; `ForecastDataset` is retained as a back-compat alias). See also `_GridDataset.md` (the renamed base class).
+**Supersedes (as the public leaf):** the `FAO_PGMDataset` CIC (the class was renamed `FAO_PGMDataset → ForecastDataset` in Phase 4a of views-faoapi#87, before views-crafdapi was cloned; the old CIC came over in the seed `04a5a65` and was deleted in `4e2729b`, and no `FAO_PGMDataset` alias remains in `src` — register C-276). See also `_GridDataset.md` (the renamed base class).
 
 ---
 

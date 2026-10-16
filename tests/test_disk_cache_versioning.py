@@ -222,3 +222,43 @@ class TestCrafdApiManagerDiskCacheIntegration:
         assert result["file_id"] == "fid_1"
         # the reconstructed dataset serves byte-identical HDI/MAP
         assert ds.calculate_hdi_map().equals(result["dataset"].calculate_hdi_map())
+
+
+class TestTtlExpiryIsAMissNotADeletion:
+    """C-360 (#157). The disk TTL used to *delete* an expired slot on read. The last-good fallback
+    reads that same slot and is bounded by the freshness SLA (ADR-033 §6), not by the TTL. The
+    deletion cut the 45-day grace window to the 24.5-day TTL twice over: the fallback's own read
+    deleted the slot, and with no manifest the normal disk-tier read deleted it first. Expiry is
+    now a miss that leaves the slot in place."""
+
+    def _expired(self, tmp_path):
+        cache = CrafdDiskCacheManager(tmp_path, ttl_seconds=60)
+        cache.write("testhash", "forecast", _make_dataset(), "file_123")
+        meta_path = cache._meta_path("testhash", "forecast")
+        meta = json.loads(meta_path.read_text())
+        meta["timestamp"] = time.time() - 3600
+        meta_path.write_text(json.dumps(meta))
+        return cache
+
+    def test_an_expired_slot_is_a_miss_and_stays_on_disk(self, tmp_path):
+        cache = self._expired(tmp_path)
+        assert cache.read("testhash", "forecast") is None
+        assert cache._value_dir("testhash", "forecast").is_dir()
+        assert cache._meta_path("testhash", "forecast").exists()
+
+    def test_the_ttl_can_be_waived_for_a_reader_bounded_by_something_else(self, tmp_path):
+        cache = self._expired(tmp_path)
+        hit = cache.read("testhash", "forecast", enforce_ttl=False)
+        assert hit is not None and hit["file_id"] == "file_123"
+
+    def test_a_schema_mismatch_still_deletes_the_slot(self, tmp_path):
+        cache = CrafdDiskCacheManager(tmp_path)
+        cache.write("testhash", "forecast", _make_dataset(), "file_123")
+        meta_path = cache._meta_path("testhash", "forecast")
+        meta = json.loads(meta_path.read_text())
+        meta["schema_version"] = 0
+        meta_path.write_text(json.dumps(meta))
+
+        assert cache.read("testhash", "forecast", enforce_ttl=False) is None
+        assert not cache._value_dir("testhash", "forecast").exists()   # unloadable: removed
+        assert not meta_path.exists()

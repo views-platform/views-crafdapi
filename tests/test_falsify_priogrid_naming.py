@@ -16,12 +16,16 @@ import pytest
 
 pytestmark = pytest.mark.xfail(
     strict=False,
-    reason="documents open priogrid concerns C-61..C-65 (see #79)",
+    reason="documents open priogrid concerns C-61..C-65 (register entries)",
 )
 
 PLATFORM_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
+# This probe XPASSES wherever views-datafactory is checked out: `grid_to_dataframe.py` no longer
+# emits `priogrid_gid`. It is kept rather than converted to a guard (register C-274): what it
+# checks belongs to another repository, which is where a guard for it would live, and here it
+# skips in CI anyway. Read an xpass as "fixed there".
 @pytest.mark.requires_sibling_repos("views-datafactory")
 class TestP1_DatafactoryAlsoEmitsPriogridGid:
     """ADR-043 says VIEWSER is the sole source of priogrid_gid.
