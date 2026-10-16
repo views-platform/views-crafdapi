@@ -208,13 +208,17 @@ class TestHealthCarriesNoStoreText:
         assert "storage_secret_detail" not in resp.text
         assert resp.json()["forecast_freshness"] == {"error": "freshness check failed"}
 
-    def test_the_unhealthy_detail_is_generic(self, app_client):
+    def test_the_unhealthy_detail_is_generic(self, app_client, caplog):
         client, mgr, _ = app_client
         appwrite = mgr.app.dependency_overrides[mgr._get_appwrite_manager]()
         appwrite.list_buckets.side_effect = RuntimeError("storage_secret_detail")
-        resp = client.get("/health", headers=HEADERS)
+        with caplog.at_level("ERROR"):
+            resp = client.get("/health", headers=HEADERS)
         assert resp.status_code == 503
-        assert "storage_secret_detail" not in resp.text
+        assert resp.json()["detail"] == "Service unhealthy"   # fixed: not even the error's type
+        # The cause goes to the log, with where it happened.
+        logged = [r for r in caplog.records if r.getMessage() == "Health check failed"]
+        assert logged and logged[0].exc_info is not None
 
 
 class TestCacheStatsEndpoint:
@@ -806,8 +810,28 @@ class TestProvenanceEndpoint:
             resp = client.get("/provenance/forecast", headers=HEADERS)
         assert resp.status_code == 500, resp.text
         assert "collection not configured" not in resp.text, "internal text leaked (C-264)"
-        assert "unavailable" not in resp.json()["detail"].lower(), "a bug is not an outage"
-        assert "collection not configured" in caplog.text, "the cause must reach the log"
+        assert resp.json()["detail"] == "Provenance lookup failed", "fixed: not even the error's type"
+        # The cause goes to the log, with where it happened — on this route's own record.
+        logged = [r for r in caplog.records if r.getMessage() == "forecast provenance failed"]
+        assert logged, "the route must log the failure"
+        assert logged[0].exc_info is not None, "a bug must be logged with its traceback"
+        assert "collection not configured" in str(logged[0].exc_info[1]), "the cause must reach the log"
+
+    def test_a_non_store_error_in_the_historical_lineage_lookup_is_not_a_503(
+        self, app_client, caplog
+    ):
+        """The historical branch follows the same rule: a bug is a 500 with a generic detail and
+        a logged traceback, not "Metadata store unavailable" (C-233, C-264)."""
+        client, _, mock_pm = app_client
+        mock_pm.get_latest_provenance.side_effect = RuntimeError("collection not configured")
+
+        with caplog.at_level("ERROR"):
+            resp = client.get("/provenance/historical", headers=HEADERS)
+        assert resp.status_code == 500, resp.text
+        assert "collection not configured" not in resp.text, "internal text leaked (C-264)"
+        assert resp.json()["detail"] == "Provenance lookup failed", "fixed: not even the error's type"
+        logged = [r for r in caplog.records if r.getMessage() == "historical provenance failed"]
+        assert logged and logged[0].exc_info is not None
 
     def test_historical_provenance_is_503_when_the_store_lookup_fails(self, app_client):
         """C-233 (#158): a failed lookup is "store unavailable", not "no historical files"."""

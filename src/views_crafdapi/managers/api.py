@@ -702,7 +702,7 @@ class CrafdApiManager(APIManager):
             except Exception as e:
                 # A bug or a config error, not a store outage (those are 503 above). Its text is
                 # for the operator's log, not the response (C-264).
-                logger.error("%s provenance failed: %r", category, e)
+                logger.exception("%s provenance failed", category)
                 raise HTTPException(status_code=500, detail="Provenance lookup failed") from e
 
         # Helper function for subset endpoints
@@ -1154,10 +1154,11 @@ class CrafdApiManager(APIManager):
         ):
             """Health check: Appwrite connectivity + forecast freshness (S3/#246, C-50).
 
-            HTTP status stays about *service* health (401 for a refused key; 503 only if the check raises). *Data*
-            freshness is reported in the body: a served forecast older than the SLA sets
-            ``status="degraded"`` (service is up, the forecast is stale) so an external monitor
-            can page on the body without conflating it with a service outage.
+            HTTP status stays about *service* health (401 for a refused key; 503 only if
+            the check raises). *Data* freshness is reported in the body: a served forecast
+            older than the SLA sets ``status="degraded"`` (service is up, the forecast is
+            stale) so an external monitor can page on the body without conflating it with a
+            service outage.
             """
             try:
                 result = manager.list_buckets(limit=1)
@@ -1229,11 +1230,11 @@ class CrafdApiManager(APIManager):
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error("Health check failed: %r", e)
+                logger.exception("Health check failed")
                 raise HTTPException(
                     status_code=503,
                     detail="Service unhealthy"  # the cause goes to the log, not the response (C-264)
-                )
+                ) from e
 
         
 
