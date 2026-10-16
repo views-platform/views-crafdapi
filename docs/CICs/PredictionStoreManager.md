@@ -3,7 +3,7 @@
 **Status:** Active
 **Owner:** Project maintainers
 **Last reviewed:** 2026-06-03
-**Related ADRs:** None
+**Related ADRs:** ADR-003 (fail loud: the filter refusals), ADR-006 (this contract), ADR-028 (the producer's artifact is a checked input: C-71 quarantine/allowlist, C-86 lineage), ADR-033 (§2 manifest-first selection; §6a degraded serving); views-postprocessing ADR-013 §4.3/§11.4 (wire-run resolution, the Hop-B transition guard — the producer's ADR, not this repo's ADR-013)
 
 ---
 

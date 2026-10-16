@@ -7,7 +7,7 @@
 
 > **AMENDMENT (S8, #162 / epic #154, 2026-06-28 — register D-21):** the inheritance chain was rationalized from three classes to two. `_ViewsDataset` is **renamed `_GridDataset`** — the generic, geo-less `(time, entity)`-grid sample dataset that is now **frame-native** (the canonical store is the `(N,S)` `_sample_store`; the object-dtype spine epic #154 set out to drain is gone, S4). `_PGDataset` is **retired** (its lone `priogrid_id` check folded into `ForecastDataset.validate_indices`). The chain is **kept at two levels deliberately**: `_GridDataset` is the geo-less unit the parity/validation suites instantiate directly and the vehicle `check_integrity` uses to round-trip a metadata-free subset; a full single-class merge was **rejected** (D-21) as complecting the generic and FAO responsibilities and relocating a UN-facing fail-loud. This supersedes the C-139 "delete the chain" intent — the intent (drain the swamp) was met at S4; the means (delete `_ViewsDataset`) was retired.  
 
-> **NOTE (Phase 4a of #87, #112):** the chain's leaf was renamed `ForecastDataset → ForecastDataset` (see `ForecastDataset.md`), and the extracted single-responsibility modules are contracted in `forecast_package.md`.  
+> **NOTE (Phase 4a of views-faoapi#87, views-faoapi#112):** the chain's leaf was renamed `FAO_PGMDataset → ForecastDataset` (see `ForecastDataset.md`; register C-276), and the extracted single-responsibility modules are contracted in `forecast_package.md`.  
 
 > **AMENDMENT (M1, 2026 — register C-81):** MAP/HDI is now computed by the **views-frames tower
 > estimator** (`views_frames_summarize.tower_point` / `hdi_tower`) via the vectorized

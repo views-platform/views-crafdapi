@@ -18,6 +18,11 @@ production deploy (epic #12 / S11), when the drift was discovered.
 
 ### The intended mechanism (PLATFORM-001 D2 / þing-01 #275)
 
+> **Pin in force (note 2026-10-16, register C-250):** `seam_contract.REGISTRY_PIN_TAG`, which is
+> `appwrite-seam-v1.5.2` today, the first edition with the `UNCRAFD_CONSUMER_DOCUMENT_NAME` row the
+> CI binding reads. The `v1.4.4` links below are the edition current when this ADR was written,
+> kept as history. Follow the constant, not this page.
+
 Coordinates are **read from the owned, versioned registry** —
 `views-appwrite/docs/ADRs/platform/coordinate_registry.toml` — and the **one secret is supplied by
 the operator** in the environment, never sourced from a `.env`. This retired an earlier "copy-chain"
@@ -139,7 +144,8 @@ fails with `ModuleNotFoundError: tomllib` — always run it via the repo venv.
   [contract](https://github.com/views-platform/views-appwrite/blob/appwrite-seam-v1.4.4/docs/ADRs/platform/appwrite_seam_contract.md)
   ·
   [registry](https://github.com/views-platform/views-appwrite/blob/appwrite-seam-v1.4.4/docs/ADRs/platform/coordinate_registry.toml)
-  — the cross-repo source of truth for coordinates and the secret-slot discipline. The platform-level
+  — the cross-repo source of truth for coordinates and the secret-slot discipline. *(Historical pin;
+  the one in force is `seam_contract.REGISTRY_PIN_TAG` — see the "Pin in force" note above.)* The platform-level
   *principled* ADR (the repo-agnostic clone playbook this concrete ADR realizes) is proposed in
   **views-appwrite#54**; when it lands at a tag, this ADR should cite it by that pin.
 - **Review:** views-crafdapi#34 (this ADR) and views-faoapi#360 (the faoapi divergence measurement).
