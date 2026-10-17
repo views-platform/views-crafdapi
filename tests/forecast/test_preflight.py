@@ -355,19 +355,34 @@ class TestMalformedInputFailsCleanlyNotWithATraceback:
     def test_a_nonexistent_directory_fails_cleanly(self, tmp_path):
         assert not preflight(tmp_path / "nope").servable
 
-    def test_absent_hashes_are_noted_but_do_not_make_preflight_stricter_than_serving(self, tmp_path):
-        """Production skips verification with a warning and serves. Refusing here would be a
-        false RED and a differential-agreement failure — the honesty goes in the detail."""
+    @pytest.mark.parametrize("drop, n_unhashed", [("one shard", 1), ("sidecar", 1), ("all", 2)])
+    def test_absent_hashes_make_preflight_refuse_as_serving_does(self, tmp_path, drop, n_unhashed):
+        """C-234: serving refuses an artifact the manifest pins no sha256 for, so preflight
+        must too (a green preflight for a run serving refuses is a false GREEN)."""
         def drop_hashes(manifest):
-            for entry in manifest["shards"]:
-                entry.pop("sha256", None)
-            manifest["sidecar"].pop("sha256", None)
+            if drop in ("one shard", "all"):
+                for entry in manifest["shards"][: 1 if drop == "one shard" else None]:
+                    entry.pop("sha256", None)
+            if drop in ("sidecar", "all"):
+                manifest["sidecar"].pop("sha256", None)
             return manifest
 
         report = preflight(_stage(tmp_path, make_wire_run(), manifest_transform=drop_hashes))
-        assert report.servable, "must agree with the serving path"
-        assert "NOTHING VERIFIED" in _gate(report, "content hashes").detail
+        assert not report.servable, "must agree with the serving path"
+        gate = _gate(report, "content hashes")
+        assert not gate.passed
+        assert f"no sha256 for {n_unhashed} of 2 artifact(s)" in gate.detail
         assert any("NOT verified" in n for n in report.notes)
+
+    def test_a_wrong_and_a_missing_hash_are_both_named(self, tmp_path):
+        def wrong_shard_no_sidecar(manifest):
+            manifest["shards"][0]["sha256"] = "0" * 64
+            manifest["sidecar"].pop("sha256", None)
+            return manifest
+
+        report = preflight(_stage(tmp_path, make_wire_run(), manifest_transform=wrong_shard_no_sidecar))
+        detail = _gate(report, "content hashes").detail
+        assert "content hash" in detail and "no sha256 for 1 of 2" in detail
 
 
 # ---------------------------------------------------------------- manifest discovery
@@ -446,6 +461,10 @@ class TestDifferentialAgreementWithServingPath:
         (lambda m: {**m, "shards": []}, "no shards"),
         (lambda m: {**m, "expected_cell_count": None}, "no expected_cell_count"),
         (lambda m: {**m, "expected_months": []}, "no expected_months"),
+        (lambda m: {**m, "shards": [{k: v for k, v in s.items() if k != "sha256"} for s in m["shards"]]},
+         "a shard with no sha256"),
+        (lambda m: {**m, "sidecar": {k: v for k, v in m["sidecar"].items() if k != "sha256"}},
+         "a sidecar with no sha256"),
     ])
     def test_verdicts_agree(self, tmp_path, manifest_transform, label):
         from views_crafdapi.managers.dataset_service import DatasetService

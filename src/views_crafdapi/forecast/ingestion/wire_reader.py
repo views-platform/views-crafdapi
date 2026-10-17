@@ -36,7 +36,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
-import logging
 import os
 import tempfile
 from dataclasses import dataclass
@@ -49,7 +48,6 @@ import pandas as pd
 from views_crafdapi.data.value_format import _VALUE_SCHEMA_VERSION
 from views_crafdapi.data.handlers import ForecastDataset
 
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -78,6 +76,16 @@ class RunManifest:
 
     def sha256_for(self, name: str) -> Optional[str]:
         return self.shard_entry(name).get("sha256")
+
+    def unhashed_artifacts(self) -> List[str]:
+        """Names of the shards, and the sidecar, for which this manifest pins no sha256.
+
+        Such an artifact cannot be verified, so a run with any is refused (C-234). Knowable
+        from the manifest alone, so the service refuses before fetching anything."""
+        names = [s["name"] for s in self.shards if not s.get("sha256")]
+        if not self.sidecar_sha256:
+            names.append(self.sidecar_name)
+        return names
 
 
 def parse_run_manifest(raw: Union[bytes, str, Dict[str, Any]]) -> RunManifest:
@@ -152,12 +160,12 @@ def verify_content_hash(data: bytes, expected_sha256: Optional[str], what: str) 
     """§4.5(c): assert an artifact's bytes match the SHA-256 the run manifest pinned for it.
 
     A mismatch raises, so the run is refused rather than served from unverified or tampered
-    bytes (→ ``Refused``; ADR-033 §6a). ``expected_sha256=None`` means the manifest did not pin a
-    hash for this artifact — we WARN (cannot verify) rather than fail, since hash *absence*
-    is a manifest-completeness gap, not evidence of corruption."""
+    bytes (→ ``Refused``; ADR-033 §6a). An absent hash (``None`` or ``""``) raises too: a
+    manifest that pins nothing verifies nothing, so it is refused like a wrong hash (C-234)."""
     if not expected_sha256:
-        logger.warning("no sha256 in manifest for %s — skipping content-hash verification", what)
-        return
+        raise ValueError(
+            f"no sha256 in manifest for {what} — refusing unverifiable bytes (ADR-013 §4.5c, C-234)"
+        )
     actual = hashlib.sha256(data).hexdigest()
     if actual != expected_sha256:
         raise ValueError(

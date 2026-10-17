@@ -1,6 +1,6 @@
 # ADR-033: Fail-Visible Forecast Selection and Serving
 
-**Status:** Active (ratified 2026-07-28, S7/#252 — against the shipped S1–S6 behaviour); amended 2026-10-16 — §6a, the composed degraded-serving policy (epic #154)
+**Status:** Active (ratified 2026-07-28, S7/#252 — against the shipped S1–S6 behaviour); amended 2026-10-16 — §6a, the composed degraded-serving policy (epic #154); amended 2026-10-17 — §6a rule 8, integrity hashes are mandatory (#166)
 **Deciders:** Simon (maintainer)
 **Records:** the decisions of Epic #244, from the 2026-07-27 expert-code-review of the run-0 non-serving incident (#243).
 
@@ -77,7 +77,7 @@ Fallback to the last-good forecast is permitted **only within the freshness SLA 
 | **Refused, unavailable** | nothing above applies, or the metadata store could not be asked and nothing is servable | 503 | degraded | `fallback_available: false` |
 | **Refused, not authorised** | the store refused a lookup or download for this key (401/403) | 401 | 401 | — (nothing is served) |
 
-**The reasons.** `no_manifest` (no manifested run exists, or every manifest is quarantined); `manifest_lookup_error` (the manifest lookup failed — an outage, not an absence); `artifact_lookup_error` (the shard/sidecar lookup failed); `ingest_failed` (an integrity, capacity, parse or download failure while assembling the run); `schema_capability_mismatch` (§7); `unidentifiable` (§3); `manifest_malformed` (the manifest document has no file id). `refusal_reason` on `/provenance` appears only when something was refused — never for `cached_unverified`.
+**The reasons.** `no_manifest` (no manifested run exists, or every manifest is quarantined); `manifest_lookup_error` (the manifest lookup failed — an outage, not an absence); `artifact_lookup_error` (the shard/sidecar lookup failed); `ingest_failed` (an integrity, capacity, parse or download failure while assembling the run); `schema_capability_mismatch` (§7); `manifest_unhashed` (the manifest pins no `sha256` for a shard or the sidecar, rule 8); `unidentifiable` (§3); `manifest_malformed` (the manifest document has no file id). `refusal_reason` on `/provenance` appears only when something was refused — never for `cached_unverified`.
 
 **The rules the table rests on.**
 
@@ -88,6 +88,7 @@ Fallback to the last-good forecast is permitted **only within the freshness SLA 
 5. **The route returns the run selection chose.** `get_latest_dataset` returns the dataset selected on this request; nothing re-reads the warm cache afterwards. The fallback still never fills the warm cache — decision (i) stands (C-356).
 6. **No response carries the store's own error text** (C-264) — including `/health`, whose freshness error and 503 are generic.
 7. **Only a store failure is a lookup blip.** A configuration error or a bug in a lookup is not served around as `cached_unverified`; it surfaces.
+8. **Integrity hashes are mandatory** (amended 2026-10-17, #166, C-234). A manifest that pins no `sha256` for a shard or the sidecar verifies nothing, so its run is `Refused("manifest_unhashed")` from the manifest alone, before anything is fetched, and the request takes the same path as any other refusal (last good, or 503). A pinned hash that does not match is `ingest_failed`, as before. Preflight agrees: an unhashed artifact fails its content-hash gate. The unstamped `contract_version` pass (§7) is a different rule and is unchanged.
 
 **What this does not cover.** A key whose storage scope alone is narrowed keeps getting what its cache holds; `/files/*/cached` still answers a revoked key; the in-memory artifact-bytes cache is shared across keys (ADR-027 §4, register C-268, C-269). `/historical` follows rules 1, 2 and 6 but has no manifest, so it has no unverified or last-good serve.
 
@@ -98,6 +99,7 @@ Fallback to the last-good forecast is permitted **only within the freshness SLA 
 The run manifest **declares the contract/schema version it requires** (extending the existing `contract_version`); the consumer `Refused(schema_capability_mismatch)`s a run it can only render in a degraded/old schema rather than serving it degraded, and a startup/deploy assertion surfaces the built served-schema capability at `/version`. *(Recorded as the maintainer's recommendation for momentum; mechanical; cross-repo via vpp ADR-013.)*
 
 **Delivered (S5/#250).** `forecast/contract.py` is the single source of the build's capability (`SERVED_CONTRACT_VERSION = "1.5"`) and the compatibility rule (`can_render_contract`): a stamped `contract_version` renders iff it shares the served MAJOR and its MINOR ≤ served MINOR; a newer minor / different major / unparseable version is refused. `_load_wire_run` applies the gate **right after parsing the manifest — before any shard fetch** — so an unrenderable run is `Refused("schema_capability_mismatch")` cheaply (→ 503 / S4 grace, never a degraded serve). `GET /version` exposes `served_contract_version` so deploy↔delivered skew is remotely diagnosable. **Transition-safe:** an *unstamped* (empty) version is surfaced-not-gated (the producer does not yet stamp it everywhere — cross-repo vpp ADR-013 / views-postprocessing#133); tighten to fail-closed once stamping is guaranteed.
+
 
 ### 8. The manifest-declared-metadata contract (cross-repo)
 

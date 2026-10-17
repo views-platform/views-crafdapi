@@ -260,6 +260,25 @@ def test_sample_count_header_mismatch_raises():
         wire_reader.load_shard_state(data)
 
 
+def test_unhashed_artifacts_names_every_shard_and_the_sidecar_without_a_sha256():
+    manifest = wire_reader.parse_run_manifest({
+        "run_id": "r",
+        "shards": [{"name": "a", "sha256": "x"}, {"name": "b"}, {"name": "c", "sha256": ""}],
+        "sidecar": {"name": "side"},
+    })
+    assert manifest.unhashed_artifacts() == ["b", "c", "side"]
+    hashed = wire_reader.parse_run_manifest({
+        "run_id": "r", "shards": [{"name": "a", "sha256": "x"}],
+        "sidecar": {"name": "side", "sha256": "y"},
+    })
+    assert hashed.unhashed_artifacts() == []
+    empty_sidecar = wire_reader.parse_run_manifest({
+        "run_id": "r", "shards": [{"name": "a", "sha256": "x"}],
+        "sidecar": {"name": "side", "sha256": ""},
+    })
+    assert empty_sidecar.unhashed_artifacts() == ["side"]
+
+
 def test_verify_content_hash():
     good = b"hello"
     import hashlib
@@ -267,4 +286,7 @@ def test_verify_content_hash():
     wire_reader.verify_content_hash(good, hashlib.sha256(good).hexdigest(), "x")  # ok
     with pytest.raises(ValueError, match="content hash"):
         wire_reader.verify_content_hash(good, "0" * 64, "x")
-    wire_reader.verify_content_hash(good, None, "x")  # None → warn, no raise
+    # C-234: an absent hash verifies nothing, so it refuses like a wrong one.
+    for missing in (None, ""):
+        with pytest.raises(ValueError, match="no sha256 in manifest for x"):
+            wire_reader.verify_content_hash(good, missing, "x")

@@ -970,6 +970,20 @@ class DatasetService:
                     ),
                     file_id=manifest_file_id,
                 )
+            # C-234 (#166): an artifact the manifest pins no sha256 for cannot be verified, so the
+            # run is refused. Cheap, like the gate above: knowable from the manifest alone, so it
+            # is refused before ~GBs are fetched. `verify_content_hash` also refuses an absent
+            # hash, should one ever reach it.
+            unhashed = manifest.unhashed_artifacts()
+            if unhashed:
+                return selection.Refused(
+                    "manifest_unhashed",
+                    detail=(
+                        f"run {manifest.run_id!r} pins no sha256 for {len(unhashed)} artifact(s), "
+                        f"e.g. {unhashed[:3]}"
+                    ),
+                    file_id=manifest_file_id,
+                )
             shard_ids = manager.resolve_artifact_file_ids(manifest.shard_names, SHARD_ARTIFACT_TYPE)
             sidecar_ids = manager.resolve_artifact_file_ids([manifest.sidecar_name], SIDECAR_ARTIFACT_TYPE)
             missing = [n for n in manifest.shard_names if n not in shard_ids]

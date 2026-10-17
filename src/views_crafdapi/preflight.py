@@ -301,43 +301,42 @@ def preflight(directory: Path | str, *, assemble: bool = True) -> PreflightRepor
                  terminal=not artifacts_ok))
 
         # --- 6. content hashes ---------------------------------------------------------
-        hash_failures, unhashed = [], []
+        # The serving path refuses a run with any unhashed artifact before fetching
+        # (`Refused("manifest_unhashed")`, C-234), so the same manifest method decides it here.
+        unhashed = manifest.unhashed_artifacts()
+        hash_failures = []
         verified = 0  # counted directly; deriving it by arithmetic over two lists silently
         # miscounts the moment a shard name repeats or a second sidecar appears.
         for name in manifest.shard_names:
-            expected = manifest.sha256_for(name)
-            if not expected:
-                unhashed.append(name)
+            if name in unhashed:
                 continue
             try:
                 wire_reader.verify_content_hash(
-                    shard_paths[name].read_bytes(), expected, f"shard {name}")
+                    shard_paths[name].read_bytes(), manifest.sha256_for(name), f"shard {name}")
                 verified += 1
             except ValueError as e:
                 hash_failures.append(str(e))
-        if manifest.sidecar_sha256:
+        if manifest.sidecar_name not in unhashed:
             try:
                 wire_reader.verify_content_hash(
                     sidecar_path.read_bytes(), manifest.sidecar_sha256, "sidecar")
                 verified += 1
             except ValueError as e:
                 hash_failures.append(str(e))
-        else:
-            unhashed.append(manifest.sidecar_name)
         total_artifacts = len(manifest.shard_names) + 1
-        # Verdict is `not hash_failures`, matching the serving path exactly: an absent sha256 is
-        # a manifest-completeness gap that production skips with a warning, so refusing here
-        # would make preflight STRICTER than the thing it diagnoses (a false red, and a
-        # differential-agreement failure). The honesty lives in the detail string instead —
-        # a gate must never read "hashes match" when nothing was hashed.
-        add(Gate("content hashes match the manifest", not hash_failures,
-                 "; ".join(hash_failures[:3]) if hash_failures
-                 else (f"{verified} of {total_artifacts} artifact(s) verified" if verified else
-                       "NOTHING VERIFIED — no artifact carries a sha256 (serving path also skips)")))
+        # Verdict matches the serving path exactly: a mismatched hash and an absent one both
+        # refuse the run there, so both fail this gate, and the detail names both.
+        hashes_ok = not hash_failures and not unhashed
+        problems = hash_failures[:3]
+        if unhashed:
+            problems.append(f"no sha256 for {len(unhashed)} of {total_artifacts} artifact(s) — "
+                            f"serving refuses the run (manifest_unhashed)")
+        detail = "; ".join(problems) if problems else f"{verified} of {total_artifacts} artifact(s) verified"
+        add(Gate("content hashes match the manifest", hashes_ok, detail))
         if unhashed:
             notes.append(
                 f"{len(unhashed)} artifact(s) carry no sha256 and were NOT verified "
-                f"(e.g. {unhashed[:3]}). The serving path also skips these with a warning."
+                f"(e.g. {unhashed[:3]}). The serving path refuses the run for this."
             )
 
         # --- 7. identifiability, read from the shard the serving path reads -------------
