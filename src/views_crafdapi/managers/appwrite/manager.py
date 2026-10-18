@@ -6,7 +6,9 @@ from typing import List, Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime, timedelta
 import json
+import os
 import shutil
+import uuid
 import logging
 import hashlib
 
@@ -795,6 +797,21 @@ class AppWriteFileManager:
             # Download from remote
             file_bytes = self.storage.get_file_download(bucket_id, file_id)
 
+            # C-288 (#169): a body whose length differs from the store's declared size is a
+            # cut-off (or corrupted) download, not the file. Only bytes received as bytes can be
+            # compared: a deserialized manifest (below) is re-encoded and need not match.
+            received_as_bytes = isinstance(file_bytes, (bytes, bytearray))
+            declared_size = None
+            if received_as_bytes and file_metadata:
+                declared_size = file_metadata.get("sizeOriginal")
+                if declared_size is not None and len(file_bytes) != declared_size:
+                    return OperationResult(
+                        success=False,
+                        error=(f"Download failed: received {len(file_bytes)} bytes, the store "
+                               f"declares {declared_size} for {file_id}"),
+                        code="DOWNLOAD_INCOMPLETE",
+                    )
+
             # #287 follow-up: the Appwrite SDK auto-deserializes a JSON file (the run manifest)
             # to a dict — not bytes — so the cache write (and callers expecting bytes) blow up
             # with "a bytes-like object is required, not 'dict'". This is the FIRST download in
@@ -806,15 +823,45 @@ class AppWriteFileManager:
             elif isinstance(file_bytes, str):
                 file_bytes = file_bytes.encode("utf-8")
 
+            # C-288: bytes whose size could not be checked (the metadata lookup failed) are served,
+            # but not cached — a cached entry is trusted on every later read.
+            if received_as_bytes and declared_size is None:
+                logger.warning(
+                    "No declared size for %s/%s (file metadata unavailable): serving the "
+                    "download without caching it", bucket_id, file_id,
+                )
+                if save_path:
+                    Path(save_path).write_bytes(file_bytes)
+                    return OperationResult(
+                        success=True,
+                        data={"save_path": save_path, "from_cache": False},
+                        code="SAVED_FROM_REMOTE",
+                    )
+                return OperationResult(
+                    success=True,
+                    data={"file_bytes": file_bytes, "from_cache": False},
+                    code="RETURNED_FROM_REMOTE",
+                )
+
             # Determine filename for caching
             filename = file_metadata.get("name", file_id) if file_metadata else file_id
             cache_path = self.cache_manager._get_cache_path(
                 bucket_id, file_id, filename
             )
 
-            # Save to cache
-            with open(cache_path, "wb") as f:
-                f.write(file_bytes)
+            # Save to cache atomically (C-288, the pattern of `disk_cache._write_meta`): a kill
+            # mid-write leaves the previous file or none at the cache path, never a torn one that
+            # the next read would trust.
+            tmp = cache_path.with_name(f"{cache_path.name}.tmp-{uuid.uuid4().hex}")
+            try:
+                with open(tmp, "wb") as f:
+                    f.write(file_bytes)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, cache_path)
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
 
             self.cache_manager.add_to_cache(
                 bucket_id, file_id, cache_path, file_metadata

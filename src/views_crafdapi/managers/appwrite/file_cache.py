@@ -20,6 +20,7 @@ class CacheValidationResult(Enum):
     VALID = "valid"
     INVALID_TTL = "invalid_ttl"
     INVALID_TIMESTAMP = "invalid_timestamp"
+    INVALID_SIZE = "invalid_size"
     NOT_FOUND = "not_found"
 
 
@@ -29,6 +30,9 @@ class CacheMetadata:
     file_id: str
     path: str
     cached_at: str
+    # C-288 (#169): the size of a whole copy. Recorded once, from a file that `download_file` has
+    # just written atomically and checked against the store's `sizeOriginal`, so a later read
+    # that finds any other size (torn, truncated, overwritten) knows the copy is not the file.
     size_bytes: int
     filename: str
     remote_updated_at: Optional[str] = None
@@ -86,8 +90,11 @@ class CacheManager:
         metadata = self.cache_metadata[cache_key]
         cache_path = Path(metadata.path)
 
-        if not cache_path.exists():
+        size = self._size_on_disk(cache_path)
+        if size is None:
             return CacheValidationResult.NOT_FOUND
+        if size != metadata.size_bytes:
+            return CacheValidationResult.INVALID_SIZE
 
         cached_at = datetime.fromisoformat(metadata.cached_at)
         if datetime.now() - cached_at > self.cache_ttl:
@@ -129,6 +136,14 @@ class CacheManager:
 
         self._save_cache_metadata()
 
+    @staticmethod
+    def _size_on_disk(cache_path: Path) -> Optional[int]:
+        """The file's size, or None if it is gone — including removed since the caller looked."""
+        try:
+            return cache_path.stat().st_size
+        except FileNotFoundError:
+            return None
+
     def remove_from_cache(self, bucket_id: str, file_id: str):
         cache_key = self._get_cache_key(bucket_id, file_id)
 
@@ -151,18 +166,26 @@ class CacheManager:
                 success=False, error="File not in cache", code="NOT_CACHED"
             )
 
-        cache_path = Path(self.cache_metadata[cache_key].path)
-
-        if not cache_path.exists():
+        metadata = self.cache_metadata[cache_key]
+        cache_path = Path(metadata.path)
+        size = self._size_on_disk(cache_path)
+        if size is None:
             return OperationResult(
                 success=False, error="Cache file missing", code="CACHE_FILE_MISSING"
+            )
+
+        if size != metadata.size_bytes:
+            return OperationResult(
+                success=False,
+                error=f"cached copy is {size} bytes, a whole copy is {metadata.size_bytes}",
+                code="CACHE_FILE_WRONG_SIZE",
             )
 
         return OperationResult(
             success=True,
             data={
                 "cache_path": str(cache_path),
-                "metadata": self.cache_metadata[cache_key].__dict__,
+                "metadata": metadata.__dict__,
             },
         )
 

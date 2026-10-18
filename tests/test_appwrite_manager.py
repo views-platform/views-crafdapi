@@ -926,7 +926,8 @@ class TestErrorHandling:
         file_manager.get_file = Mock(
             return_value=OperationResult(
                 success=True,
-                data={"name": "test.txt", "$updatedAt": "2026-01-01T00:00:00Z"}
+                data={"name": "test.txt", "$updatedAt": "2026-01-01T00:00:00Z",
+                      "sizeOriginal": len(b"content")}
             )
         )
         file_manager.cache_manager._get_cache_path = Mock(
@@ -1270,3 +1271,144 @@ class TestAFailedCallKeepsItsHttpStatus:
         file_manager.get_file = Mock(return_value=OperationResult(success=False, error="x"))
         result = file_manager.download_file("bucket1", "f1", use_cache=False, validate_cache=False)
         assert result.success is False and result.status == 401
+
+
+# ── C-288 (#169): a cached download is written atomically and checked against its declared size ──
+class TestCachedDownloadIsCompleteOrAbsent:
+    BODY = b"PAR1" + b"x" * 96
+
+    def _manager(self, file_manager, tmp_path, *, size_original, body=None):
+        from views_crafdapi.managers.appwrite.results import OperationResult
+
+        file_manager.cache_manager = CacheManager(tmp_path, timedelta(hours=24))
+        file_manager.get_file = Mock(return_value=OperationResult(success=True, data={
+            "name": "shard.parquet", "$updatedAt": "2020-01-01T00:00:00.000Z",
+            "sizeOriginal": size_original,
+        }))
+        file_manager.storage.get_file_download = Mock(return_value=body or self.BODY)
+        return file_manager
+
+    def test_a_short_body_is_refused_and_nothing_is_cached(self, file_manager, tmp_path):
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY) + 10)
+        out = mgr.download_file("b", "f")
+        assert not out.success and "declares" in out.error
+        assert out.code == "DOWNLOAD_INCOMPLETE"   # the code /download maps to 502
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.NOT_FOUND
+        assert not (tmp_path / "b").exists() or list((tmp_path / "b").iterdir()) == []
+
+    def test_a_body_longer_than_declared_is_refused_too(self, file_manager, tmp_path):
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY) - 1)
+        out = mgr.download_file("b", "f")
+        assert not out.success and out.code == "DOWNLOAD_INCOMPLETE"
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.NOT_FOUND
+
+    def test_each_write_has_its_own_temp_file(self, file_manager, tmp_path, monkeypatch):
+        """Two requests downloading the same file at once must not write into one temp file."""
+        import os
+
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        real_replace, sources = os.replace, []
+        monkeypatch.setattr(os, "replace", lambda src, dst: (sources.append(Path(src).name),
+                                                             real_replace(src, dst)))
+        for _ in range(2):
+            mgr.cache_manager.cache_metadata.clear()
+            assert mgr.download_file("b", "f").success
+        assert len(set(sources)) == 2, sources
+
+    def test_a_crash_mid_write_leaves_no_file_at_the_cache_path(self, file_manager, tmp_path, monkeypatch):
+        import os
+
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        monkeypatch.setattr(os, "replace", Mock(side_effect=OSError("killed")))
+        assert not mgr.download_file("b", "f").success
+        assert list((tmp_path / "b").iterdir()) == []  # neither the target nor a stray temp
+
+    def test_a_crash_mid_rewrite_keeps_the_previous_copy_whole(self, file_manager, tmp_path, monkeypatch):
+        """Atomic means the old file survives a failed replacement intact; an in-place write
+        would already have truncated it."""
+        import os
+
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        assert mgr.download_file("b", "f").success
+        path = Path(mgr.cache_manager.get_cached_file_path("b", "f").data["cache_path"])
+        mgr.storage.get_file_download = Mock(return_value=b"N" * len(self.BODY))
+        mgr.cache_manager.cache_metadata.clear()  # force a re-download
+        monkeypatch.setattr(os, "replace", Mock(side_effect=OSError("killed")))
+        assert not mgr.download_file("b", "f").success
+        assert path.read_bytes() == self.BODY
+        assert sorted(p.name for p in path.parent.iterdir()) == [path.name]
+
+    def test_get_cached_file_path_refuses_a_wrong_size_copy(self, file_manager, tmp_path):
+        """What `/cached` relies on: the path lookup itself names an incomplete copy."""
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        assert mgr.download_file("b", "f").success
+        path = Path(mgr.cache_manager.get_cached_file_path("b", "f").data["cache_path"])
+        path.write_bytes(self.BODY[:10])
+        out = mgr.cache_manager.get_cached_file_path("b", "f")
+        assert not out.success and out.code == "CACHE_FILE_WRONG_SIZE"
+        assert "is 10 bytes, a whole copy is 100" in out.error
+        path.write_bytes(self.BODY + b"!")   # longer is not the file either
+        assert mgr.cache_manager.get_cached_file_path("b", "f").code == "CACHE_FILE_WRONG_SIZE"
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.INVALID_SIZE
+
+    def test_a_truncated_cached_file_is_invalid_and_refetched(self, file_manager, tmp_path):
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        assert mgr.download_file("b", "f").success
+        path = Path(mgr.cache_manager.get_cached_file_path("b", "f").data["cache_path"])
+        path.write_bytes(self.BODY[:10])  # torn by an earlier, non-atomic writer
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.INVALID_SIZE
+        out = mgr.download_file("b", "f")
+        assert out.success and not out.data["from_cache"] and out.data["file_bytes"] == self.BODY
+        assert path.read_bytes() == self.BODY
+
+    def test_a_deserialized_manifest_is_checked_against_what_was_cached(self, file_manager, tmp_path):
+        """The SDK hands a JSON file back as a dict; its re-serialised bytes need not match
+        `sizeOriginal`, so the download is not refused on it — but the cached copy is still
+        checked, against the size recorded when it was written."""
+        mgr = self._manager(file_manager, tmp_path, size_original=9999, body={"run_id": "r"})
+        out = mgr.download_file("b", "f")
+        assert out.success and out.data["file_bytes"] == b'{"run_id": "r"}'
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.VALID
+        path = Path(mgr.cache_manager.get_cached_file_path("b", "f").data["cache_path"])
+        path.write_bytes(b'{"run_')
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.INVALID_SIZE
+
+    def test_an_entry_cached_before_this_change_is_checked_against_its_recorded_size(self, temp_cache_dir):
+        """Old cache_metadata.json rows already record `size_bytes`. A whole one stays valid (no
+        migration); one torn since — a pre-fix in-place rewrite killed mid-write — is caught."""
+        manager = CacheManager(temp_cache_dir, timedelta(hours=24))
+        f = temp_cache_dir / "bucket1" / "old.txt"
+        f.parent.mkdir(parents=True)
+        f.write_text("old contents")
+        manager.add_to_cache("bucket1", "file1", f)
+        assert manager.validate_cache("bucket1", "file1") == CacheValidationResult.VALID
+        f.write_text("old")
+        assert manager.validate_cache("bucket1", "file1") == CacheValidationResult.INVALID_SIZE
+
+    def test_a_file_removed_mid_check_is_a_miss_not_an_error(self, temp_cache_dir, monkeypatch):
+        """A concurrent clear can unlink the file between lookups; that is NOT_FOUND / missing."""
+        manager = CacheManager(temp_cache_dir, timedelta(hours=24))
+        f = temp_cache_dir / "bucket1" / "x.txt"
+        f.parent.mkdir(parents=True)
+        f.write_text("x")
+        manager.add_to_cache("bucket1", "file1", f)
+        f.unlink()
+        assert manager.validate_cache("bucket1", "file1") == CacheValidationResult.NOT_FOUND
+        assert manager.get_cached_file_path("bucket1", "file1").code == "CACHE_FILE_MISSING"
+
+    def test_a_download_whose_size_cannot_be_checked_is_served_but_not_cached(
+        self, file_manager, tmp_path
+    ):
+        """If the metadata lookup fails there is no declared size: the body is returned, but not
+        cached, because a cached entry is trusted on every later read."""
+        from views_crafdapi.managers.appwrite.results import OperationResult
+
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        mgr.get_file = Mock(return_value=OperationResult(success=False, error="blip"))
+        out = mgr.download_file("b", "f")
+        assert out.success and out.data["file_bytes"] == self.BODY
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.NOT_FOUND
+        save = tmp_path / "out.bin"
+        assert mgr.download_file("b", "f", save_path=str(save)).success
+        assert save.read_bytes() == self.BODY
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.NOT_FOUND

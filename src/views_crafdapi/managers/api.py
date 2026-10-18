@@ -1034,7 +1034,10 @@ class CrafdApiManager(APIManager):
                     file_id=file_id,
                     use_cache=use_cache
                 )
-                
+
+                # C-288 (#169): the store's body was cut short — an upstream fault, not ours.
+                if result.code == "DOWNLOAD_INCOMPLETE":
+                    raise HTTPException(status_code=502, detail=result.error)
                 if not result.success:
                     raise HTTPException(
                         status_code=500,
@@ -1085,7 +1088,11 @@ class CrafdApiManager(APIManager):
             """Get file from cache if available (fastest option)."""
             try:
                 result = manager.cache_manager.get_cached_file_path(bucket_id, file_id)
-                
+
+                # C-288 (#169): this route never re-downloads, so a copy whose size is not that of
+                # a whole copy is refused, not streamed as if it were the file.
+                if result.code == "CACHE_FILE_WRONG_SIZE":
+                    raise HTTPException(status_code=409, detail=result.error)
                 if not result.success:
                     raise HTTPException(
                         status_code=404,

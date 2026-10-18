@@ -641,6 +641,48 @@ class TestFileEndpointErrorPaths:
         assert "Not in cache" in resp.json()["detail"]
 
 
+    def test_a_wrong_size_cached_file_is_409_not_served(self, app_client, tmp_path):
+        """C-288 (#169): `/cached` never re-downloads, so a cached copy whose size is not the
+        store's declared size is refused with 409 rather than streamed as if whole. Through the
+        real CacheManager, so the route and the cache agree on the refusal's code."""
+        from datetime import timedelta
+
+        from views_crafdapi.managers.appwrite.file_cache import CacheManager
+
+        client, mgr, _ = app_client
+        (tmp_path / "raw").mkdir()
+        cache = CacheManager(tmp_path / "raw", timedelta(hours=24))
+        path = cache._get_cache_path("test-bucket", "file_001", "shard.parquet")
+        path.write_bytes(b"x" * 100)
+        cache.add_to_cache("test-bucket", "file_001", path, {"name": "shard.parquet"})
+        path.write_bytes(b"x" * 10)      # torn after it was cached
+
+        mock_appwrite = MagicMock()
+        mock_appwrite.cache_manager = cache
+        mock_appwrite.get_file.return_value = OperationResult(success=True,
+                                                              data={"name": "shard.parquet"})
+        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
+        resp = client.get("/files/test-bucket/file_001/cached", headers=HEADERS)
+        assert resp.status_code == 409
+        assert "10 bytes" in resp.json()["detail"] and "100" in resp.json()["detail"]
+
+    def test_a_download_cut_short_by_the_store_is_502(self, app_client):
+        """C-288 (#169): a body shorter than the store declares is an upstream fault, kept apart
+        from our own 500s so a caller can retry it."""
+        client, mgr, _ = app_client
+        mock_appwrite = MagicMock()
+        mock_appwrite.get_file.return_value = OperationResult(success=True,
+                                                              data={"name": "shard.parquet"})
+        mock_appwrite.download_file.return_value = OperationResult(
+            success=False, error="Download failed: received 10 bytes, the store declares 100",
+            code="DOWNLOAD_INCOMPLETE",
+        )
+        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
+        resp = client.get("/files/test-bucket/file_001/download", headers=HEADERS)
+        assert resp.status_code == 502
+        assert "declares 100" in resp.json()["detail"]
+
+
 class TestHTTPExceptionPassthrough:
 
     @pytest.mark.parametrize("method,path", [
