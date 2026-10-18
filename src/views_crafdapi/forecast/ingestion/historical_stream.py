@@ -80,7 +80,9 @@ class ImplausibleArtifact(Exception):
     The check runs per chunk, before anything is committed. It used to run on the reconstructed
     dataset *after* ``write_value_dir`` had already replaced the cache slot — so a bad artifact
     evicted the last good one, the request 500'd, and the **next** request took the disk-cache
-    branch, which does not re-validate, and served the implausible geography.
+    branch, which did not re-validate then, and served the implausible geography. The disk read
+    re-runs C-72 since #168 (C-277). Checking here is still needed: it stops a bad artifact from
+    replacing the good slot at all.
     """
 
 

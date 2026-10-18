@@ -9,6 +9,7 @@ rather than serve a possibly-outdated forecast or drop to the legacy artifact (t
 import io
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -249,6 +250,28 @@ def test_restarted_worker_fallback_returns_last_good_dataset(tmp_path, phase):
     assert len(served.dataframe) == len(good.dataframe)
     st = restarted.forecast_serving_state()
     assert st["degraded"] is True and st["serving"] == "last_good_manifested"
+
+
+def test_an_implausible_last_good_slot_fails_visible_never_served(tmp_path):
+    """C-277 (#168): the last-good fallback reads the disk slot and cannot rebuild it. A slot
+    whose bytes now fail C-72 must give 503, never 200 with the implausible values."""
+    import numpy as np
+
+    run = make_wire_run()
+    mgr, state = _good_then_bad_manager(run, created_at=_iso(5))
+    _service(tmp_path).get_latest_dataset(mgr, "key", "forecast")
+    values = next(Path(tmp_path).rglob("*_forecast_value/frames/*/values.npy"))
+    block = np.load(values, mmap_mode="r+")
+    block[0, 0] = np.nan
+    block.flush()
+    del block
+
+    state["phase"] = "bad"
+    restarted = _service(tmp_path)
+    with pytest.raises(HTTPException) as e:
+        restarted.get_latest_dataset(mgr, "key", "forecast")
+    assert e.value.status_code == 503
+    assert restarted.forecast_serving_state()["fallback_available"] is False
 
 
 def _runs_manager(runs, *, created_at):

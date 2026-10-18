@@ -143,7 +143,8 @@ class TestPlausibilityFailsLoudRatherThanFallingBack:
     Before the fix it was caught by the broad fallback catch, so: the bad value-dir had already
     been adopted into the cache slot (deleting the last good one), the request 500'd from the
     in-memory path after paying the full peak, and the NEXT request took the disk-cache branch —
-    which does not re-validate — and served the implausible geography to CRAF'd.
+    which did not re-validate then (it does since #168, C-277) — and served the implausible
+    geography to CRAF'd.
     """
 
     def _bad_bytes(self, tmp_path):

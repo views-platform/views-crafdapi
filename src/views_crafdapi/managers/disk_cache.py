@@ -194,20 +194,39 @@ class CrafdDiskCacheManager:
                 # rmtree — the unlinked inode stays live until the mapping is GC'd. Host is Linux.)
                 dataset = ForecastDataset.from_value(value_dir, mmap=True)
 
-                logger.info(
-                    "Disk cache hit for %s/%s (file_id: %s, age: %.1f days)",
-                    api_key_hash, category,
-                    meta.get("file_id"), cache_age / 86400,
+            # C-277 (#168): the bytes passed C-72 when they were written; nothing since has
+            # checked they still do. Re-run the same gate, so a disk read can never serve what
+            # ingest would refuse. Every caller inherits it, including the last-good fallback
+            # (which then answers 503) and the post-adopt read-backs. Outside the lock: the scan
+            # takes ~1-2 s, and the memmap keeps reading these bytes even if a writer replaces
+            # the slot meanwhile (see above). A failing slot is refused but KEPT: the next ingest
+            # overwrites it anyway, it is the evidence of what went wrong, and deleting it would
+            # destroy the only last-good copy if a later release tightened a rule.
+            try:
+                dataset.validate_value_plausibility()
+                dataset.validate_metadata_plausibility()
+            except ValueError as e:
+                logger.error(
+                    "Disk cache slot %s/%s fails the C-72 plausibility gate; refusing it "
+                    "(kept for inspection): %s",
+                    api_key_hash, category, e,
                 )
-                return {
-                    "dataset": dataset,
-                    "file_id": meta.get("file_id"),
-                    "timestamp": meta.get("timestamp"),
-                    # S6a (#208): default legacy so a pre-S6 meta (should already be invalidated by
-                    # the schema bump) still repopulates a safe kind; provenance may be absent.
-                    "source_kind": meta.get("source_kind", "legacy"),
-                    "provenance": meta.get("provenance"),
-                }
+                return None
+
+            logger.info(
+                "Disk cache hit for %s/%s (file_id: %s, age: %.1f days)",
+                api_key_hash, category,
+                meta.get("file_id"), cache_age / 86400,
+            )
+            return {
+                "dataset": dataset,
+                "file_id": meta.get("file_id"),
+                "timestamp": meta.get("timestamp"),
+                # S6a (#208): default legacy so a pre-S6 meta (should already be invalidated by
+                # the schema bump) still repopulates a safe kind; provenance may be absent.
+                "source_kind": meta.get("source_kind", "legacy"),
+                "provenance": meta.get("provenance"),
+            }
         except filelock.Timeout:
             logger.warning("Disk cache lock for %s/%s held by another worker; treating as a miss",
                            api_key_hash, category)
