@@ -44,8 +44,7 @@ def _identity_table(geo_metadata: pd.DataFrame) -> pd.DataFrame:
     Derived from the per-cell geo-metadata: admin-1 is the unit, admin-0 is its country.
     Fail-loud if an admin-1 code maps to more than one country/name (a broken hierarchy).
     """
-    cols = [c for c in _META_FOR_IDENTITY if c in geo_metadata.columns]
-    ident = geo_metadata[cols].drop_duplicates()
+    ident = geo_metadata[list(_META_FOR_IDENTITY)].drop_duplicates()
     dupes = ident[_GAUL1_CODE].duplicated(keep=False)
     if dupes.any():
         bad = sorted(ident.loc[dupes, _GAUL1_CODE].unique())

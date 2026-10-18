@@ -148,7 +148,8 @@ class CrafdDiskCacheManager:
         schema-version mismatch still deletes: that slot cannot be loaded at all.
 
         Returns:
-            Dict with 'dataset', 'file_id', 'timestamp' or None on cache miss/expired.
+            Dict with 'dataset', 'file_id', 'timestamp', or None on a miss: absent, expired, lock
+            contention, or a slot that cannot be loaded (logged at error, e.g. C-261).
         """
         from views_crafdapi.data.handlers import ForecastDataset
 
@@ -207,8 +208,16 @@ class CrafdDiskCacheManager:
                     "source_kind": meta.get("source_kind", "legacy"),
                     "provenance": meta.get("provenance"),
                 }
+        except filelock.Timeout:
+            logger.warning("Disk cache lock for %s/%s held by another worker; treating as a miss",
+                           api_key_hash, category)
+            return None
         except Exception as e:
-            logger.warning("Failed to read disk cache: %s", e)
+            # A slot that exists but cannot be loaded (corrupt, or an old-schema geo table, C-261)
+            # is a miss: the normal tier rebuilds from source; the last-good fallback answers 503.
+            # Logged at error with the traceback: it is never expected.
+            logger.error("Disk cache slot %s/%s is unloadable, treating as a miss: %s",
+                         api_key_hash, category, e, exc_info=True)
             return None
 
     def write(self, api_key_hash: str, category: str, dataset: "ForecastDataset", file_id: str,

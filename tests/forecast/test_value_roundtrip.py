@@ -9,6 +9,7 @@ import os
 import tempfile
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
@@ -184,3 +185,15 @@ def test_value_dir_has_no_pickle(tmp_path):
     written = {p.suffix for p in (tmp_path / "v").rglob("*") if p.is_file()}
     assert ".pkl" not in written and ".pickle" not in written
     assert {".json", ".parquet", ".npz", ".npy"} & written
+
+
+@pytest.mark.parametrize("dropped", ForecastDataset._METADATA_COLS)
+def test_a_value_dir_missing_a_metadata_column_is_refused_not_served_short(dropped, tmp_path):
+    """C-261 (#167): `__init__` refuses a frame without the 9 metadata columns; `from_value` must
+    refuse a value-dir whose geo table lacks one, rather than serve output with that column gone."""
+    ds = ForecastDataset(make_fao_df(seed=3))
+    ds.to_value(tmp_path / "v")
+    geo_path = tmp_path / "v" / "geo.parquet"
+    pd.read_parquet(geo_path).drop(columns=[dropped]).to_parquet(geo_path)
+    with pytest.raises(ValueError, match=rf"geo\.parquet is missing metadata columns \[.{dropped}.\]"):
+        ForecastDataset.from_value(tmp_path / "v")

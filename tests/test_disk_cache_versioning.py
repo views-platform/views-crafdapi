@@ -181,17 +181,22 @@ class TestConcurrentDiskCacheAccess:
         assert result is not None
         assert result["file_id"] in ("initial", "updated")
 
-    def test_lock_timeout_degrades_gracefully(self, tmp_path):
-        """Simulate held lock — reader returns None (fallback), not crash."""
+    def test_lock_timeout_degrades_gracefully(self, tmp_path, caplog):
+        """Simulate held lock — reader returns None (fallback), not crash. Contention is not
+        corruption, so it is not logged at error (C-261 made unloadable slots error-level)."""
+        import logging
         from unittest.mock import patch
 
         cache = CrafdDiskCacheManager(tmp_path)
         cache.write("lock_key", "forecast", _make_dataset(), "file_1")
 
         with patch.object(filelock.FileLock, "acquire", side_effect=filelock.Timeout("lock_key")):
-            result = cache.read("lock_key", "forecast")
+            with caplog.at_level(logging.WARNING, logger="views_crafdapi.managers.disk_cache"):
+                result = cache.read("lock_key", "forecast")
 
         assert result is None, "Lock timeout must return None, not crash"
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("held by another worker" in r.getMessage() for r in caplog.records)
 
     def test_check_file_id_after_concurrent_write(self, tmp_path):
         """Staleness detection after overwrites."""
@@ -250,6 +255,23 @@ class TestTtlExpiryIsAMissNotADeletion:
         cache = self._expired(tmp_path)
         hit = cache.read("testhash", "forecast", enforce_ttl=False)
         assert hit is not None and hit["file_id"] == "file_123"
+
+    def test_a_slot_missing_a_metadata_column_is_a_logged_miss(self, tmp_path, caplog):
+        """C-261 (#167): an old-schema geo table is never served short. The read is a miss
+        (the caller rebuilds from source) and logged at error, not a quiet warning."""
+        import logging
+
+        import pandas as pd
+
+        cache = CrafdDiskCacheManager(tmp_path)
+        cache.write("testhash", "forecast", _make_dataset(), "file_123")
+        geo_path = cache._value_dir("testhash", "forecast") / "geo.parquet"
+        pd.read_parquet(geo_path).drop(columns=["admin2_gaul2_name"]).to_parquet(geo_path)
+        with caplog.at_level(logging.ERROR, logger="views_crafdapi.managers.disk_cache"):
+            assert cache.read("testhash", "forecast") is None
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert errors and "admin2_gaul2_name" in errors[0].getMessage()
+        assert errors[0].exc_info is not None, "the traceback must reach the log"
 
     def test_a_schema_mismatch_still_deletes_the_slot(self, tmp_path):
         cache = CrafdDiskCacheManager(tmp_path)
