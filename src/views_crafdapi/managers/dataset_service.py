@@ -18,6 +18,7 @@ import logging
 import os
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 import pandas as pd
@@ -134,6 +135,23 @@ def _cache_hit_serving_state(manifest_known: bool) -> Dict[str, Any]:
     }
 
 
+def _served_entry(disk: Dict[str, Any]) -> Dict[str, Any]:
+    """C-282 (#170): which build wrote the disk slot a forecast is served from, and when.
+
+    Read from the slot's own meta, never inferred from the running code: after a deploy the slot
+    may still hold what the previous build wrote, and /health exists to show that.
+    """
+    try:
+        written_at = datetime.fromtimestamp(disk["timestamp"], tz=timezone.utc).isoformat()
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        written_at = None  # an observational field never fails the serve it describes
+    return {
+        "written_by": disk.get("written_by"),
+        "written_at": written_at,
+        "source_kind": disk.get("source_kind"),
+    }
+
+
 def _identifiable_gate(served: selection.Served) -> selection.SelectionResult:
     """S2 (#247, ADR-033 §3): refuse to serve a run we cannot identify — no/`unknown` `source`.
 
@@ -182,6 +200,11 @@ class DatasetService:
         # (authoritative for /provenance — the store's *newest* record may differ from the served
         # run). None until the first forecast serve. Read via ``served_forecast_provenance()``.
         self._last_forecast_provenance: Optional[Dict[str, Any]] = None
+        # C-282 (#170): ``{written_by, written_at, source_kind}`` of the disk slot the current
+        # forecast is served from (see ``_served_entry``). None until the first forecast serve, and
+        # from the moment a request has to go to the store until it serves one. Per worker and not
+        # per API key, like its siblings above. Read via ``served_forecast_entry()``.
+        self._served_forecast_entry: Optional[Dict[str, Any]] = None
 
     def forecast_serving_state(self) -> Optional[Dict[str, Any]]:
         """S4 (#249): the last forecast-serve outcome (see ``self._forecast_serving_state``).
@@ -198,6 +221,11 @@ class DatasetService:
         (always ``"wire"`` for a forecast since S1/#264) and the producer-declared ``status``.
         ``None`` until the first forecast serve."""
         return self._last_forecast_provenance
+
+    def served_forecast_entry(self) -> Optional[Dict[str, Any]]:
+        """C-282 (#170): which build wrote the forecast currently being served, for /health
+        (see ``self._served_forecast_entry``)."""
+        return self._served_forecast_entry
 
     def get_latest_dataset(
         self,
@@ -311,6 +339,7 @@ class DatasetService:
                     manifest_doc is not _MANIFEST_UNFETCHED
                 )
                 self._last_forecast_provenance = cache.get("provenance")  # S7 (#252)
+                self._served_forecast_entry = cache.get("served_entry")  # C-282 (#170)
             return cache["dataset"].copy()
 
         # Check disk cache second (shared across workers). Post-S5 (#154) a hit returns a
@@ -363,6 +392,7 @@ class DatasetService:
                 # `.get` defaults tolerate a partial/legacy meta; the real read always supplies both.
                 cache["source_kind"] = disk_cache.get("source_kind", "legacy")
                 cache["provenance"] = disk_cache.get("provenance")
+                cache["served_entry"] = _served_entry(disk_cache)  # C-282 (#170)
 
                 logger.info(f"Loaded {category} dataset from disk cache ({len(dataset.dataframe)} rows)")
                 # S4 (#249): an identity-matched disk hit is a normal serve — clear degraded state
@@ -372,10 +402,15 @@ class DatasetService:
                         manifest_doc is not _MANIFEST_UNFETCHED
                     )
                     self._last_forecast_provenance = cache.get("provenance")  # S7 (#252)
+                    self._served_forecast_entry = cache["served_entry"]  # C-282 (#170)
                 return dataset.copy()
 
         # Need to download from remote
         logger.info(f"Refreshing latest {category} dataframe cache for API key: {api_key_hash}")
+        if category == "forecast":
+            # C-282 (#170): from here nothing is served until a branch below succeeds, so a 503,
+            # a 401 or a 500 leaves no entry naming a forecast this request did not serve.
+            self._served_forecast_entry = None
 
         # S2 (#204, ADR-013 §4.3): manifest-first wire-contract path. A forecast is served only
         # from a manifested run — or, bounded and flagged, the last-good one — and never from
@@ -398,6 +433,7 @@ class DatasetService:
                 # Normal serve — clear any prior degraded/fallback state (producer recovered).
                 self._forecast_serving_state = {"degraded": False}
                 self._last_forecast_provenance = result.provenance  # S7 (#252): served-run lineage
+                self._served_forecast_entry = cache.get("served_entry")  # C-282 (#170)
                 return result.dataset.copy()
             if isinstance(result, selection.Refused):
                 logger.error(
@@ -791,6 +827,7 @@ class DatasetService:
         }
         # S7 (#252): the served lineage is the last-good manifested run (degraded fallback).
         self._last_forecast_provenance = {**prov, "mode": prov.get("mode", "wire")}
+        self._served_forecast_entry = _served_entry(disk)  # C-282 (#170)
         logger.warning(
             "DEGRADED: newest manifested run refused (%s); serving last-good run %s "
             "(%.1f days old, within %.0f-day SLA) as a bounded grace fallback",
@@ -1119,6 +1156,7 @@ class DatasetService:
         cache["dataset"] = dataset
         cache["source_kind"] = "wire"  # S5 (#207): powers the §4.4 zero-manifest guard
         cache["provenance"] = provenance
+        cache["served_entry"] = _served_entry(disk)  # C-282 (#170): the read-back slot's meta
         logger.info(
             f"Served manifested wire run {manifest.run_id!r}: {len(dataset.dataframe)} rows, "
             f"targets={dataset.targets}"

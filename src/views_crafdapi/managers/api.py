@@ -1233,6 +1233,12 @@ class CrafdApiManager(APIManager):
                             "grace-fallback available=%s",
                             serving_state.get("reason"), serving_state.get("fallback_available"),
                         )
+                # C-282 (#170): which build wrote the forecast being served. After a deploy the
+                # slot can still be the previous build's; this says whether a fix is in effect.
+                # Reported, not judged: an older writer is not a fault and does not degrade.
+                served_entry = self._dataset_service.served_forecast_entry()
+                if served_entry is not None:
+                    health["served_entry"] = served_entry
                 return health
             except HTTPException:
                 raise

@@ -1312,3 +1312,90 @@ class TestKeyValidationTellsAuthFromOutage:
             mgr._validate_api_key("some-key")
         assert e.value.status_code == 500
         assert "APPWRITE_ENDPOINT" not in str(e.value.detail)   # deployment detail stays in the log
+
+
+# ============================================================
+# C-282 (#170): /health names the build that wrote the served forecast
+# ============================================================
+
+
+class TestHealthNamesTheBuildThatWroteTheServedForecast:
+    """After a deploy the disk slot can still hold what the previous build wrote, and nothing
+    said so: "is the fix in effect?" had no answer short of reading files on the box."""
+
+    ROUTE = "/pg/analysis/forecast/hdi-map"
+
+    @pytest.fixture
+    def store(self):
+        from tests.forecast._wire_fixtures import make_wire_run
+        from tests.test_dataset_service_fallback import _good_then_bad_manager, _iso
+
+        pm, state = _good_then_bad_manager(make_wire_run(), created_at=_iso(5))
+        pm.get_latest_provenance.return_value = None
+        return pm, state
+
+    def test_a_fresh_ingest_is_reported_as_written_by_the_running_build(self, tmp_path, store):
+        from views_crafdapi.version import installed_version
+
+        pm, _ = store
+        client = _cold_app(tmp_path / "cache", pm)
+        assert client.get(self.ROUTE, headers=HEADERS).status_code == 200
+
+        entry = client.get("/health", headers=HEADERS).json()["served_entry"]
+        assert entry["written_by"] == installed_version()
+        assert entry["source_kind"] == "wire"
+        assert datetime.fromisoformat(entry["written_at"]) > datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    def test_after_a_restart_the_slot_reports_the_build_that_wrote_it(
+        self, tmp_path, store, monkeypatch
+    ):
+        """The slot was written by an older build; the restarted service serves it from disk and
+        says so, rather than reporting its own version."""
+        import views_crafdapi.managers.disk_cache as disk_cache
+
+        pm, _ = store
+        cache = tmp_path / "cache"
+        monkeypatch.setattr(disk_cache, "_RUNNING_VERSION", "0.6.9")
+        assert _cold_app(cache, pm).get(self.ROUTE, headers=HEADERS).status_code == 200
+        monkeypatch.undo()
+
+        client = _cold_app(cache, pm)
+        pm.download_prediction.reset_mock()
+        for serve in ("disk hit", "warm hit"):
+            assert client.get(self.ROUTE, headers=HEADERS).status_code == 200
+            health = client.get("/health", headers=HEADERS).json()
+            assert health["served_entry"]["written_by"] == "0.6.9", serve
+            assert health["status"] == "healthy"   # reported, not judged
+        pm.download_prediction.assert_not_called()   # neither request re-ingested
+
+    def test_the_last_good_fallback_reports_the_slot_it_serves(self, tmp_path, store, monkeypatch):
+        import views_crafdapi.managers.disk_cache as disk_cache
+
+        pm, state = store
+        cache = tmp_path / "cache"
+        monkeypatch.setattr(disk_cache, "_RUNNING_VERSION", "0.6.9")
+        assert _cold_app(cache, pm).get(self.ROUTE, headers=HEADERS).status_code == 200
+        monkeypatch.undo()
+
+        state["phase"] = "bad"
+        client = _cold_app(cache, pm)
+        assert client.get(self.ROUTE, headers=HEADERS).status_code == 200
+        assert client.get("/health", headers=HEADERS).json()["served_entry"]["written_by"] == "0.6.9"
+
+    def test_nothing_is_reported_while_no_forecast_can_be_served(self, tmp_path, store):
+        """A refused run with no last-good is a 503: no entry is being served, so none is named —
+        not the one this worker served before."""
+        pm, state = store
+        client = _cold_app(tmp_path / "cache", pm)
+        assert client.get(self.ROUTE, headers=HEADERS).status_code == 200
+        assert "served_entry" in client.get("/health", headers=HEADERS).json()
+
+        for slot in (tmp_path / "cache").rglob("*_forecast_meta.json"):
+            slot.unlink()              # the last-good slot is gone
+        state["phase"] = "bad"
+        assert client.get(self.ROUTE, headers=HEADERS).status_code == 503
+        assert "served_entry" not in client.get("/health", headers=HEADERS).json()
+
+        state["phase"] = "good"        # the producer recovers; the warm entry serves again
+        assert client.get(self.ROUTE, headers=HEADERS).status_code == 200
+        assert "served_entry" in client.get("/health", headers=HEADERS).json()

@@ -23,12 +23,23 @@ if TYPE_CHECKING:
 
 import filelock
 
+from views_crafdapi.version import installed_version
+
 logger = logging.getLogger(__name__)
 
 # S6a (#208): `source_kind` + `provenance` round-trip so a disk-served forecast keeps its kind
 # (the §4.4 zero-manifest guard) and its C-86 lineage. Listing them here also auto-bumps
 # CACHE_SCHEMA_VERSION (see _derive_cache_schema_version), invalidating pre-S6 caches on read.
 _META_FIELDS = ("columns", "file_id", "provenance", "rows", "source_kind", "timestamp", "ttl_days")
+# C-282 (#170): `written_by` names the build that wrote the slot, so /health can say whether the
+# entry being served was produced by the code now running. Deliberately NOT in the fingerprint:
+# `read` tolerates its absence (a slot from an older build reads as written_by None), and
+# bumping the schema would delete every slot on deploy — the last-good copy included.
+_OPTIONAL_META_FIELDS = ("written_by",)
+# The version of the code in THIS process, fixed at import. `installed_version()` reads the
+# checkout on disk, which a deploy changes before the restart: read at write time, a still-running
+# old build would stamp its slots with the new version — the false "fix is in effect" this is for.
+_RUNNING_VERSION = installed_version()
 
 
 def _derive_cache_schema_version() -> int:
@@ -148,8 +159,10 @@ class CrafdDiskCacheManager:
         schema-version mismatch still deletes: that slot cannot be loaded at all.
 
         Returns:
-            Dict with 'dataset', 'file_id', 'timestamp', or None on a miss: absent, expired, lock
-            contention, or a slot that cannot be loaded (logged at error, e.g. C-261).
+            Dict with 'dataset', 'file_id', 'timestamp', 'source_kind', 'provenance' and
+            'written_by' (the version of the build that wrote the slot), or None on a miss:
+            absent, expired, lock contention, or a slot that cannot be loaded (logged at error,
+            e.g. C-261).
         """
         from views_crafdapi.data.handlers import ForecastDataset
 
@@ -226,6 +239,7 @@ class CrafdDiskCacheManager:
                 # the schema bump) still repopulates a safe kind; provenance may be absent.
                 "source_kind": meta.get("source_kind", "legacy"),
                 "provenance": meta.get("provenance"),
+                "written_by": meta.get("written_by"),
             }
         except filelock.Timeout:
             logger.warning("Disk cache lock for %s/%s held by another worker; treating as a miss",
@@ -279,6 +293,7 @@ class CrafdDiskCacheManager:
                     "ttl_days": self._ttl_seconds / 86400,
                     "source_kind": source_kind,
                     "provenance": provenance,
+                    "written_by": _RUNNING_VERSION,
                 }
                 self._write_meta(meta_path, meta)
 
@@ -332,6 +347,7 @@ class CrafdDiskCacheManager:
                     "ttl_days": self._ttl_seconds / 86400,
                     "source_kind": source_kind,
                     "provenance": provenance,
+                    "written_by": _RUNNING_VERSION,
                 }
                 self._write_meta(meta_path, meta)
                 logger.info(

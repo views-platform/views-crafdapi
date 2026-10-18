@@ -276,6 +276,21 @@ printing it:
 .venv/bin/python scripts/smoke.py --expect-tag vX.Y.Z
 ```
 
+**`/version` says the new code is deployed, not that it is in effect** (C-282). The forecast is
+served from a disk slot that may still be the one the previous build wrote. The smoke test has
+just requested a forecast, so `/health` now names the build that wrote the slot being served:
+
+```bash
+curl -s -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" https://crafdapi.viewsforecasting.org/health | python3 -m json.tool | grep -A3 served_entry
+```
+
+`written_by` equal to the new version means this build wrote the forecast being served. An older
+one is not a fault — the slot is valid and its numbers are unchanged — but any ingest change in
+this release has not run yet; *"It is not enough to restart"* below says how to make it run.
+`null` means a build from before #170 wrote it (the field did not exist yet). The answer is per
+worker and per API key — production runs one worker and one key, so it is the one that matters;
+with more, the entry describes whichever request that worker served last.
+
 ```bash
 exit
 ```

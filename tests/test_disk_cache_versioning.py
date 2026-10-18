@@ -124,8 +124,8 @@ class TestCacheSchemaAutoDerivation:
         meta_path = cache._meta_path("testhash", "forecast")
         meta = json.loads(meta_path.read_text())
         written_fields = sorted(k for k in meta if k != "schema_version")
-        from views_crafdapi.managers.disk_cache import _META_FIELDS
-        assert tuple(written_fields) == tuple(sorted(_META_FIELDS))
+        from views_crafdapi.managers.disk_cache import _META_FIELDS, _OPTIONAL_META_FIELDS
+        assert tuple(written_fields) == tuple(sorted(_META_FIELDS + _OPTIONAL_META_FIELDS))
 
 
 class TestConcurrentDiskCacheAccess:
@@ -284,3 +284,59 @@ class TestTtlExpiryIsAMissNotADeletion:
         assert cache.read("testhash", "forecast", enforce_ttl=False) is None
         assert not cache._value_dir("testhash", "forecast").exists()   # unloadable: removed
         assert not meta_path.exists()
+
+
+class TestTheSlotNamesTheBuildThatWroteIt:
+    """C-282 (#170): `written_by` is recorded by both writers and returned by `read`, so /health
+    can report it. It is the writer's version, never the reader's."""
+
+    def test_write_records_the_writing_build(self, tmp_path, monkeypatch):
+        import views_crafdapi.managers.disk_cache as disk_cache
+
+        cache = CrafdDiskCacheManager(tmp_path)
+        monkeypatch.setattr(disk_cache, "_RUNNING_VERSION", "0.6.9")
+        cache.write("testhash", "forecast", _make_dataset(), "file_123", source_kind="wire")
+        monkeypatch.undo()
+        assert cache.read("testhash", "forecast")["written_by"] == "0.6.9"
+
+    def test_write_value_dir_records_the_writing_build(self, tmp_path, monkeypatch):
+        import views_crafdapi.managers.disk_cache as disk_cache
+
+        cache = CrafdDiskCacheManager(tmp_path)
+        staging = cache.staging_dir("testhash", "forecast")
+        dataset = _make_dataset()
+        dataset.to_value(staging)
+        monkeypatch.setattr(disk_cache, "_RUNNING_VERSION", "0.6.9")
+        assert cache.write_value_dir("testhash", "forecast", staging, "file_123",
+                                     rows=len(dataset.dataframe))
+        monkeypatch.undo()
+        assert cache.read("testhash", "forecast")["written_by"] == "0.6.9"
+
+    def test_a_slot_from_before_written_by_is_still_served(self, tmp_path):
+        """Adding the field must not invalidate existing slots: that would delete the last-good
+        copy on deploy. An older meta without it reads as written_by None."""
+        cache = CrafdDiskCacheManager(tmp_path)
+        cache.write("testhash", "forecast", _make_dataset(), "file_123", source_kind="wire")
+        meta_path = cache._meta_path("testhash", "forecast")
+        meta = json.loads(meta_path.read_text())
+        del meta["written_by"]
+        # The schema version a pre-#170 build stamped: the fingerprint without `written_by`.
+        import hashlib
+
+        from views_crafdapi.data.value_format import _VALUE_SCHEMA_VERSION
+        from views_crafdapi.managers.disk_cache import _META_FIELDS
+        before = f"{_META_FIELDS}|{_VALUE_SCHEMA_VERSION}"
+        meta["schema_version"] = int(hashlib.sha256(before.encode()).hexdigest()[:8], 16)
+        meta_path.write_text(json.dumps(meta))
+        out = cache.read("testhash", "forecast")
+        assert out is not None and out["written_by"] is None
+
+    def test_the_version_is_the_running_code_not_the_checkout(self, tmp_path, monkeypatch):
+        """A deploy changes the checkout before the restart. A slot written by the old process in
+        between must carry the old process's version, fixed when it started."""
+        import views_crafdapi.managers.disk_cache as disk_cache
+
+        monkeypatch.setattr(disk_cache, "installed_version", lambda: "9.9.9")  # the new checkout
+        cache = CrafdDiskCacheManager(tmp_path)
+        cache.write("testhash", "forecast", _make_dataset(), "file_123", source_kind="wire")
+        assert cache.read("testhash", "forecast")["written_by"] == disk_cache._RUNNING_VERSION != "9.9.9"
