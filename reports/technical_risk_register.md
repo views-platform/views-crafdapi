@@ -4,9 +4,9 @@
 |-------------------|------------------------------------------------|
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
-| Last Updated      | 2026-10-19                                     |
-| Total Concerns    | 94                                             |
-| Open Concerns     | 58                                             |
+| Last Updated      | 2026-10-21                                     |
+| Total Concerns    | 97                                             |
+| Open Concerns     | 61                                             |
 | Resolved Concerns | 36                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -50,7 +50,7 @@ or shrinks the listed entries. Only open entries are listed.
 
 | Cluster | Root cause | Open entries | Highest tier | Fix strategy |
 |---|---|---|---|---|
-| **A. Degraded states are not reported where operators look** *(the fail-soft policy itself is stated and built: ADR-033 §6a, epic #154)* | The degraded paths now behave correctly, but `/health`'s status code and the routes' error text do not say so. | C-255, C-362, C-363 | 3 | Make `/health` reflect an unreachable store; one generic 500 handler |
+| **A. Degraded states are not reported where operators look** *(the fail-soft policy itself is stated and built: ADR-033 §6a, epic #154)* | The degraded paths now behave correctly, but `/health`'s status code and the routes' error text do not say so. | C-255, C-362, C-363, C-372 | 2 | Make `/health` reflect an unreachable store; one generic 500 handler; an alarm with an owner, a deadline and a way to clear (#173) |
 | **B. Newest upload wins, with no run identity** | The served forecast is whichever manifest was uploaded last, and nothing names a run. | C-251, C-252, C-253, C-254, C-303, C-305, C-306 (C-308 acute when cm arrives) | 2 | ADR-037's live-run pointer (ratified, not built) |
 | **C. The inherited 20-route grid serves a contract nobody chose** | ADR-026's grid came from faoapi; ADR-034 obliges content, not endpoints. | C-307 (root), C-245, C-246, C-247, C-258, C-267, C-270, C-286, C-292, C-304 | 2 | ADR-036: build artifacts at ingest and serve files; retire the grid |
 | **D. Single-key, count-bounded, blocking serving on a shared 22 GiB box** | Designed for one worker and one key; memory bounded by convention. A single key masks most of these. | C-236, C-237, C-262, C-269, C-272, C-285, C-287, C-300 | 2 | Reconcile the installed ceiling with the measured bulk peak; decide the key model before a second key |
@@ -62,7 +62,7 @@ or shrinks the listed entries. Only open entries are listed.
 | **H. Historical "actual": null, zero and absent look the same** | The bulk parquet cannot tell an unreported month from a failed fetch or a real zero. | C-248, C-255, C-293 | 2 | An in-band null-vs-zero marker plus the documented reporting lag |
 | **I. Checked once at ingest; every later read trusts what is on disk** | Validation (content hashes, the C-72 plausibility gate, metadata columns) runs when data is ingested. Disk reads, raw-cache reads and cache-schema reuse trust the bytes they find. | C-282, C-366, C-368 | 2 | Cheap checks at read time in the reader that owns each store (epic #165, tracking #171) |
 
-Standalone: C-238, C-242, C-302, C-308, C-364, C-367, C-369. Also C-257, which belongs in views-models' register, and
+Standalone: C-238, C-242, C-302, C-308, C-364, C-367, C-369, C-370, C-371. Also C-257, which belongs in views-models' register, and
 C-302, which is owned by views-appwrite#160. Both are recommended for transfer, not yet moved.
 
 ---
@@ -442,7 +442,7 @@ Cross-refs `C-248` (the silent-null consumer half), `C-251` (the duplicated prec
 | ID | C-256 |
 | Tier | 3 — no correctness impact; the cost is that a new user (or an agent) following the docs cannot authenticate, and the failure surfaces as an Appwrite *scope* error that names neither a file nor a key. |
 | Source | review-diff (2026-08-15), during D7 (#47) |
-| Trigger | When the CRAF'd serve key is rotated (it expires **2026-11-17**, C-84), update all three homes in the same change — the deployed `.env.crafdapi`, the operator's export, and any local `.env` — and re-check that `README.md`'s table still matches `deployment/RELEASE_RUNBOOK.md`. The expiry date itself is disputed (#33 says `crafd-caller-read` never expires and only the smoke key expires 2026-11-17; the runbook says the CRAF'd key does): settle it in S0 #155 before 2026-11-17. |
+| Trigger | When the smoke/integration key is rotated (it expires **2026-11-17**, C-84), update all three homes in the same change — the deployed `.env.crafdapi`, the operator's export, and any local `.env` — and re-check that `README.md`'s table still matches `deployment/RELEASE_RUNBOOK.md`. Settled 2026-10-20 from the Appwrite console (S0 #155): `crafd-caller-read` never expires; the key in `APPWRITE_DATASTORE_API_KEY` is `VIEWS Pipeline Core` (ends `430d`), which expires 2026-11-17, so only the smoke/integration key needs rotating. |
 | Location | `README.md` (Configuration), `deployment/RELEASE_RUNBOOK.md`, `notebooks/README.md`, `.env.example`, `views-models/.env` (a different repo, same secret) |
 
 The same secret legitimately lives in three places for three different consumers, and nothing holds the documentation of them consistent:
@@ -461,7 +461,7 @@ Mitigated in this change: `README.md` now carries a table distinguishing all thr
 
 Mitigated further in this change: `RELEASE_RUNBOOK.md` now carries a table mapping **password-manager entry name → env var → what uses it**, names the password manager as the source of truth, and gives a `curl /health` check that verifies a key returns 200 before it is pasted anywhere. What is still not enforced is agreement between that table and `README.md`.
 
-Cross-refs **C-84** (both keys expire 2026-11-17 — the named trigger), **#28**.
+Cross-refs **C-84** (the smoke/integration key expires 2026-11-17 — the named trigger; CRAF'd's key does not, per #155), **#28**.
 
 ---
 
@@ -574,7 +574,7 @@ consistent only by whoever remembers both. Check both services when changing eit
 
 crafd's own peak plus faoapi's resident set is **20.7 of 22 GiB**. There is no headroom left over, and nothing enforces a share.
 
-It has already failed. `dmesg` records **three OOM kills of views-faoapi on 2026-08-14** (06:45, 07:10, 07:26) at ~23.3 GB anonymous RSS each — and crucially `constraint=CONSTRAINT_NONE ... global_oom`, meaning the *whole box* exhausted memory rather than a cgroup limit being enforced. The kernel picked faoapi because it was the largest consumer at that moment. On a different request mix it would have picked crafdapi, and a faoapi request would have taken down the CRAF'd API with no crafd-side signal at all. That coupling is the concern; the OOM itself is views-faoapi#418's problem.
+It has already failed. `dmesg` records **four OOM kills of views-faoapi, on 2026-08-13 (07:39) and 2026-08-14 (06:45, 07:10, 07:27)**; the 2026-08-13 kill was found 2026-10-21 (`journalctl -k`), so the failures fall on two days at nearly the same hour, not in one forty-minute burst, at ~23.3 GB anonymous RSS each — and crucially `constraint=CONSTRAINT_NONE ... global_oom`, meaning the *whole box* exhausted memory rather than a cgroup limit being enforced. The kernel picked faoapi because it was the largest consumer at that moment. On a different request mix it would have picked crafdapi, and a faoapi request would have taken down the CRAF'd API with no crafd-side signal at all. That coupling is the concern; the OOM itself is views-faoapi#418's problem.
 
 Measured again after the v0.4.0 deploy, which changes *which* workload the ceiling must accommodate: the bulk endpoint in isolation now peaks at **6.0 G** (was 14.8 G), but the first request after a restart peaked at **16.8 G** because it included a cold load of both datasets — the historical leg's `pd.read_parquet` of 28.4M rows is a ~13 GB transient — registered locally as **C-263**. So a `MemoryMax=` set from the steady state would kill the service on every cold start, while one sized for the cold start does not fit beside faoapi's 5.9 G on a 22 GiB box (16.8 + 5.9 = 22.7). **C-263 has to move before this entry is satisfiable at all**; that is a dependency, not a preference.
 
@@ -637,6 +637,22 @@ half-satisfied: the service that could exhaust the box is the one still uncapped
 S7 improves the arithmetic but does not address the coupling. `MemoryMax=` on both units converts "the box falls over and the kernel chooses a victim" into "this request fails, loudly, in the service that caused it" — a bounded local change, and the failure becomes attributable. Deliberately not bundled into the v0.4.0 deploy.
 
 **review-rr 2026-10-15:** **this entry and C-287 contradicted each other and are reconciled here.** C-262 recorded crafd's half as "landed" (`MemoryHigh=8G`/`MemoryMax=9G`, pinned by `TestMemoryCeiling`). C-287 recorded that the committed 9G was deliberately **not installed** on 2026-08-22, because `build_bulk_table` measured **10.47 GB** peak; the temporary 14 G runtime drop-in was left in place. Both statements are true: the ceiling is committed in the repo (`deployment/views-crafdapi.service:99`) and not in effect on the box. The committed value is below a measured legitimate peak, so a routine unit reinstall would kill the one endpoint CRAF'd uses. What is actually installed is unknown from the repo and needs the operator. The trigger now names the reinstall.
+
+**Read off the box 2026-10-20 (S0 #155), v0.7.0, by the operator:**
+
+| | crafdapi | faoapi |
+|---|---|---|
+| `MemoryMax` in force | 14 GiB, from `/run/systemd/system.control/views-crafdapi.service.d/50-MemoryMax.conf` (a `--runtime` drop-in: **gone on reboot**) | `infinity` |
+| `MemoryHigh` | `infinity` | — |
+| Installed unit file | **no memory lines** (the committed 8G/9G was never installed) | — |
+| `MemoryCurrent` | 9.8 GiB: `anon` 5.7 GiB, `file` 4.0 GiB | 10.3 GiB |
+| `MemoryPeak` since start | 10.8 GiB (cgroup total, file cache included) | **18.6 GiB** |
+
+Box: 22 GiB, no swap; 2 GiB free, 6 GiB available. The box reports *System restart required*. After that reboot crafdapi has **no ceiling**, and faoapi has none today; faoapi alone has used 18.6 of 22 GiB. The committed 9G cannot be judged from these numbers: the cgroup peak counts reclaimable file cache, and crafd's own working-memory (`anon`) peak on a cold start of v0.7.0 is unmeasured.
+
+**A ceiling does not choose the victim (views-faoapi session, 2026-10-21).** In a global OOM the kernel picks by `oom_score`, roughly proportional to RSS, so faoapi (18.6 GiB peak) is chosen over crafd (~5.7 GiB) whichever service caused the pressure, as all four kills show. The maintainer's ruling (2026-10-21) is that crafd, in development with no consumer, gives way to faoapi, the service partners use. What implements it is a positive `OOMScoreAdjust` on crafd's unit; `MemoryMax` only bounds crafd's contribution. Neither fixes fit: 18.6 + 9 + ~2 GiB exceeds the 22 GiB box. The remedy is crafd on its own box.
+
+**Installed 2026-10-21 by the operator:** `systemctl set-property views-crafdapi MemoryMax=9G` (persistent, plus `--runtime` to override the old 14 GiB drop-in) and `/etc/systemd/system/views-crafdapi.service.d/give-way.conf` with `OOMScoreAdjust=1000`, then a restart. `systemctl show` reads `MemoryMax=9663676416`, `OOMScoreAdjust=1000`, and the service answered `/version` (v0.7.0) afterwards. The committed unit does not yet say this (#177).
 
 Tracked as **#99**, blocked by **#98**. Cross-refs: **C-235** (resolved — what used to drive crafd's peak), **C-263** (what drives it now, and blocks this), **views-faoapi#418** (the neighbouring service's own memory defect).
 
@@ -2038,6 +2054,70 @@ Cross-refs: **C-72** (the gate this extends, inherited), **C-364** (whether the 
 
 ---
 
+### C-370: The per-key check lists buckets, so every caller key needs `buckets.read`, a scope nothing it is served needs
+
+| Field | Value |
+|-------|-------|
+| ID | C-370 |
+| Tier | 3. Nothing wrong is served, and ADR-038 grants the scope, so no key fails today. The cost appears when someone scopes a key to what the service reads (files and documents): every authenticated route then answers 401, and it looks like a revocation, not a missing scope. views-faoapi measured exactly that (2026-08-22). |
+| Source | caller-key scope trace for S0 #155 (2026-10-20), ADR-038; views-faoapi session's account of its own fix |
+| Trigger | When a caller key is created or narrowed with fewer scopes than ADR-038 §1 lists, or when ADR-038's scope table is edited. Before either, change the check or keep `buckets.read`. |
+| Location | `src/views_crafdapi/managers/api.py:395` (`_validate_api_key`, once per new key hash), `:1171` (the `/health` probe), both via `managers/appwrite/manager.py:992-1001` (`list_buckets` → `storage.list_buckets`); `docs/ADRs/active/038_caller_key_scopes.md` §1 |
+
+Every other call a serving route makes with the caller's key reads files (`files.read`) or metadata documents (`documents.read`). The key check alone lists buckets, so `buckets.read` sits on ADR-038's list only to satisfy the check. A probe should ask the narrowest question that proves the key can be served. views-faoapi narrowed theirs to listing one file in the delivery bucket (`files.read`), a scope every caller already holds. That would shrink this service's list to two scopes.
+
+The `/health` probe is a second call site. views-faoapi fixed its key check and missed its `/health` for two months; any fix here must cover both lines above.
+
+Cross-refs: **C-256** (the key's homes), **C-362** (the same `/health` `list_buckets` call, outage path), ADR-038, ADR-027.
+
+---
+
+### C-371: Unverified whether an Appwrite API key can be limited to particular buckets, so a caller key may read every bucket in the project
+
+| Field | Value |
+|-------|-------|
+| ID | C-371 |
+| Tier | 3, pending verification. If Appwrite API keys are project-wide, CRAF'd's key (`buckets.read`, `files.read`, `documents.read` and three more) can read views-faoapi's bucket and metadata, and FAO's key can read CRAF'd's. That is a confidentiality exposure between partners with no error signal, not a correctness one. It becomes Tier 2 if confirmed and a caller key is ever held outside the team. |
+| Source | ADR-038 open item (2026-10-20); ADR-027 §2 assumes "an operator narrows a key's bucket scopes" without evidence that the console offers that |
+| Trigger | Before CRAF'd's key (`crafd-caller-read`) is next rotated or re-issued, and before any new partner key is created. Check the Appwrite console or documentation for per-bucket restriction of API keys. |
+| Location | Appwrite project `691b14fc0024f568fb42` (console, API keys); `docs/ADRs/active/027_authentication_and_per_key_isolation.md` (the "Inheriting Appwrite's scope model gives free least-privilege" claim); `docs/ADRs/active/038_caller_key_scopes.md` (open items) |
+
+ADR-027 delegates authorization to Appwrite: what a caller can read is what their key is scoped to. Appwrite key scopes name resource *types* (`files.read`, `documents.read`), not particular buckets or collections. If the key cannot be limited further, the per-partner separation the deployment relies on (one key for CRAF'd, one for FAO) separates who is calling, not what they can read. Nothing in this repository has checked this; the console view of 2026-10-20 showed scopes per key and no bucket field.
+
+Cross-refs: **C-302** (anonymous bucket listing), **C-269** (the raw cache shared across keys), ADR-027, ADR-038, #172.
+
+---
+
+### C-372: The data-freshness alarm went silent on a rejected key, could not clear itself, read a failed check as fine, and had no owner
+
+| Field | Value |
+|-------|-------|
+| ID | C-372 |
+| Tier | 2. The monitor is the only thing that detects stale data, the failure this service has actually had (#153: 66 days old against a 45-day SLA). Each defect made it miss or misreport a stale forecast without an error signal, and one had a dated trigger: the monitor's key expires 2026-11-17. |
+| Source | stale-data review with the maintainer (2026-10-21), checked against views-faoapi's register (C-337, C-345) and issues (#472) |
+| Trigger | When the `APPWRITE_DATASTORE_API_KEY` repository secret's key expires (2026-11-17 if it still holds `VIEWS Pipeline Core`) or is revoked, and at the first monthly delivery after #173 merges, which is the first real test of self-clearing. |
+| Location | `.github/workflows/data-freshness.yml` (fetch, assess and issue steps); `src/views_crafdapi/managers/api.py` (`health_check`: freshness from `served_forecast_provenance()`, `{"error": ...}` on failure) |
+| Status | Fixed by #173 in `ffb02d2` (branch `sprint/read-time-checks`). Scheduled workflows run from `main`, so the fix is inert until merged there; the entry closes once it runs from `main` and a delivery has cleared it. The repository secret moved to `crafdapi-probe` on 2026-10-21, so the 2026-11-17 trigger no longer applies. |
+
+Four defects, found together:
+- **A rejected key was silent.** `curl -f` turned a 401 into "could not fetch", and that path deliberately opens nothing (availability belongs to Better Stack). So an expired key would blind the monitor with no alarm. views-faoapi C-345 is the same defect.
+- **It could not clear itself.** `/health` takes freshness from the run the worker has served. After a delivery it reports the old run until some data request loads the new one, and the monitor never made one. views-faoapi C-337 is the same defect.
+- **A failed check read as fine.** `api.py` reports `{"error": "freshness check failed"}` when its check fails. The monitor flagged only `is_stale`, so this passed as healthy. A missing date (`age_days: None`) crashed the step.
+- **Nobody owned it.** The issue was opened unassigned on day 45 and commented on daily. #153 then ran three weeks with nobody acting, and views-faoapi's #472 ran 28 days. A notification with no owner and no deadline is a log, not an alert.
+
+The #173 fix:
+- treats a 401/403 as its own assigned issue and a failed run;
+- loads the forecast once, then judges it again, on a bad verdict;
+- flags unmeasured freshness;
+- assigns every issue it opens;
+- adds a "Monthly delivery due" reminder on the 22nd, which yields to the stale issue.
+
+The secret must also move to `crafdapi-probe` (ADR-038).
+
+Cross-refs: **C-362** (`/health`'s own status on an outage), **C-272** (served state is process-global), **C-287** (the monitor's key warms its own partition), cluster A, #153, #173.
+
+---
+
 ## Disagreements
 
 (No D-entries yet. New IDs start at `D-27`; see the ID Namespace Note. Two are proposed and await a ruling: **D-27**, whether the ADR-034 exceedance columns warrant a `METHODOLOGY_VERSION` bump (C-244), and **D-28**, whether this register should be tracked in git (C-357). D-28 was ruled 2026-10-18 by the maintainer: **track it**. It will be committed on its own, separately from the stories in epic #165, which resolves C-357 once it lands.)
@@ -2919,7 +2999,7 @@ construction. The number with authority is the one Appwrite declares (`sizeOrigi
 **The write is truncate-in-place at the canonical path.** `manager.py:816` is
 `with open(cache_path, "wb") as f:`. A process killed mid-write — an OOM, a cgroup kill, a deploy
 restart — leaves a short file exactly where a complete one belongs. faoapi's own note is that the
-three OOM kills of 2026-08-14 are known to have left such files, and every check they had accepted
+four OOM kills of 2026-08-13/14 are known to have left such files, and every check they had accepted
 them. Staging to a temporary name and `os.replace`-ing after `fsync` makes the state
 unrepresentable.
 
@@ -3365,7 +3445,7 @@ Cross-refs: **C-356** (the same fallback path; this bounds how long it can exist
 | Status | **RESOLVED 2026-10-16** (#157) — Both writers remove the old meta before replacing the data and write the new meta atomically. **Remaining:** a write that fails after the old data is removed still loses the last-good run, as before; a versioned slot (value-dir per file id, atomic pointer swap) would remove that. The fsync in `_write_meta` is unguarded by any test (needs a power-loss simulation). Test: `test_a_crash_between_replacing_the_data_and_writing_its_meta_never_relabels_a_run` (fails against the old order). |
 | Tier | 4 |
 | Source | repo-assimilation (2026-10-15); traced in code, not reproduced |
-| Trigger | When the service is OOM-killed or restarted during a wire or historical ingest (the box has run out of memory three times, C-262), check the adopted slot's `meta.json` `file_id` against its contents before trusting `/provenance`. |
+| Trigger | When the service is OOM-killed or restarted during a wire or historical ingest (the box has run out of memory four times, C-262), check the adopted slot's `meta.json` `file_id` against its contents before trusting `/provenance`. |
 | Location | `src/views_crafdapi/managers/disk_cache.py:219-245` (`write`), `:278-297` (`write_value_dir`) |
 
 Both writers `rmtree` the old value-dir, `os.replace` the new one into place, and only then write `meta.json`, in place with `open(..., "w")`. A process killed between the replace and the meta write leaves the new run's arrays beside the old run's meta: old `file_id`, `provenance`, `created_at`. The identity gate then misses (the meta `file_id` ≠ the manifest), so normal serving re-ingests and heals. But the grace fallback reads the slot without an identity check and would serve the new run's numbers labelled with the old run's provenance and freshness. A kill during the meta write itself leaves truncated JSON, which `read` treats as a miss. The window is milliseconds against a multi-minute ingest, hence Tier 4.
