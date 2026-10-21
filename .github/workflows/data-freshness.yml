@@ -18,6 +18,24 @@ name: Data freshness
 #   this workflow         "is what it serves still current?"  (daily, opens an issue)
 # Two questions, two mechanisms. Neither should alert on the other's failure.
 #
+# AN ALARM NEEDS AN OWNER AND A DEADLINE (#173)
+# The first version opened an unassigned issue on day 45 and commented daily. #153 then
+# ran three weeks with nobody acting; views-faoapi's identical alarm ran 28 days (its #472).
+# A notification nobody owns is a log, not an alert. So now:
+#   - every issue this opens is assigned to MAINTAINER, so GitHub emails them;
+#   - "Monthly delivery due" is a scheduled REMINDER, not an alarm: it opens once on
+#     DELIVERY_DAY (the date in MONTHLY_REFRESH.md), before anyone could normally have
+#     delivered, and closes itself when a run from on or after that day is served. It is
+#     never commented on;
+#   - the stale issue is the escalation. While the forecast is stale the reminder is
+#     closed, so one missed delivery never raises two alarms. Other degradations (a store
+#     blip) leave the reminder alone, so it does not flap;
+#   - a stale verdict is re-checked after one forecast request: /health reports the run
+#     the worker has SERVED, so a delivered-but-unloaded run reads stale until something
+#     loads it (views-faoapi C-337: their alarm could not clear itself);
+#   - a 401/403 is an alarm, not a fetch failure: an expired key must not blind the
+#     monitor in silence (views-faoapi C-345).
+#
 # BORROWED SCARS, from views-datafactory's serving-freshness.yml
 #   - GH_REPO + no checkout: without it `gh` dies with "failed to run git: fatal:
 #     not a git repository". Theirs failed 10 runs out of 10 from the day it was
@@ -46,6 +64,18 @@ env:
   # `gh` infers the repo from the git remote; this job has no checkout, by design.
   GH_REPO: ${{ github.repository }}
   HEALTH_URL: https://crafdapi.viewsforecasting.org/health
+  # Loads the live forecast and returns nothing: month 0 and cell 0 match no row, so
+  # the response is empty whichever month is current (a hardcoded in-window month goes
+  # stale itself, views-faoapi C-335). The load happens before the filter (api.py).
+  LOAD_URL: https://crafdapi.viewsforecasting.org/pg/data/forecast/subset?time_ids=0&entity_ids=0&features=pred_lr_ged_sb&with_metadata=false
+  # Who the alarm is for. Assignment is what makes GitHub email someone.
+  MAINTAINER: Polichinel
+  # The day of the month the delivery runs from (MONTHLY_REFRESH.md, "on or after the
+  # 22nd"); test_deployment_artifacts binds the two.
+  DELIVERY_DAY: "22"
+  STALE_TITLE: Served data is stale or degraded
+  DUE_TITLE: Monthly delivery due
+  KEY_TITLE: Data-freshness monitor cannot authenticate
 
 jobs:
   freshness:
@@ -71,12 +101,56 @@ jobs:
           KEY: ${{ secrets.APPWRITE_DATASTORE_API_KEY }}
         run: |
           set -uo pipefail
-          if curl -fsS --max-time 30 -H "X-API-Key: ${KEY}" "$HEALTH_URL" -o health.json; then
+          # -w prints 000 on a transport failure; `|| true` keeps the exit code from ending the step.
+          code=$(curl -sS --max-time 30 -H "X-API-Key: ${KEY}" "$HEALTH_URL" -o health.json -w '%{http_code}') || true
+          code=${code:-000}
+          if [ "$code" = "200" ]; then
             echo "fetched=true" >> "$GITHUB_OUTPUT"
             echo "Fetched $(wc -c < health.json) bytes."
+          elif [ "$code" = "401" ] || [ "$code" = "403" ]; then
+            # The service is up and refused the key. That is not availability, and Better
+            # Stack will never see it: left as "could not fetch", an expired key blinds
+            # this monitor in silence (views-faoapi C-345).
+            echo "fetched=false" >> "$GITHUB_OUTPUT"
+            echo "key_rejected=true" >> "$GITHUB_OUTPUT"
+            echo "::error::/health answered $code: the APPWRITE_DATASTORE_API_KEY secret was rejected."
           else
             echo "fetched=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Could not fetch $HEALTH_URL. That is an AVAILABILITY problem and Better Stack owns it (3-minute checks). Not opening an issue here — a duplicate alarm for one event teaches people to ignore both."
+            echo "::notice::Could not fetch $HEALTH_URL (HTTP $code). That is an AVAILABILITY problem and Better Stack owns it (3-minute checks). Not opening an issue here — a duplicate alarm for one event teaches people to ignore both."
+          fi
+
+      - name: Report a rejected key
+        if: steps.fetch.outputs.key_rejected == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Exact title match: a keyword search alone would also match a person's issue that
+          # shares the words, and the bot would close it.
+          EXISTING=$(T="$KEY_TITLE" gh issue list --state open --search "\"$KEY_TITLE\" in:title" \
+                       --json number,title --jq '[.[] | select(.title == env.T)][0].number // empty')
+          if [ -z "$EXISTING" ]; then
+            url=$(gh issue create --title "$KEY_TITLE" --body "\`/health\` rejected the key in the \`APPWRITE_DATASTORE_API_KEY\` repository secret, so this monitor cannot see whether the served data is current. Until the secret is fixed, a stale forecast raises no alarm.
+
+          The secret should hold the \`crafdapi-probe\` key (docs/ADRs/active/038_caller_key_scopes.md). Check it has not been revoked, then update the secret in the repository settings. Detected by [data-freshness](${RUN_URL}).")
+            # Assigned after creating: a failed assignment must not cost the alarm itself.
+            gh issue edit "$url" --add-assignee "$MAINTAINER" || echo "::warning::could not assign $url to $MAINTAINER"
+          fi
+          exit 1
+
+      - name: Close the rejected-key issue once the key works
+        if: steps.fetch.outputs.fetched == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Exact title match: a keyword search alone would also match a person's issue that
+          # shares the words, and the bot would close it.
+          EXISTING=$(T="$KEY_TITLE" gh issue list --state open --search "\"$KEY_TITLE\" in:title" \
+                       --json number,title --jq '[.[] | select(.title == env.T)][0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue close "$EXISTING" --comment "\`/health\` accepted the monitor's key again. Closed automatically."
           fi
 
       - name: Assess
@@ -84,15 +158,20 @@ jobs:
         if: steps.fetch.outputs.fetched == 'true'
         run: |
           set -uo pipefail
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          # Written to a file so "Assess again" runs the same judgement, not a copy of it.
+          cat > assess.py <<'PY'
           import json
+          import os
+          from datetime import date, datetime, timezone
 
           problems = []
           try:
               h = json.load(open("health.json", encoding="utf-8"))
           except Exception as e:
-              print(f"age_days=-1")
+              print("age_days=-1")
               print("degraded=true")
+              print("due=false")
+              print("stale=false")
               print("problems<<EOF")
               print(f"- `/health` did not return parseable JSON ({type(e).__name__}), so its "
                     f"verdict cannot be read at all")
@@ -113,43 +192,127 @@ jobs:
           # Read its verdict; do not recompute it here and create a second source of truth.
           fr = h.get("forecast_freshness")
           age = -1.0
-          if fr is None:
-              # api.py computes this best-effort: on any exception the key is simply ABSENT and
-              # `status` stays "healthy". A monitor reading only `status` would sit quiet while
-              # the check feeding it silently does nothing. Treated as a problem for the reason
-              # views-datafactory wrote down: a check that silently inspects nothing is worse
-              # than no check.
+          created_at = None
+          stale = False
+          if not isinstance(fr, dict) or fr.get("age_days") is None:
+              # api.py computes this best-effort: on an exception it reports {"error": ...} or
+              # leaves the key out, with an unparseable date `age_days` is None, and in every
+              # case `status` can stay "healthy". A check that silently inspects nothing is
+              # worse than no check (views-datafactory's words).
               problems.append(
-                  "`forecast_freshness` is absent from the response — the freshness check itself "
-                  "failed (it is best-effort in api.py and swallows its own errors), so staleness "
-                  "is currently unmeasured rather than fine"
+                  "`forecast_freshness` carries no age — the freshness check itself failed or "
+                  "could not read a date, so staleness is currently unmeasured rather than fine"
               )
           else:
-              age = float(fr.get("age_days", -1))
-              if fr.get("is_stale"):
+              age = float(fr["age_days"])
+              created_at = fr.get("created_at")
+              stale = bool(fr.get("is_stale"))
+              if stale:
                   problems.append(
                       f"the served forecast is {age:.1f} days old, past its "
-                      f"{fr.get('sla_days')}-day SLA (created {fr.get('created_at')})"
+                      f"{fr.get('sla_days')}-day SLA (created {created_at})"
                   )
+
+          # Delivery due (#173). MONTHLY_REFRESH.md: the delivery runs on or after DELIVERY_DAY,
+          # once the previous month's fatalities have arrived. Due = the served run predates
+          # the most recent DELIVERY_DAY, in UTC. FRESHNESS_TODAY exists so tests can pin the date.
+          day = int(os.environ["DELIVERY_DAY"])
+          today = date.fromisoformat(os.environ.get("FRESHNESS_TODAY") or
+                                     datetime.now(timezone.utc).date().isoformat())
+          y, m = (today.year, today.month) if today.day >= day else (
+              (today.year - 1, 12) if today.month == 1 else (today.year, today.month - 1))
+          due_since = date(y, m, day)
+          due = False
+          if created_at:
+              try:
+                  served = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+                  if served.tzinfo is None:
+                      served = served.replace(tzinfo=timezone.utc)
+                  due = served.astimezone(timezone.utc).date() < due_since
+              except ValueError:
+                  pass   # an unreadable date is already a problem above
 
           print(f"age_days={age:.1f}")
           print(f"degraded={'true' if problems else 'false'}")
+          print(f"due={'true' if due else 'false'}")
+          print(f"stale={'true' if stale else 'false'}")
+          print(f"due_since={due_since.isoformat()}")
           print("problems<<EOF")
           for p in problems:
               print(f"- {p}")
           print("EOF")
           PY
+          python3 assess.py >> "$GITHUB_OUTPUT"
 
-      - name: Open or update the tracking issue
+      - name: Load the delivered run, then look again
+        # /health reports the run the worker has SERVED. After a delivery nothing loads the
+        # new run until some data request does, so without this the alarm could not clear
+        # itself (views-faoapi C-337). It runs every day the verdict is bad, but only loads
+        # anything when a newer run exists; otherwise it is a warm hit on what is served.
+        # If the second /health fetch fails, health.json keeps the first body and the
+        # first verdict stands, which errs toward the alarm.
         if: steps.assess.outputs.degraded == 'true'
         env:
+          KEY: ${{ secrets.APPWRITE_DATASTORE_API_KEY }}
+        run: |
+          set -uo pipefail
+          # A cold load has taken minutes; the status is irrelevant, only the load.
+          curl -sS --max-time 600 -H "X-API-Key: ${KEY}" "$LOAD_URL" -o /dev/null -w 'load: HTTP %{http_code} in %{time_total}s\n' || true
+          # A separate file, swapped in only on success: a fetch cut off mid-body must not
+          # replace a readable verdict with an unparseable one.
+          if curl -fsS --max-time 30 -H "X-API-Key: ${KEY}" "$HEALTH_URL" -o health2.json; then
+            mv health2.json health.json
+          fi
+
+      - name: Assess again
+        id: reassess
+        if: steps.assess.outputs.degraded == 'true'
+        run: python3 assess.py >> "$GITHUB_OUTPUT"
+
+      - name: Settle the verdict
+        id: verdict
+        if: steps.fetch.outputs.fetched == 'true'
+        env:
+          FIRST_DEGRADED: ${{ steps.assess.outputs.degraded }}
+          FIRST_DUE: ${{ steps.assess.outputs.due }}
+          FIRST_STALE: ${{ steps.assess.outputs.stale }}
+          FIRST_AGE: ${{ steps.assess.outputs.age_days }}
+          FIRST_PROBLEMS: ${{ steps.assess.outputs.problems }}
+          AGAIN_DEGRADED: ${{ steps.reassess.outputs.degraded }}
+          AGAIN_DUE: ${{ steps.reassess.outputs.due }}
+          AGAIN_STALE: ${{ steps.reassess.outputs.stale }}
+          AGAIN_AGE: ${{ steps.reassess.outputs.age_days }}
+          AGAIN_PROBLEMS: ${{ steps.reassess.outputs.problems }}
+          DUE_SINCE: ${{ steps.assess.outputs.due_since }}
+        run: |
+          set -euo pipefail
+          # The second look wins when there was one: it is the state after the load.
+          if [ -n "${AGAIN_DEGRADED}" ]; then
+            D="$AGAIN_DEGRADED"; U="$AGAIN_DUE"; S="$AGAIN_STALE"; A="$AGAIN_AGE"; P="$AGAIN_PROBLEMS"
+          else
+            D="$FIRST_DEGRADED"; U="$FIRST_DUE"; S="$FIRST_STALE"; A="$FIRST_AGE"; P="$FIRST_PROBLEMS"
+          fi
+          {
+            echo "degraded=$D"
+            echo "due=$U"
+            echo "stale=$S"
+            echo "age_days=$A"
+            echo "due_since=$DUE_SINCE"
+            echo "problems<<EOF"
+            echo "$P"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the tracking issue
+        if: steps.verdict.outputs.degraded == 'true'
+        env:
           GH_TOKEN: ${{ github.token }}
-          PROBLEMS: ${{ steps.assess.outputs.problems }}
-          AGE: ${{ steps.assess.outputs.age_days }}
+          PROBLEMS: ${{ steps.verdict.outputs.problems }}
+          AGE: ${{ steps.verdict.outputs.age_days }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          TITLE="Served data is stale or degraded"
+          TITLE="$STALE_TITLE"
           BODY=$(cat <<EOF
           The service is up — Better Stack is quiet and \`/health\` answered. What it *reports* is not healthy.
 
@@ -176,27 +339,66 @@ jobs:
           it closes itself once the data is fresh again.
           EOF
           )
-          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
-                       --json number --jq '.[0].number // empty')
+          # Exact title match: a keyword search alone would also match a person's issue that
+          # shares the words, and the bot would close it.
+          EXISTING=$(T="$TITLE" gh issue list --state open --search "\"$TITLE\" in:title" \
+                       --json number,title --jq '[.[] | select(.title == env.T)][0].number // empty')
           if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --add-assignee "$MAINTAINER" || echo "::warning::could not assign #$EXISTING to $MAINTAINER"
             gh issue comment "$EXISTING" --body "Still degraded — served forecast is ${AGE} days old. [run](${RUN_URL})"
             echo "Updated existing issue #${EXISTING}"
           else
-            gh issue create --title "$TITLE" --body "$BODY"
+            url=$(gh issue create --title "$TITLE" --body "$BODY")
+            gh issue edit "$url" --add-assignee "$MAINTAINER" || echo "::warning::could not assign $url to $MAINTAINER"
           fi
 
       - name: Close the tracking issue if freshness recovered
-        if: steps.assess.outputs.degraded == 'false'
+        if: steps.verdict.outputs.degraded == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
-          AGE: ${{ steps.assess.outputs.age_days }}
+          AGE: ${{ steps.verdict.outputs.age_days }}
         run: |
           set -euo pipefail
-          TITLE="Served data is stale or degraded"
-          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
-                       --json number --jq '.[0].number // empty')
+          TITLE="$STALE_TITLE"
+          # Exact title match: a keyword search alone would also match a person's issue that
+          # shares the words, and the bot would close it.
+          EXISTING=$(T="$TITLE" gh issue list --state open --search "\"$TITLE\" in:title" \
+                       --json number,title --jq '[.[] | select(.title == env.T)][0].number // empty')
           if [ -n "$EXISTING" ]; then
             gh issue close "$EXISTING" \
               --comment "Recovered — \`/health\` is healthy and the served forecast is ${AGE} days old, inside its SLA. Closed automatically."
             echo "Closed #${EXISTING}"
+          fi
+
+      - name: Open, or close, the delivery-due issue
+        # Opened once and never commented on: it is a reminder with a date, not a drumbeat.
+        # Closed when a run from on or after DELIVERY_DAY is served, or when the forecast is
+        # stale and the stale issue takes over. Keyed on staleness, not on any degradation,
+        # so a store blip does not close it and a second one open the next day.
+        if: steps.fetch.outputs.fetched == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DUE: ${{ steps.verdict.outputs.due }}
+          STALE: ${{ steps.verdict.outputs.stale }}
+          DUE_SINCE: ${{ steps.verdict.outputs.due_since }}
+          AGE: ${{ steps.verdict.outputs.age_days }}
+        run: |
+          set -euo pipefail
+          # Exact title match: a keyword search alone would also match a person's issue that
+          # shares the words, and the bot would close it.
+          EXISTING=$(T="$DUE_TITLE" gh issue list --state open --search "\"$DUE_TITLE\" in:title" \
+                       --json number,title --jq '[.[] | select(.title == env.T)][0].number // empty')
+          if [ "$DUE" = "true" ] && [ "$STALE" != "true" ]; then
+            if [ -z "$EXISTING" ]; then
+              url=$(gh issue create --title "$DUE_TITLE" --body "Reminder: the monthly delivery runs from **${DUE_SINCE}**, and the forecast being served (${AGE} days old) predates it.
+
+          Run the two launchers in \`deployment/MONTHLY_REFRESH.md\`, including its frontier-month check. This issue closes itself once a run delivered on or after ${DUE_SINCE} is being served. If the forecast passes its SLA first, the stale-data issue takes over.")
+              gh issue edit "$url" --add-assignee "$MAINTAINER" || echo "::warning::could not assign $url to $MAINTAINER"
+            fi
+          elif [ -n "$EXISTING" ]; then
+            if [ "$STALE" = "true" ]; then
+              gh issue close "$EXISTING" --comment "Superseded by the stale-data issue (\`$STALE_TITLE\`), which now carries the alarm."
+            else
+              gh issue close "$EXISTING" --comment "A run delivered on or after ${DUE_SINCE} is being served. Closed automatically."
+            fi
           fi

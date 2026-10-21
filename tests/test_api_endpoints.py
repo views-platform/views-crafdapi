@@ -1092,6 +1092,8 @@ class TestHealthKeysTheFreshnessMonitorParses:
         assert "appwrite_connected" in body
         assert "forecast_freshness" in body
         assert "is_stale" in body["forecast_freshness"]
+        assert "age_days" in body["forecast_freshness"]     # #173: the age is the verdict's input
+        assert "created_at" in body["forecast_freshness"]   # #173: the delivery-due date reads it
 
 
 # ============================================================

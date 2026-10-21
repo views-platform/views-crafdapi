@@ -145,9 +145,18 @@ peak**. `smoke.py` warms the cache and retries once. A slow first call is not a 
 
 ## When a month is missed
 
-`.github/workflows/data-freshness.yml` polls `/health` daily and opens one issue titled
-**"Served data is stale or degraded"** when the served forecast passes its 45-day SLA. It closes
-itself when a fresh delivery lands.
+`.github/workflows/data-freshness.yml` polls `/health` daily (#173). Every issue it opens is
+**assigned to the maintainer**, so GitHub emails them.
+
+| issue | when | how it behaves |
+|---|---|---|
+| **"Monthly delivery due"** | on or after the 22nd, while the served forecast predates that 22nd | opened once, no daily comments; closes itself when a run delivered on or after the 22nd is served |
+| **"Served data is stale or degraded"** | the served forecast passes its 45-day SLA | the escalation: closes the due issue, comments daily, and closes itself when fresh data is served |
+| **"Data-freshness monitor cannot authenticate"** | `/health` rejects the monitor's key | the monitor is blind until the `APPWRITE_DATASTORE_API_KEY` repository secret is fixed |
+
+Before judging a forecast stale, the monitor makes one forecast request and looks again. `/health`
+reports the run the service has *served*, so a delivered run that nothing has loaded yet would
+otherwise keep the alarm open.
 
 That issue means **a delivery was missed, not that the service is down**. Do not restart anything —
 the endpoints are answering, they are just serving something old. Come back to this page and run the
