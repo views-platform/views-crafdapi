@@ -37,9 +37,10 @@ to see it flip to serving real data.
       first; DNS can take time to propagate. `dig +short crafdapi.viewsforecasting.org`
       should return the box IP before you start Step 5.)*
 - [ ] You can SSH into the box and use `sudo`.
-- [ ] You have **`APPWRITE_DATASTORE_API_KEY`** in your password manager — CRAF'd's
-      read-scoped key, issued in S9. This is the *only* key this repo uses; it is
-      **not** faoapi's key.
+- [ ] You have the **`Appwrite probe key - CRAF'd`** entry in your password manager — the
+      `crafdapi-probe` key (scopes per ADR-038), exported as `APPWRITE_DATASTORE_API_KEY`.
+      It is **not** CRAF'd's partner key (`crafd-caller-read`) and **not** faoapi's.
+      See *Which key, and where it lives*.
 
 ## The session
 
@@ -169,8 +170,8 @@ Then the smoke test.
 > *"Every future release"* and expect ALL PASS.
 
 ```bash
-# from the deploy checkout, with the CRAF'd caller/read-scoped key exported
-APPWRITE_DATASTORE_API_KEY=<CRAF'd caller key> .venv/bin/python scripts/smoke.py --expect-tag v0.1.0
+# from the deploy checkout, with the crafdapi-probe key exported
+APPWRITE_DATASTORE_API_KEY=<crafdapi-probe key> .venv/bin/python scripts/smoke.py --expect-tag v0.1.0
 ```
 
 Expect: `ping` PASS, `version` PASS; `historical`/`forecast coverage` reporting the
@@ -346,7 +347,8 @@ twice. For the smoke test and any `x-api-key` call you want the **caller** key:
 
 | filed as | env var | used by |
 |---|---|---|
-| `APPWRITE_DATASTORE_API_KEY` (password manager) | `APPWRITE_DATASTORE_API_KEY` | `smoke.py`, notebooks, any consumer call — sent as the `X-API-Key` header |
+| `Appwrite probe key - CRAF'd` (password manager; Appwrite key `crafdapi-probe`, scopes per ADR-038) | `APPWRITE_DATASTORE_API_KEY` | `smoke.py`, notebooks, integration tests — sent as the `X-API-Key` header. Never handed to a partner: CRAF'd holds its own key, `crafd-caller-read`. |
+| the same key, as a GitHub repository secret | `APPWRITE_DATASTORE_API_KEY` (Settings → Secrets) | `.github/workflows/data-freshness.yml`. A rotation that misses this home blinds the monitor; it now opens an issue when its key is rejected (#173). |
 
 The password manager entry is the source of truth. Verify it before pasting it anywhere, without
 printing it:
@@ -357,7 +359,15 @@ curl -s -o /dev/null -w 'HTTP %{http_code}\n' -H "x-api-key: $K" https://crafdap
 unset K   # 200 = right key, 401 = wrong entry
 ```
 
-Both keys expire **2026-11-17** (C-84). Update every home in one change.
+That proves the key is accepted, nothing more: `/health` exercises `buckets.read` only. A key
+missing `documents.read` or `files.read` still answers 200 there. `scripts/smoke.py` is the check
+that exercises all three scopes.
+
+Expiry, read from the Appwrite console on 2026-10-20 (S0 #155): both `crafdapi-probe` and CRAF'd's
+own key, `crafd-caller-read`, **never expire**. Until 2026-10-20 `APPWRITE_DATASTORE_API_KEY` held
+`VIEWS Pipeline Core`, the pipeline's 20-scope key, which expires 2026-11-17; this service no longer
+uses it. With no expiry, nothing forces a review: re-check both keys' scopes against ADR-038
+whenever a serving route gains an Appwrite call. Update every home in one change.
 
 Deployed so far: **v0.1.0** (2026-08-02, first stand-up — bucket empty by design, honest 503s),
 **v0.2.0** (the first CRAF'd delivery is live and `/provenance/forecast` reports it), **v0.3.0**
@@ -493,6 +503,15 @@ Rollback is the same deploy steps with the previous tag.
 
 
 ## Memory ceilings, and removing the temporary one
+
+> **What the box actually runs (read 2026-10-21, S0 #155):** the installed unit has **no memory
+> lines**. The ceiling comes from `systemctl set-property views-crafdapi MemoryMax=9G` (persistent,
+> plus `--runtime` to override the old 14G drop-in), and
+> `/etc/systemd/system/views-crafdapi.service.d/give-way.conf` sets `OOMScoreAdjust=1000`: the
+> maintainer ruled that crafdapi, in development, gives way to views-faoapi, the service partners
+> use. A cap does not choose the OOM victim; the score adjust does. Until #177 puts these values in
+> the unit file, the section below describes the August plan, not the box. Check with
+> `systemctl show views-crafdapi -p MemoryMax -p OOMScoreAdjust`.
 
 `deployment/views-crafdapi.service` declares `MemoryHigh=8G` / `MemoryMax=9G`, derived from the
 **measured cold start** of 7.3 G (2026-08-21, v0.5.1) — not from the 3.7 G steady state, which is
