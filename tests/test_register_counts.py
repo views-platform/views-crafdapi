@@ -22,32 +22,36 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _sections():
-    """Entry ids grouped by the section they sit in, plus which are titled (RESOLVED).
+def _entries():
+    """Every entry, with its status derived from the entry's OWN text.
 
-    An entry counts as resolved if it sits under `## Resolved Concerns` **or** carries
-    `(RESOLVED)` in its heading -- the register uses both, marking in place when an entry's
-    narrative is still load-bearing for the entries that cross-reference it.
+    Section membership is deliberately ignored. The register's headings are decorative: entries
+    have been appended to the end of the file for months regardless of heading, so 39 concerns sit
+    under `## Register Conventions` and 11 under `## Disagreements`. An earlier version of this
+    guard treated the headings as boundaries and therefore enforced a header that was wrong in both
+    directions -- see C-298. A guard that codifies an untested assumption makes it harder to
+    question, not easier.
+
+    An entry is resolved if it says so: `(RESOLVED)` in the heading, a `| Status |` row naming
+    RESOLVED, or a bold `**RESOLVED` marker in the body.
     """
     lines = REGISTER.read_text().split("\n")
-    open_at = next(i for i, line in enumerate(lines) if line.startswith("## Open Concerns"))
-    res_at = next(i for i, line in enumerate(lines) if line.startswith("## Resolved Concerns"))
-
-    def ids(lo, hi):
-        return [
-            re.match(r"### (C-\d+)", line)[1]
-            for line in lines[lo:hi]
-            if re.match(r"### C-\d+", line)
-        ]
-
-    in_open = ids(open_at, res_at)
-    in_resolved = ids(res_at, len(lines))
-    marked = {
-        re.match(r"### (C-\d+)", line)[1]
-        for line in lines
-        if re.match(r"### C-\d+", line) and "(RESOLVED)" in line
-    }
-    return in_open, in_resolved, marked
+    heads = [
+        (i, re.match(r"### (C-\d+)(.*)", line))
+        for i, line in enumerate(lines)
+        if re.match(r"### C-\d+", line)
+    ]
+    out = []
+    for n, (i, m) in enumerate(heads):
+        end = heads[n + 1][0] if n + 1 < len(heads) else len(lines)
+        body = "\n".join(lines[i:end])
+        resolved = (
+            "RESOLVED" in m.group(2).upper()
+            or re.search(r"\|\s*Status\s*\|[^|]*RESOLVED", body) is not None
+            or re.search(r"\*\*RESOLVED\b", body) is not None
+        )
+        out.append((m.group(1), resolved))
+    return out
 
 
 def _header():
@@ -59,14 +63,13 @@ def _header():
 
 
 def test_header_counts_match_the_entries():
-    in_open, in_resolved, marked = _sections()
-    actual_open = [c for c in in_open if c not in marked]
-    actual_resolved = len(in_resolved) + (len(in_open) - len(actual_open))
+    entries = _entries()
+    resolved = [c for c, r in entries if r]
     header = _header()
 
-    assert header["Total"] == len(in_open) + len(in_resolved)
-    assert header["Open"] == len(actual_open)
-    assert header["Resolved"] == actual_resolved
+    assert header["Total"] == len(entries)
+    assert header["Resolved"] == len(resolved)
+    assert header["Open"] == len(entries) - len(resolved)
 
 
 def test_the_counts_are_internally_consistent():
@@ -78,7 +81,6 @@ def test_the_counts_are_internally_consistent():
 
 def test_no_entry_id_appears_twice():
     """A duplicated id makes every count ambiguous and breaks cross-references silently."""
-    in_open, in_resolved, _ = _sections()
-    all_ids = in_open + in_resolved
+    all_ids = [c for c, _ in _entries()]
     duplicates = {c for c in all_ids if all_ids.count(c) > 1}
     assert not duplicates, f"duplicate register ids: {sorted(duplicates)}"
