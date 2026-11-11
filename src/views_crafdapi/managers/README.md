@@ -634,7 +634,7 @@ from views_crafdapi.managers.appwrite import (
 )
 
 config = AppwriteConfig(
-    endpoint="https://cloud.appwrite.io/v1",
+    endpoint="https://fra.cloud.appwrite.io/v1",
     project_id="your_project",
     bucket_id="predictions"
 )

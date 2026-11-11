@@ -161,7 +161,7 @@ None. `clear_cache` and `get_cache_stats` were removed 2026-11-11 with the route
 from views_crafdapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
 
 config = AppwriteConfig(
-    endpoint="https://cloud.appwrite.io/v1",
+    endpoint="https://fra.cloud.appwrite.io/v1",
     project_id="my_project",
     credentials="my-api-key",
     bucket_id="production_forecasts",
