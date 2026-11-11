@@ -982,7 +982,7 @@ class TestAppwriteEnvVarValidation:
 
     _ALL_ENV = {
         "APPWRITE_ENDPOINT": "https://cloud.appwrite.io/v1",
-        "APPWRITE_DATASTORE_PROJECT_ID": "proj_123",
+        "APPWRITE_CRAFD_PROJECT_ID": "proj_123",
         "APPWRITE_CRAFD_BUCKET_ID": "bucket_123",
         "APPWRITE_CRAFD_BUCKET_NAME": "my_bucket",
         "APPWRITE_CRAFD_COLLECTION_ID": "coll_123",
@@ -1029,7 +1029,10 @@ class TestAppwriteEnvVarValidation:
         from views_crafdapi.managers.api import CrafdApiManager
         with patch.object(CrafdApiManager, "__init__", lambda self: None):
             mgr = CrafdApiManager()
-        with patch("os.getenv", side_effect=self._getenv()):
+        # The shared project's id is in the server env too (registry_to_env emits every row);
+        # it must never be the project crafdapi talks to (þing 04 D3).
+        shared = {"APPWRITE_DATASTORE_PROJECT_ID": "shared_project"}
+        with patch("os.getenv", side_effect=self._getenv(shared)):
             config = mgr._create_appwrite_config("test_key")
         assert config.endpoint == "https://cloud.appwrite.io/v1"
         assert config.project_id == "proj_123"

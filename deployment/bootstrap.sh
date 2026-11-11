@@ -128,11 +128,22 @@ PY
         echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
         return 1
     fi
+    # Every name the deployed code requires must have a value in the file, or it would install
+    # and then loop on _validate_appwrite_env (þing 04: a renamed coordinate cannot outrun its
+    # registry row). The file is root-owned 0600, so it is piped in; the check prints names only.
+    if ! _absent="$(sudo cat "$_tmp_env" | sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/check_required_env.py")"; then
+        sudo rm -f "$_tmp_env"
+        echo "FATAL: the registry at ${APPWRITE_REGISTRY} (version ${_reg_version}) gives no value for: ${_absent:-<the check could not run>}" >&2
+        echo "       Deploy against a registry edition that carries them." >&2
+        echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
+        return 1
+    fi
     sudo chown "${SVC_USER}:${SVC_USER}" "$_tmp_env"
     # Same filesystem, so this is atomic: readers see the old file or the new one, never a
     # half-written one.
     sudo mv "$_tmp_env" "${SVC_HOME}/.env.crafdapi"
     echo "credentials file written (${N} APPWRITE_ lines: 1 registry-version stamp + registry coordinates + 1 operator secret; values not displayed)"
+    # The per-name check above is the real guard; the >= 9 floor is only a backstop.
     # The >= 9 floor above is deliberately unchanged, but note what it now counts: the
     # ADR-035 registry-version stamp is itself an APPWRITE_ line, so the effective
     # requirement is 8 real coordinates + the stamp, one looser than when the floor was

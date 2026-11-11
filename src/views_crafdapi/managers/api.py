@@ -127,7 +127,7 @@ def _too_large_detail(category: str, n_rows: int, estimated: int, budget: int) -
 
 _REQUIRED_APPWRITE_ENV_VARS = [
     "APPWRITE_ENDPOINT",
-    "APPWRITE_DATASTORE_PROJECT_ID",
+    "APPWRITE_CRAFD_PROJECT_ID",  # CRAF'd's own project, not the shared one (þing 04 D3)
     "APPWRITE_CRAFD_BUCKET_ID",
     "APPWRITE_CRAFD_BUCKET_NAME",
     "APPWRITE_CRAFD_COLLECTION_ID",
@@ -155,25 +155,35 @@ def _registry_coordinates(registry_path: str) -> dict[str, str]:
 def _validate_env_against_registry() -> None:
     """þing-01 #278 (D6): per-repo preflight. If the PLATFORM-001 registry is reachable
     (``APPWRITE_REGISTRY`` points at it), every coordinate present in the environment must MATCH the
-    registry's declared value — the registry is canonical. Fail loud naming the exact variable(s).
+    registry's declared value — the registry is canonical — and every required coordinate must have
+    a value there. Fail loud naming the exact variable(s), all problems in one message.
 
     Transition-safe: if the registry is not reachable in this environment, only the presence check
-    above runs (the central live validator is deferred — A7). This is the in-process preflight only.
+    in ``_validate_appwrite_env`` runs. That is the case on the server, whose service environment
+    does not set ``APPWRITE_REGISTRY``; there the env file is built from the registry at deploy
+    time and ``bootstrap.sh part2`` refuses to install one that lacks a required name.
     """
     path = os.getenv("APPWRITE_REGISTRY", "").strip()
     if not path or not os.path.isfile(path):
         return
     coords = _registry_coordinates(path)
-    mismatches = [
+    # A required name the registry does not carry would pass the comparison below unchecked
+    # (þing 04 orð_10), so its absence is a failure of its own.
+    problems = [
+        f"{name} has no value in the registry"
+        for name in _REQUIRED_APPWRITE_ENV_VARS
+        if name not in coords
+    ]
+    problems += [
         f"{name}={os.getenv(name)!r} but the registry declares {expected!r}"
         for name, expected in coords.items()
         if os.getenv(name) is not None and os.getenv(name) != expected
     ]
-    if mismatches:
+    if problems:
         msg = (
-            "APPWRITE coordinate(s) disagree with the PLATFORM-001 registry (þing-01 #278 / D6) — "
+            "APPWRITE coordinate(s) fail the PLATFORM-001 registry check (þing-01 #278 / D6) — "
             "the registry is canonical, fix the environment or update the registry by PR: "
-            + "; ".join(mismatches)
+            + "; ".join(problems)
         )
         logger.critical(msg)
         raise ValueError(msg)
@@ -369,7 +379,7 @@ class CrafdApiManager(APIManager):
             # set `_model_path`. Production always does (`CrafdApiManager(model_path=...)`).
             path_manager=getattr(self, "_model_path", None),
             endpoint=env["APPWRITE_ENDPOINT"],
-            project_id=env["APPWRITE_DATASTORE_PROJECT_ID"],
+            project_id=env["APPWRITE_CRAFD_PROJECT_ID"],
             credentials=x_api_key,
             auth_method="api_key",
             cache_ttl_hours=24,

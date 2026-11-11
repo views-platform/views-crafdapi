@@ -24,7 +24,7 @@ import pytest
 
 REQUIRED_ENV_VARS = [
     "APPWRITE_ENDPOINT",
-    "APPWRITE_DATASTORE_PROJECT_ID",
+    "APPWRITE_CRAFD_PROJECT_ID",
     "APPWRITE_CRAFD_BUCKET_ID",
     "APPWRITE_METADATA_DATABASE_ID",
     "APPWRITE_CRAFD_COLLECTION_ID",
@@ -64,7 +64,7 @@ def appwrite_config():
 
     kwargs = dict(
         endpoint=os.getenv("APPWRITE_ENDPOINT"),
-        project_id=os.getenv("APPWRITE_DATASTORE_PROJECT_ID"),
+        project_id=os.getenv("APPWRITE_CRAFD_PROJECT_ID"),
         credentials=os.getenv("APPWRITE_DATASTORE_API_KEY"),
         auth_method="api_key",
         cache_ttl_hours=24,

@@ -61,7 +61,7 @@ The API reads its configuration from the environment, loaded in `CrafdApiManager
 ```bash
 # .env
 APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1
-APPWRITE_DATASTORE_PROJECT_ID=your-project-id
+APPWRITE_CRAFD_PROJECT_ID=your-project-id
 APPWRITE_CRAFD_BUCKET_ID=predictions-bucket-id
 APPWRITE_CRAFD_BUCKET_NAME=predictions-bucket-name
 APPWRITE_CRAFD_COLLECTION_ID=file-metadata-collection-id
