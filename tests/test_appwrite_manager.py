@@ -773,32 +773,18 @@ class TestAppWriteFileManager:
         file_manager.databases.delete_document.assert_not_called()
         assert not result.success
 
-    def test_clear_cache(self, file_manager):
-        file_manager.cache_manager.clear_cache = Mock(
-            return_value=OperationResult(
-                success=True,
-                data={"deleted_files": 5, "deleted_bytes": 1000}
-            )
-        )
-        
-        result = file_manager.clear_cache()
-        
-        assert result.success
-        assert result.data["deleted_files"] == 5
+    @pytest.mark.parametrize("code", [401, 403, 404])
+    def test_get_file_failure_carries_the_store_status(self, file_manager, code):
+        # The file routes answer 401 from 401/403 and 404 from anything else (ADR-027 §4),
+        # so the status must be the store's own, not a constant.
+        file_manager.storage.get_file.side_effect = AppwriteException("refused", code, "t")
+        result = file_manager.get_file("b", "f")
+        assert (result.success, result.status) == (False, code)
 
-    def test_get_cache_stats(self, file_manager):
-        file_manager.cache_manager.get_stats = Mock(
-            return_value={
-                "total_files": 10,
-                "total_size_bytes": 5000,
-                "total_size_mb": 0.005,
-            }
-        )
-        
-        stats = file_manager.get_cache_stats()
-
-        assert stats["total_files"] == 10
-        assert stats["total_size_mb"] == 0.005
+    def test_get_file_unexpected_error_has_no_store_status(self, file_manager):
+        file_manager.storage.get_file.side_effect = RuntimeError("boom")
+        result = file_manager.get_file("b", "f")
+        assert (result.success, result.status) == (False, None)
 
     def test_download_file_nonexistent_returns_failure(self, file_manager):
         file_manager.storage.get_file_download.side_effect = AppwriteException(

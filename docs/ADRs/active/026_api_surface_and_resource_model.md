@@ -52,8 +52,8 @@ The data/analysis surface follows one URL grammar:
 Outside the data grammar, the API also exposes:
 
 - **`GET /provenance/{category}`** — the lineage record of the currently-served artifact (which file, from which upstream source/pipeline) without fetching the heavy dataframe (C-86, ADR-028).
-- **File access** — `GET /files/{bucket_id}`, `/files/{bucket_id}/{file_id}/info`, `/files/{bucket_id}/{file_id}/download`, `/files/{bucket_id}/{file_id}/cached` — direct, authenticated passthrough to the underlying Appwrite bucket (raw parquet retrieval).
-- **Cache** — `GET /cache/stats`, `DELETE /cache` (per-key; ADR-011, ADR-027).
+- **File access** — `GET /files/{bucket_id}`, `/files/{bucket_id}/{file_id}/info`, `/files/{bucket_id}/{file_id}/download` — direct, authenticated passthrough to the underlying Appwrite bucket (raw parquet retrieval).
+- **Cache** — no routes. `/files/{b}/{f}/cached`, `GET /cache/stats` and `DELETE /cache` were removed 2026-11-11: the file cache is shared by every key, so they answered a revoked key and let one caller read or empty everyone's cache (C-269, þing 04 D7).
 - **`GET /health`** and **`GET /`** (root: a self-describing endpoint index).
 
 ### 4. Uniform JSON response envelope

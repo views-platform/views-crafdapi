@@ -962,7 +962,7 @@ class AppWriteFileManager:
 
         except AppwriteException as e:
             return OperationResult(
-                success=False, error=f"Get file failed: {e.message}", code=e.type
+                success=False, error=f"Get file failed: {e.message}", code=e.type, status=e.code
             )
         except Exception as e:
             return OperationResult(
@@ -1091,14 +1091,6 @@ class AppWriteFileManager:
             return OperationResult(success=True, data=_as_dict(user_prefs), code="API_KEY")
         except AppwriteException as e:
             return OperationResult(success=False, error=e.message, code=e.type)
-
-    def clear_cache(
-        self, bucket_id: str = None, older_than_hours: int = None
-    ) -> OperationResult:
-        return self.cache_manager.clear_cache(bucket_id, older_than_hours)
-
-    def get_cache_stats(self) -> Dict[str, Any]:
-        return self.cache_manager.get_stats()
 
     def debug_collection_attributes(
         self, collection_id: str = None, database_id: str = None

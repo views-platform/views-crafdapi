@@ -56,7 +56,6 @@ def app_client(tmp_path):
     # Mock _validate_api_key to be a no-op returning a mock manager
     mock_appwrite = MagicMock()
     mock_appwrite.list_buckets.return_value = MagicMock(success=True)
-    mock_appwrite.get_cache_stats.return_value = {"hits": 0, "misses": 0}
     mgr._validate_api_key = MagicMock(return_value=mock_appwrite)
 
     # Override dependencies so they don't hit real Appwrite
@@ -221,12 +220,84 @@ class TestHealthCarriesNoStoreText:
         assert logged and logged[0].exc_info is not None
 
 
-class TestCacheStatsEndpoint:
+class TestRemovedCacheRoutes:
+    """C-269 (2026-11-11): the file cache is shared by every key. `/cached` served it with no
+    store check, so a revoked key, or a key from another audience, could read what someone
+    else's request had cached; `/cache/stats` and `DELETE /cache` read and emptied every
+    caller's cache. The routes are gone, for every key."""
 
-    def test_cache_stats_returns_200(self, app_client):
+    _REMOVED = {
+        ("GET", "/files/{bucket_id}/{file_id}/cached"),
+        ("GET", "/cache/stats"),
+        ("DELETE", "/cache"),
+    }
+
+    def test_routes_are_not_registered(self, app_client):
+        _, mgr, _ = app_client
+        registered = {
+            (method, route.path)
+            for route in mgr.app.routes
+            for method in getattr(route, "methods", ())
+        }
+        assert not self._REMOVED & registered
+
+    def test_no_route_exposes_the_shared_cache_under_any_name(self, app_client):
+        # The property, not the three old paths: a renamed or re-methoded cache route
+        # (`/cache/statistics`, `POST /cache`, `/files/{b}/{f}/cache`) is the same defect.
+        _, mgr, _ = app_client
+        assert [r.path for r in mgr.app.routes if "cache" in r.path.lower()] == []
+
+    def test_no_handler_reads_or_empties_the_shared_file_cache(self):
+        import inspect
+
+        import views_crafdapi.managers.api as api
+
+        source = inspect.getsource(api)
+        for call in ("cache_manager.get_stats", "cache_manager.clear_cache",
+                     "get_cached_file_path", ".get_cache_stats(", ".clear_cache("):
+            assert call not in source, call
+
+    @pytest.mark.parametrize("method,path", [
+        pytest.param("GET", "/files/test-bucket/file_001/cached", id="cached"),
+        pytest.param("GET", "/cache/stats", id="cache-stats"),
+        pytest.param("DELETE", "/cache", id="clear-cache"),
+    ])
+    def test_route_answers_nothing(self, app_client, method, path):
         client, _, _ = app_client
-        resp = client.get("/cache/stats", headers=HEADERS)
+        assert client.request(method, path, headers=HEADERS).status_code in (404, 405)
+
+    def test_route_index_does_not_advertise_them(self, app_client):
+        client, _, _ = app_client
+        advertised = set(client.get("/").json()["endpoints"].values())
+        assert not advertised & {
+            "/files/{bucket_id}/{file_id}/cached", "/cache/stats", "/cache (DELETE)"
+        }
+
+    def test_health_does_not_report_the_shared_cache(self, app_client):
+        client, mgr, _ = app_client
+        sentinel = "shared-cache-sentinel-7c1"
+        mock_appwrite = MagicMock()
+        mock_appwrite.list_buckets.return_value = MagicMock(success=True)
+        mock_appwrite.cache_manager.get_stats.return_value = {"cache_dir": sentinel}
+        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
+        resp = client.get("/health", headers=HEADERS)
         assert resp.status_code == 200
+        assert sentinel not in resp.text
+        assert not mock_appwrite.cache_manager.get_stats.called
+
+    @pytest.mark.parametrize("status", [401, 403])
+    @pytest.mark.parametrize("path", ["/files/b/f/info", "/files/b/f/download"])
+    def test_a_refused_key_on_a_file_route_is_401_not_404(self, app_client, path, status):
+        client, mgr, _ = app_client
+        mock_appwrite = MagicMock()
+        mock_appwrite.get_file.return_value = OperationResult(
+            success=False, error="Get file failed: unauthorized", code="user_unauthorized",
+            status=status,
+        )
+        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
+        resp = client.get(path, headers=HEADERS)
+        assert resp.status_code == 401
+        assert not mock_appwrite.download_file.called
 
 
 # ============================================================
@@ -523,18 +594,6 @@ class TestOperationResultDataConsumers:
         assert resp.status_code == 200
         assert resp.content == b""
 
-    def test_missing_cache_path_returns_500(self, app_client):
-        """Site 3 (api.py:1201): result.data missing 'cache_path' key."""
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.cache_manager.get_cached_file_path.return_value = OperationResult(
-            success=True, data={}
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket/file_001/cached", headers=HEADERS)
-        assert resp.status_code == 500
-
-
 # ============================================================
 # File + cache endpoint smoke tests (C-06 Sprint 5)
 # ============================================================
@@ -563,17 +622,6 @@ class TestFileEndpoints:
         resp = client.get("/files/test-bucket/file_001/info", headers=HEADERS)
         assert resp.status_code == 200
         assert resp.json()["file_id"] == "file_001"
-
-    def test_cache_delete_returns_200(self, app_client):
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.clear_cache.return_value = OperationResult(
-            success=True, data={"cleared": 0}
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.delete("/cache", headers=HEADERS)
-        assert resp.status_code == 200
-
 
 # ============================================================
 # File endpoint error paths — P-6 .get() bug regression (Sprint 7)
@@ -629,43 +677,6 @@ class TestFileEndpointErrorPaths:
         assert resp.status_code == 500
         assert "Storage unavailable" in resp.json()["detail"]
 
-    def test_cached_file_failure_returns_404(self, app_client):
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.cache_manager.get_cached_file_path.return_value = OperationResult(
-            success=False, error="Not in cache", code="CACHE_MISS"
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket/file_001/cached", headers=HEADERS)
-        assert resp.status_code == 404
-        assert "Not in cache" in resp.json()["detail"]
-
-
-    def test_a_wrong_size_cached_file_is_409_not_served(self, app_client, tmp_path):
-        """C-288 (#169): `/cached` never re-downloads, so a cached copy whose size is not the
-        store's declared size is refused with 409 rather than streamed as if whole. Through the
-        real CacheManager, so the route and the cache agree on the refusal's code."""
-        from datetime import timedelta
-
-        from views_crafdapi.managers.appwrite.file_cache import CacheManager
-
-        client, mgr, _ = app_client
-        (tmp_path / "raw").mkdir()
-        cache = CacheManager(tmp_path / "raw", timedelta(hours=24))
-        path = cache._get_cache_path("test-bucket", "file_001", "shard.parquet")
-        path.write_bytes(b"x" * 100)
-        cache.add_to_cache("test-bucket", "file_001", path, {"name": "shard.parquet"})
-        path.write_bytes(b"x" * 10)      # torn after it was cached
-
-        mock_appwrite = MagicMock()
-        mock_appwrite.cache_manager = cache
-        mock_appwrite.get_file.return_value = OperationResult(success=True,
-                                                              data={"name": "shard.parquet"})
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket/file_001/cached", headers=HEADERS)
-        assert resp.status_code == 409
-        assert "10 bytes" in resp.json()["detail"] and "100" in resp.json()["detail"]
-
     def test_a_download_cut_short_by_the_store_is_502(self, app_client):
         """C-288 (#169): a body shorter than the store declares is an upstream fault, kept apart
         from our own 500s so a caller can retry it."""
@@ -686,8 +697,8 @@ class TestFileEndpointErrorPaths:
 class TestHTTPExceptionPassthrough:
 
     @pytest.mark.parametrize("method,path", [
-        pytest.param("GET", "/cache/stats", id="cache-stats"),
-        pytest.param("DELETE", "/cache", id="clear-cache"),
+        pytest.param("GET", "/files/test-bucket", id="list-files"),
+        pytest.param("GET", "/files/test-bucket/file_001/info", id="file-info"),
         pytest.param("GET", "/health", id="health"),
     ])
     def test_auth_failure_returns_401(self, app_client, method, path):
@@ -1109,7 +1120,6 @@ def _cold_app(cache_dir, pm):
     mgr._register_routes()
     appwrite = MagicMock()
     appwrite.list_buckets.return_value = MagicMock(success=True)
-    appwrite.get_cache_stats.return_value = {}
     mgr._validate_api_key = MagicMock(return_value=appwrite)
     mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: pm
     mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: appwrite

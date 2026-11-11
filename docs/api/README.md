@@ -117,17 +117,14 @@ The levelled surface follows `/{level}/{kind}/{category}/{operation}` (ADR-026):
 | `GET /files/{bucket_id}` | List files in a bucket (`limit` 1–1000, `offset`, `search`). |
 | `GET /files/{bucket_id}/{file_id}/info` | File metadata. |
 | `GET /files/{bucket_id}/{file_id}/download` | Download the raw artifact (native media type, e.g. parquet). |
-| `GET /files/{bucket_id}/{file_id}/cached` | Serve the file from the local cache if present. |
 
 ### 4.4 Cache & service
 
 | Method & Path | Purpose |
 |---------------|---------|
-| `GET /cache/stats` | Per-key cache statistics. |
-| `DELETE /cache` | Clear the caller's cache partition. |
 | `GET /ping` | **Unauthenticated liveness probe** — returns `200 {"status":"ok"}` iff the process is serving HTTP. No API key, no Appwrite dependency; the target for external uptime monitors. |
 | `GET /version` | **Unauthenticated deployed-version probe** — `{"version": …, "deployed_tag": …}`: the installed package version and the pinned deploy tag (when the S4 deploy gate sets one). For verifying remotely which version is live. |
-| `GET /health` | **Readiness check** — verifies the Appwrite connection and returns cache stats. **Requires an `X-API-Key` header.** |
+| `GET /health` | **Readiness check** — verifies the Appwrite connection and reports forecast freshness (no cache contents: the cache is shared, C-269). **Requires an `X-API-Key` header.** |
 | `GET /` | Self-describing index of endpoints. |
 
 ---

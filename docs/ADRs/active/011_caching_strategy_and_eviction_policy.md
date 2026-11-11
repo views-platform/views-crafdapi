@@ -24,7 +24,7 @@
 
 The system maintains a three-tier cache architecture with escalating persistence:
 
-1. **In-memory dicts** (`_manager_cache`, `_dataframe_cache`, `_file_cache` -- formerly at `managers/api.py:190-196`, now bounded caches at `api.py:292-295`) --- plain Python dicts keyed by API key hash and category. None had eviction policies, size limits, or LRU behavior. They grew monotonically with distinct API keys and file IDs, cleared only on explicit `DELETE /cache` or server shutdown.
+1. **In-memory dicts** (`_manager_cache`, `_dataframe_cache`, `_file_cache` -- formerly at `managers/api.py:190-196`, now bounded caches at `api.py:292-295`) --- plain Python dicts keyed by API key hash and category. None had eviction policies, size limits, or LRU behavior. They grew monotonically with distinct API keys and file IDs, cleared only on explicit `DELETE /cache` or server shutdown. *(2026-11-11: `DELETE /cache` and `/cache/stats` were removed, C-269 — the file cache is shared by every key. A restart is now the only way to clear the caches, and the question below is answered: no per-caller stats route.)*
 
 2. **Disk pickle with FileLock** (formerly inline in `api.py`, now extracted to `managers/disk_cache.py` as `CrafdDiskCacheManager`) --- entire `ForecastDataset` objects serialized via `pickle.dump()` with `HIGHEST_PROTOCOL`. A `.json` sidecar stores `file_id`, `timestamp`, `rows`, `columns`, `ttl_days`, and now `schema_version` (`disk_cache.py:145`). TTL is 3.5 weeks (`disk_cache.py:40`), reasonable for monthly forecast data.
 

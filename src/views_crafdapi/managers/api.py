@@ -594,10 +594,7 @@ class CrafdApiManager(APIManager):
                 # File management endpoints
                 "files": "/files/{bucket_id}",
                 "file_download": "/files/{bucket_id}/{file_id}/download",
-                "file_cached": "/files/{bucket_id}/{file_id}/cached",
                 "file_info": "/files/{bucket_id}/{file_id}/info",
-                "cache_stats": "/cache/stats",
-                "clear_cache": "/cache (DELETE)",
                 "provenance": "/provenance/{category}",
                 "health": "/health",
                 "liveness_ping": "/ping",
@@ -1002,6 +999,9 @@ class CrafdApiManager(APIManager):
             try:
                 result = manager.get_file(bucket_id, file_id)
                 
+                if not result.success and result.status in (401, 403):
+                    # A refused key is 401, not a missing file (ADR-027 §4, #159).
+                    raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
                 if not result.success:
                     raise HTTPException(
                         status_code=404,
@@ -1030,6 +1030,9 @@ class CrafdApiManager(APIManager):
             """Download a file from Appwrite storage."""
             try:
                 file_info = manager.get_file(bucket_id, file_id)
+                if not file_info.success and file_info.status in (401, 403):
+                    # A refused key is 401, not a missing file (ADR-027 §4, #159).
+                    raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
                 if not file_info.success:
                     raise HTTPException(
                         status_code=404,
@@ -1088,80 +1091,11 @@ class CrafdApiManager(APIManager):
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
-        @self.app.get("/files/{bucket_id}/{file_id}/cached")
-        async def get_cached_file(
-            bucket_id: str,
-            file_id: str,
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: AppWriteFileManager = Depends(self._get_appwrite_manager)
-        ):
-            """Get file from cache if available (fastest option)."""
-            try:
-                result = manager.cache_manager.get_cached_file_path(bucket_id, file_id)
-
-                # C-288 (#169): this route never re-downloads, so a copy whose size is not that of
-                # a whole copy is refused, not streamed as if it were the file.
-                if result.code == "CACHE_FILE_WRONG_SIZE":
-                    raise HTTPException(status_code=409, detail=result.error)
-                if not result.success:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"File not in cache: {result.error or 'Unknown error'}"
-                    )
-                
-                file_info = manager.get_file(bucket_id, file_id)
-                if file_info.success:
-                    fi_data = file_info.data if isinstance(file_info.data, dict) else {}
-                    filename = fi_data.get('name', file_id)
-                else:
-                    filename = file_id
-
-                cache_data = result.data if isinstance(result.data, dict) else {}
-                cache_path = cache_data.get("cache_path")
-                if not cache_path:
-                    raise HTTPException(status_code=500, detail="Cache path not found in result")
-                return FileResponse(
-                    path=cache_path,
-                    filename=filename,
-                    media_type='application/octet-stream'
-                )
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.get("/cache/stats")
-        async def get_cache_stats(
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: AppWriteFileManager = Depends(self._get_appwrite_manager)
-        ):
-            """Get cache statistics for the current API key."""
-            try:
-                stats = manager.get_cache_stats()
-                return stats
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.delete("/cache")
-        async def clear_cache(
-            bucket_id: Optional[str] = None,
-            older_than_hours: Optional[int] = None,
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: AppWriteFileManager = Depends(self._get_appwrite_manager)
-        ):
-            """Clear file cache for the current API key."""
-            try:
-                result = manager.clear_cache(
-                    bucket_id=bucket_id,
-                    older_than_hours=older_than_hours
-                )
-                return result.to_dict()
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
+        # No `/files/{b}/{f}/cached`, `/cache/stats` or `DELETE /cache` (removed 2026-11-11, C-269):
+        # the file cache is shared by every key, so `/cached` answered a revoked key and served
+        # one key's cached files to another, and the other two read or emptied every caller's
+        # cache. `/download` asks the store with the caller's key first, then uses the cache, and
+        # `/health` no longer reports the shared cache's contents.
 
         @self.app.get("/health")
         async def health_check(
@@ -1186,7 +1120,6 @@ class CrafdApiManager(APIManager):
                 health = {
                     "status": "healthy",
                     "appwrite_connected": result.success,
-                    "cache_stats": manager.get_cache_stats(),
                 }
                 # S3 (#246, C-50): a stale forecast degrades health rather than logging silently.
                 # #290 sibling: freshness must be about the SERVED / newest-manifested run, not the
