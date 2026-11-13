@@ -105,6 +105,13 @@ def mock_databases():
 
 
 @pytest.fixture
+def mock_tables():
+    """Mock TablesDB service (Appwrite 1.8's Databases API; the metadata search reads through it)"""
+    with patch("views_crafdapi.managers.appwrite.manager.TablesDB") as mock:
+        yield mock.return_value
+
+
+@pytest.fixture
 def temp_cache_dir(tmp_path):
     """Create a temporary cache directory"""
     cache_dir = tmp_path / "cache"
@@ -389,8 +396,8 @@ class TestCacheManager:
 # Test MetadataManager
 class TestMetadataManager:
     @pytest.fixture
-    def metadata_manager(self, mock_databases, api_key_config):
-        return MetadataManager(mock_databases, api_key_config)
+    def metadata_manager(self, mock_databases, api_key_config, mock_tables):
+        return MetadataManager(mock_databases, api_key_config, mock_tables)
 
     def test_create_database_if_not_exists_new(self, metadata_manager, mock_databases, monkeypatch):
         monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
@@ -426,9 +433,9 @@ class TestMetadataManager:
         assert metadata_manager._infer_attribute_type([1, 2, 3]) == ("integer", True)
         assert metadata_manager._infer_attribute_type("2025-10-22T12:00:00") == ("datetime", False)
 
-    def test_search_files_by_metadata(self, metadata_manager, mock_databases):
-        mock_databases.list_documents.return_value = _sdk_result(
-            documents=[_sdk_result(fileId="file123", filename="test.txt")],
+    def test_search_files_by_metadata(self, metadata_manager, mock_tables):
+        mock_tables.list_rows.return_value = _sdk_result(
+            rows=[_sdk_result(fileId="file123", filename="test.txt")],
             total=1,
         )
         
@@ -440,20 +447,20 @@ class TestMetadataManager:
         assert result.data["total"] == 1
         assert len(result.data["documents"]) == 1
 
-    def test_search_files_by_metadata_paginates_beyond_default_page(self, metadata_manager, mock_databases):
+    def test_search_files_by_metadata_paginates_beyond_default_page(self, metadata_manager, mock_tables):
         """#287: a run with more artifacts than one Appwrite page (108 shards) must enumerate
         ALL matching documents, not just the default first page. Without pagination the resolver
         saw 25/108 shards → "83 missing" → the entire global wire run was refused (ingest_failed).
-        list_documents is called with limit+offset until a short page ends the loop."""
+        list_rows is called with limit+offset until a short page ends the loop."""
         page1 = _sdk_result(
-            documents=[_sdk_result(fileId=f"f{i}", filename=f"shard_{i}") for i in range(100)],
+            rows=[_sdk_result(fileId=f"f{i}", filename=f"shard_{i}") for i in range(100)],
             total=108,
         )
         page2 = _sdk_result(
-            documents=[_sdk_result(fileId=f"f{i}", filename=f"shard_{i}") for i in range(100, 108)],
+            rows=[_sdk_result(fileId=f"f{i}", filename=f"shard_{i}") for i in range(100, 108)],
             total=108,
         )
-        mock_databases.list_documents.side_effect = [page1, page2]
+        mock_tables.list_rows.side_effect = [page1, page2]
 
         result = metadata_manager.search_files_by_metadata(
             filters={"type": "sampled_forecast_shard"}
@@ -461,7 +468,7 @@ class TestMetadataManager:
 
         assert result.success
         assert len(result.data["documents"]) == 108  # not truncated to a single 100-doc page
-        assert mock_databases.list_documents.call_count == 2  # looped past the first full page
+        assert mock_tables.list_rows.call_count == 2  # looped past the first full page
 
 
 # Test AppWriteFileManager
@@ -1174,7 +1181,7 @@ class TestProvisioningGate:
         `_create_attribute_by_type` uses, but reached the SDK with no provisioning check —
         so backfilling attributes onto an *existing* collection bypassed þing-01 #276."""
         monkeypatch.delenv("CRAFDAPI_ALLOW_PROVISIONING", raising=False)
-        manager = MetadataManager(mock_databases, api_key_config)
+        manager = MetadataManager(mock_databases, api_key_config, Mock())
 
         with pytest.raises(ProvisioningDisabledError, match=r"attribute 'fileId'"):
             manager._create_single_attribute(
@@ -1197,7 +1204,7 @@ class TestProvisioningGate:
         mock_databases.create_collection.return_value = _sdk_result(
             **{"$id": "coll", "name": "coll"}
         )
-        manager = MetadataManager(mock_databases, api_key_config)
+        manager = MetadataManager(mock_databases, api_key_config, Mock())
 
         manager.create_metadata_collection_if_not_exists(
             collection_name="coll", collection_id="coll", database_id="db"
@@ -1231,11 +1238,11 @@ class TestAFailedCallKeepsItsHttpStatus:
     "not authorised" (401/403) from "unreachable" (0/None/5xx) instead of reading all of them as
     "nothing found"."""
 
-    def test_a_failed_search_carries_the_status_and_type(self, mock_databases, api_key_config):
-        mock_databases.list_documents.side_effect = AppwriteException(
+    def test_a_failed_search_carries_the_status_and_type(self, mock_databases, mock_tables, api_key_config):
+        mock_tables.list_rows.side_effect = AppwriteException(
             "Service unavailable", 503, "general_server_error"
         )
-        result = MetadataManager(mock_databases, api_key_config).search_files_by_metadata(
+        result = MetadataManager(mock_databases, api_key_config, mock_tables).search_files_by_metadata(
             filters={"type": "sampled_forecast_manifest"}
         )
         assert result.success is False

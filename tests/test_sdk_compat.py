@@ -261,8 +261,10 @@ class TestListDocumentsDeprecation:
                     and node.func.attr == "list_documents"
                 ):
                     count += 1
-        assert count == 5, (
-            f"Expected 5 list_documents call sites (C-23 inventory), found {count}. "
+        # 4 since #201: the serving read (search_files_by_metadata) moved to TablesDB.list_rows.
+        # The 4 left are on write and provisioning paths that a read-only API does not use.
+        assert count == 4, (
+            f"Expected 4 list_documents call sites (C-23 inventory), found {count}. "
             "Update the migration inventory in the risk register."
         )
 

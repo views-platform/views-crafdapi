@@ -15,6 +15,7 @@ import hashlib
 from appwrite.client import Client
 from appwrite.services.storage import Storage
 from appwrite.services.databases import Databases
+from appwrite.services.tables_db import TablesDB
 from appwrite.services.users import Users
 from appwrite.input_file import InputFile
 from appwrite.id import ID
@@ -52,9 +53,10 @@ class AppWriteFileManager:
         self.storage = Storage(self.client)
         self.users = Users(self.client)
         self.databases = Databases(self.client)
+        self.tables = TablesDB(self.client)
 
         # Initialize managers
-        self.metadata_manager = MetadataManager(self.databases, config)
+        self.metadata_manager = MetadataManager(self.databases, config, self.tables)
         self.cache_manager = self._setup_cache()
 
     def _inject_timeout(self, timeout_seconds: int) -> None:
