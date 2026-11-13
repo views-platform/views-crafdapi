@@ -56,7 +56,7 @@ The API reads its configuration from the environment, loaded in `CrafdApiManager
 | **Local dev / notebooks** | `.env` at the root of **this** repo, resolved via `pyprojroot.here()` (`managers/model.py`); copy `.env.example` | same `.env` |
 | **Deployed** (`deployment/RELEASE_RUNBOOK.md`) | the **views-appwrite registry** (`APPWRITE_REGISTRY`), written into `.env.crafdapi` | **exported into the environment by the operator** — *"never from anyone's `.env`"* |
 
-Issuing, warming and revoking a partner's key: `deployment/PARTNER_KEYS.md`.
+Creating, sending, renewing and revoking a partner's key: `deployment/PARTNER_KEYS.md`.
 
 `views-models/.env` holds the key the **postprocessor** delivers with. It is a different consumer of the same secret, not this API's config source. Set the following for local work:
 
