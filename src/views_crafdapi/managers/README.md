@@ -702,6 +702,5 @@ else:
 
 ## See Also
 
-- [Main README](../../README.md) - API overview and endpoints
+- [Main README](../../../README.md) - API overview and endpoints
 - [Data README](../data/README.md) - Dataset handlers and statistics
-- [WandB README](../wandb/README.md) - Monitoring utilities
