@@ -83,7 +83,8 @@ This document says what the service is. Everything below lives somewhere else; t
   - Keys are made and deleted in that project's Appwrite console.
 - **Which partner holds which key:** a private key register kept by the maintainer, outside every repo. It never holds the keys themselves.
 - **Adding or removing a partner:** the partner-key runbook in **this repo**.
-- **Server setup, updates and the monthly routine:** the deployment folder in **this repo**.
+- **Server setup and updates:** the deployment folder in **this repo**.
+- **The monthly delivery of a new forecast:** done upstream, from **views-models**. Nothing monthly happens in this repo.
 - **Monitoring:** an external uptime monitor, plus a daily check of the data's age in **this repo**.
 - **Forecast accuracy and known limitations:** not yet decided where (see Open).
 - **Shared terms (forecast, run, outcome, level, ...):** a shared glossary. It does not exist yet.

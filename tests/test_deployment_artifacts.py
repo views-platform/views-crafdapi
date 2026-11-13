@@ -461,11 +461,6 @@ class TestTheAlarmHasAnOwnerAndADeadline:
         out = _assess(tmp_path, _health(created_at), today)
         assert (out["due"], out["due_since"]) == (due, since)
 
-    def test_the_delivery_day_is_the_one_the_runbook_states(self):
-        """The workflow's day and MONTHLY_REFRESH.md's must move together."""
-        runbook = (_ROOT / "deployment" / "MONTHLY_REFRESH.md").read_text()
-        assert f"on or after the {_ENV['DELIVERY_DAY']}nd" in runbook
-
     def test_a_fresh_run_is_neither_degraded_nor_due(self, tmp_path):
         out = _assess(tmp_path, _health("2026-10-23T00:00:00Z"), "2026-10-25")
         assert (out["degraded"], out["due"], out["stale"]) == ("false", "false", "false")

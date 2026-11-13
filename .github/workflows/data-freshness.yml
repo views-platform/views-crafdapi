@@ -10,7 +10,7 @@ name: Data freshness
 # external monitor" can see it. That monitor did not exist. Better Stack watches
 # liveness only — a stale bucket returns 200 forever.
 #
-# The delivery that refreshes the data is MANUAL (see deployment/MONTHLY_REFRESH.md):
+# The delivery that refreshes the data is MANUAL (done from views-models):
 # a human runs two launchers each month. A missed month had no alarm on either end.
 #
 # DIVISION OF LABOUR — deliberate, do not blur it
@@ -24,7 +24,7 @@ name: Data freshness
 # A notification nobody owns is a log, not an alert. So now:
 #   - every issue this opens is assigned to MAINTAINER, so GitHub emails them;
 #   - "Monthly delivery due" is a scheduled REMINDER, not an alarm: it opens once on
-#     DELIVERY_DAY (the date in MONTHLY_REFRESH.md), before anyone could normally have
+#     DELIVERY_DAY, before anyone could normally have
 #     delivered, and closes itself when a run from on or after that day is served. It is
 #     never commented on;
 #   - the stale issue is the escalation. While the forecast is stale the reminder is
@@ -70,7 +70,7 @@ env:
   LOAD_URL: https://crafdapi.viewsforecasting.org/pg/data/forecast/subset?time_ids=0&entity_ids=0&features=pred_lr_ged_sb&with_metadata=false
   # Who the alarm is for. Assignment is what makes GitHub email someone.
   MAINTAINER: Polichinel
-  # The day of the month the delivery runs from (MONTHLY_REFRESH.md, "on or after the
+  # The day of the month the delivery runs from (upstream's schedule, "on or after the
   # 22nd"); test_deployment_artifacts binds the two.
   DELIVERY_DAY: "22"
   STALE_TITLE: Served data is stale or degraded
@@ -213,7 +213,7 @@ jobs:
                       f"{fr.get('sla_days')}-day SLA (created {created_at})"
                   )
 
-          # Delivery due (#173). MONTHLY_REFRESH.md: the delivery runs on or after DELIVERY_DAY,
+          # Delivery due (#173). Upstream: the delivery runs on or after DELIVERY_DAY,
           # once the previous month's fatalities have arrived. Due = the served run predates
           # the most recent DELIVERY_DAY, in UTC. FRESHNESS_TODAY exists so tests can pin the date.
           day = int(os.environ["DELIVERY_DAY"])
@@ -325,8 +325,8 @@ jobs:
           Do not restart the service. The forecast endpoints will keep answering; they are just
           serving something old. The question is why a monthly delivery has not landed.
 
-          The refresh is **manual** — two launchers a human runs, documented in
-          \`deployment/MONTHLY_REFRESH.md\`. Most likely one of them was not run this month.
+          The monthly delivery is done from views-models, not from here. Most likely this month's
+          delivery was not run. Ask views-models; crafdapi itself needs nothing.
 
           Start there, then check what is actually live:
 
@@ -392,7 +392,7 @@ jobs:
             if [ -z "$EXISTING" ]; then
               url=$(gh issue create --title "$DUE_TITLE" --body "Reminder: the monthly delivery runs from **${DUE_SINCE}**, and the forecast being served (${AGE} days old) predates it.
 
-          Run the two launchers in \`deployment/MONTHLY_REFRESH.md\`, including its frontier-month check. This issue closes itself once a run delivered on or after ${DUE_SINCE} is being served. If the forecast passes its SLA first, the stale-data issue takes over.")
+          Ask views-models for this month's delivery; crafdapi itself needs nothing. This issue closes itself once a run delivered on or after ${DUE_SINCE} is being served. If the forecast passes its SLA first, the stale-data issue takes over.")
               gh issue edit "$url" --add-assignee "$MAINTAINER" || echo "::warning::could not assign $url to $MAINTAINER"
             fi
           elif [ -n "$EXISTING" ]; then
