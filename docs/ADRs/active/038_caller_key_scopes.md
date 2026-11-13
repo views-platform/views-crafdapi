@@ -40,7 +40,7 @@ step at startup or on a key's first request.
 | Scope | SDK calls | Why |
 |---|---|---|
 | `buckets.read` | `storage.list_buckets` (`managers/appwrite/manager.py`, from `_validate_api_key` and the `/health` probe) | the check run on each new key's first request; without it every authenticated route answers 401 |
-| `documents.read` | `databases.list_documents` (`managers/appwrite/metadata.py`, `search_files_by_metadata`) | find the latest forecast run, its shards and sidecar, the historical file, and provenance |
+| `rows.read` (was `documents.read` until #201; Appwrite 1.8 renamed it, #200) | `tablesDB.list_rows` (`managers/appwrite/metadata.py`, `search_files_by_metadata`) | find the latest forecast run, its shards and sidecar, the historical file, and provenance |
 | `files.read` | `storage.get_file`, `storage.get_file_download`, `storage.list_files` (`managers/appwrite/manager.py`) | read and download the delivered files; `/files/*` |
 
 The writes in `managers/appwrite/` (`create_*`, `update_document`, `delete_*`) and the reads only

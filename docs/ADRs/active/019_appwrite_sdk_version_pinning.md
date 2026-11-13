@@ -27,7 +27,7 @@ declarations) and ADR-015 (dependency hygiene).
 
 Tripwire tests exist in `tests/test_sdk_compat.py::TestListDocumentsDeprecation`:
 1. `test_list_documents_method_exists` — fails when SDK removes the method
-2. `test_list_documents_call_sites_inventory` — AST check enforcing exactly 5 call sites
+2. `test_list_documents_call_sites_inventory` — AST check enforcing exactly 4 call sites (5 until #201 moved the serving read to `tablesDB.list_rows`; the 4 left are write and provisioning paths)
 3. `test_list_documents_emits_deprecation_warning` — confirms the warning is emitted
 
 ---
@@ -48,7 +48,7 @@ Tripwire tests exist in `tests/test_sdk_compat.py::TestListDocumentsDeprecation`
    version checking.
 
 4. **Migration plan when triggered:** (a) upgrade SDK version in `pyproject.toml`,
-   (b) replace 5 `self.databases.list_documents(` calls with the new API,
+   (b) replace the remaining `self.databases.list_documents(` calls with the new API (the serving read was moved in #201),
    (c) update `test_list_documents_call_sites_inventory` to track new call pattern,
    (d) verify via existing normalization tests in `test_sdk_compat.py` and live
    integration tests.
