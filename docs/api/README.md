@@ -13,6 +13,11 @@ newer models. The cost is more frequent change: which ensemble is used, and whic
 combines, will change more often than in the public forecast. We will be as open and as early as we
 can about each change.
 
+**We aim to keep this guide stable.** It explains how the API works. It is our sincere intent to
+change it as seldom as we can, so that you do not have to adapt. The list of columns lives in a separate page, the
+[data dictionary](data_dictionary.md), because it will change more often as we try out new
+summaries. Every change to either is recorded in the [changelog](CHANGELOG.md).
+
 - **Address:** `https://crafdapi.viewsforecasting.org`
 - **Your key:** send it with every request, in a request header named `X-API-Key`.
 - **Questions, or an older forecast:** contact VIEWS at views-platform@prio.org.
@@ -74,11 +79,12 @@ draws, not one number.
 You don't get the draws themselves: there are too many of them to send and to compute with
 quickly. You get columns that summarise them, for each place, month and outcome. For example:
 
-- **The most likely number of deaths.** If you need a single number, use this one, but remember it
-  says nothing about the bad cases.
-- **Ranges.** For example: "between 0 and 40 deaths, with 90% probability". A wide range means the
-  models are unsure.
+- **The chance of any deaths at all,** and **how many deaths there would be if there are any.**
+  Read these two together: two places can have the same chance of deaths, but very different
+  numbers if it happens.
 - **The chance of exceeding a level.** For example: "a 12% chance of more than 100 deaths".
+- **The expected number of deaths:** the average over all the draws. It is usually small, because
+  most draws have no deaths.
 - **A severe case.** The average of the worst 5% of the draws: what a bad month could realistically
   look like.
 
