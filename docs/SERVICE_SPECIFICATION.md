@@ -5,7 +5,7 @@ subtitle: "Ratified by the maintainer, 2026-11-13. Details may change."
 
 # What this service is
 
-**Purpose.** Give partner organisations the current forecast, and the matching recent history, over a web API.
+**Purpose.** Give partner organisations a forecast from a named VIEWS ensemble, and the historical observations of each forecast outcome, over a web API.
 
 **Users.** Partner organisations. CRAF'd funds the work and does not use it.
 
@@ -28,7 +28,7 @@ subtitle: "Ratified by the maintainer, 2026-11-13. Details may change."
   - Partners do **not** get the samples. They get summary columns derived from them, each describing one aspect of the outcomes: for example, the expected outcome, the most likely outcome, a plausible range, the chance of exceeding a level, or a severe-case outcome.
   - The exact columns may change and are documented elsewhere (see below).
 - **Outcomes:** what is forecast. Today, three kinds of violence: state-based, non-state and one-sided. The list is open: new outcomes, such as the impact modelling of child mortality in conflict zones, must fit in without reworking the API.
-- **History:** the recorded values that go with the forecast.
+- **History:** for each outcome forecast, the historical observations of that same outcome (the records the models were trained on). No other model inputs are served.
 
 # Levels
 
