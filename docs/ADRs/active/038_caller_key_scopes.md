@@ -1,6 +1,7 @@
 # ADR-038: The Appwrite scopes a caller key needs, derived from the code
 
-**Status:** Proposed
+**Status:** Superseded by ADR-040 (2026-11-17), which covers CRAF'd's own Appwrite project
+
 **Date:** 2026-10-20
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** ADR-027 (authentication and per-key isolation), ADR-031 (credential model), the views-faoapi session (its `deployment/KEY_SPLIT_AND_ROTATION_RUNBOOK.md` and `tests/test_auth_probe_scope.py`), the Appwrite console (read 2026-10-20)
