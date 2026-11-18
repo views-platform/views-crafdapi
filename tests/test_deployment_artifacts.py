@@ -222,16 +222,15 @@ class TestRestartLoopIsBounded:
 
 
 class TestMemoryCeiling:
-    """C-262/#99. The ceiling must be derivable from the measured COLD START, not the steady
-    state — sizing it from the latter is what C-263 exists to prevent.
+    """The memory limits must clear the measured start-up peak and leave the system room.
 
-    Measured 2026-08-21 (v0.5.1): cold peak 7.3 G, steady 3.7 G, box 22 GiB.
+    Measured 2026-08-21 (v0.5.1): peak at start 7.3 G. The service runs alone on a 32 GB server
+    (Hetzner CCX33, since November 2026); no other service shares it.
     """
 
     COLD_PEAK_G = 7.3
-    BOX_G = 22            # `free -g` on the box, 2026-08-21 — NOT the 24 GB views-faoapi#368 assumed
-    NEIGHBOUR_MAX_G = 11  # views-faoapi/deployment/views-faoapi.service
-    OS_RESERVE_G = 2      # OS + nginx + page cache; the box has no swap, so this is not optional
+    BOX_G = 32
+    OS_RESERVE_G = 4      # OS, nginx, page cache, and room to log in over ssh
 
     def _unit(self):
         import configparser
@@ -245,60 +244,28 @@ class TestMemoryCeiling:
         assert value.endswith("G"), f"expected a G-suffixed size, got {value!r}"
         return float(value[:-1])
 
-    def test_a_ceiling_is_declared_in_the_unit_file(self):
-        """Not via `set-property --runtime`, which lives in /run and vanishes on reboot — a
-        ceiling nobody can read from the repo is what this replaced."""
+    def test_a_hard_ceiling_and_no_soft_one(self):
+        """MemoryHigh without swap slows the service to a crawl while it still looks running;
+        a clean stop at MemoryMax is restarted by systemd (review 2026-11-18)."""
         cfg = self._unit()
         assert cfg.has_option("Service", "MemoryMax"), "no MemoryMax in the unit file"
-        assert cfg.has_option("Service", "MemoryHigh"), (
-            "no MemoryHigh — #99 asks for back-pressure before the hard kill, which is a "
-            "materially different failure than a cliff for a once-per-restart transient"
-        )
+        assert not cfg.has_option("Service", "MemoryHigh"), "MemoryHigh is back in the unit"
+        assert cfg.get("Service", "MemorySwapMax") == "0", "MemorySwapMax=0 is missing"
 
     def test_the_ceiling_clears_the_measured_cold_start(self):
-        """The trap C-263 documents: a ceiling above the steady state (3.7 G) but below the cold
-        start (7.3 G) kills the service on every single restart, and looks generous until then."""
+        """A limit above everyday use but below the start-up peak kills the service on every
+        restart (C-263)."""
         mx = self._gb(self._unit().get("Service", "MemoryMax"))
-        assert mx > self.COLD_PEAK_G, (
-            f"MemoryMax={mx}G is at or below the measured cold-start peak "
-            f"{self.COLD_PEAK_G}G — the service would be killed on every restart"
-        )
         assert mx >= self.COLD_PEAK_G * 1.2, (
-            f"MemoryMax={mx}G leaves under 20% headroom over the measured peak. The margin is "
-            f"this tight because the box is shared — see the co-tenancy test below, which is "
-            f"what caps it from the other side."
+            f"MemoryMax={mx}G leaves under 20% headroom over the measured start-up peak "
+            f"{self.COLD_PEAK_G}G"
         )
 
-    def test_the_pair_of_ceilings_fits_the_box(self):
-        """The constraint that actually sets our number. views-faoapi#368 sized its pair from a
-        24 GB box; `free -g` says 22 GiB, so 11 + 11 leaves nothing for the OS — and with no swap
-        that is an immediate OOM, which is precisely what the ceilings exist to prevent."""
+    def test_the_ceiling_leaves_the_system_room(self):
         mx = self._gb(self._unit().get("Service", "MemoryMax"))
-        total = mx + self.NEIGHBOUR_MAX_G + self.OS_RESERVE_G
-        assert total <= self.BOX_G, (
-            f"MemoryMax={mx}G + views-faoapi {self.NEIGHBOUR_MAX_G}G + {self.OS_RESERVE_G}G OS "
-            f"reserve = {total}G, over the {self.BOX_G} GiB box. Both services at their ceiling "
-            f"must not be able to exhaust the machine."
-        )
-
-    def test_high_is_below_max_and_above_the_cold_start(self):
-        """A MemoryHigh at or below the real peak throttles every cold start and reads as a
-        fault rather than as margin."""
-        cfg = self._unit()
-        hi, mx = self._gb(cfg.get("Service", "MemoryHigh")), self._gb(cfg.get("Service", "MemoryMax"))
-        assert hi < mx, f"MemoryHigh={hi}G must be below MemoryMax={mx}G"
-        assert hi > self.COLD_PEAK_G, (
-            f"MemoryHigh={hi}G is at or below the measured cold peak {self.COLD_PEAK_G}G — "
-            f"back-pressure would apply on every normal restart"
-        )
-
-    def test_the_ceiling_leaves_the_neighbour_room_on_the_shared_box(self):
-        """C-262 is about co-tenancy: this box also runs views-faoapi (4.8 G observed), and the
-        original 16.8 G cold start left -0.7 GiB of headroom."""
-        mx = self._gb(self._unit().get("Service", "MemoryMax"))
-        assert mx <= self.BOX_G * 0.6, (
-            f"MemoryMax={mx}G takes more than 60% of the {self.BOX_G} GiB box, leaving too "
-            f"little for views-faoapi, the OS and page cache"
+        assert mx + self.OS_RESERVE_G <= self.BOX_G, (
+            f"MemoryMax={mx}G + {self.OS_RESERVE_G}G for the system is over the "
+            f"{self.BOX_G} GB server"
         )
 
 

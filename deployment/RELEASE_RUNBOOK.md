@@ -79,17 +79,25 @@ A `502` for a few seconds after a restart is normal. A `502` that lasts minutes 
 refuses to start and keeps retrying. **ON THE BOX**, this line names the cause:
 
 ```bash
-sudo journalctl -u views-crafdapi -n 60 --no-pager | grep -E "deploy-gate|FATAL"
+sudo journalctl -u views-crafdapi -n 60 --no-pager | grep -E "deploy-gate|FATAL|oom"
 ```
 
 If it prints nothing, the service has not started recently, so the cause is elsewhere: read the
 last lines in full with `sudo journalctl -u views-crafdapi -n 60 --no-pager`.
 
-`deploy-gate: serving tag ...` means it started. A `FATAL deploy-gate:` line names what is wrong,
+`deploy-gate: serving tag ...` means it started. A line with `oom` means it ran out of memory and
+was stopped; systemd restarts it on its own. A `FATAL deploy-gate:` line names what is wrong,
 usually a tag that does not exist on GitHub. Fix it (write a good tag, section 1), or restart:
 
 ```bash
 sudo systemctl restart views-crafdapi
+```
+
+If the restart is refused because the service is `failed` (it gave up after 30 tries), clear that
+first, then restart:
+
+```bash
+sudo systemctl reset-failed views-crafdapi
 ```
 
 ## 3. The API serves an old forecast
