@@ -229,3 +229,115 @@ def test_a_cached_file_that_is_a_link_is_returned_as_the_link(cache):
     (bucket / "f2").write_bytes(b"x")
     (bucket / "f1").symlink_to(bucket / "f2")
     assert cache._get_cache_path("b", "f1") == bucket.resolve() / "f1"
+
+
+def test_a_cached_file_that_is_a_link_is_never_read(cache, tmp_path):
+    secret = tmp_path / "secret"
+    secret.write_bytes(b"x")
+    bucket = Path(cache.cache_dir) / "b"
+    bucket.mkdir()
+    (bucket / "f1").symlink_to(secret)
+    cache.add_to_cache("b", "f1", bucket / "f1")
+    assert cache.validate_cache("b", "f1") == CacheValidationResult.NOT_FOUND
+    assert not cache.get_cached_file_path("b", "f1").success
+
+
+def test_a_bucket_folder_that_links_to_another_bucket_is_refused(cache):
+    """Otherwise (b, f) and (c, f) would share one cache file."""
+    (Path(cache.cache_dir) / "c").mkdir()
+    (Path(cache.cache_dir) / "b").symlink_to(Path(cache.cache_dir) / "c", target_is_directory=True)
+    with pytest.raises(ValueError, match="'b'"):
+        cache._get_cache_path("b", "f1")
+
+
+@pytest.mark.parametrize("name", [f"a{chr(c)}b" for c in range(32)])
+def test_a_name_with_control_characters_is_refused(name):
+    with pytest.raises(ValueError):
+        _single_path_part(name)
+
+
+def test_entries_from_before_the_change_are_dropped_and_their_files_deleted(tmp_path):
+    import json
+    root = tmp_path / "cache"
+    (root / "b").mkdir(parents=True)
+    old_file = root / "b" / "forecast.parquet"
+    old_file.write_bytes(b"old")
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"keep")
+    current = {"bucket_id": "b", "file_id": "f2", "path": str(root / "b" / "f2"),
+               "cached_at": "2026-11-19T00:00:00", "size_bytes": 1, "filename": "f2"}
+    (root / "cache_metadata.json").write_text(json.dumps({
+        "b_f1": {**current, "file_id": "f1", "path": str(old_file), "filename": "forecast.parquet"},
+        "b_f3": {**current, "file_id": "f3", "path": str(outside), "filename": "outside.bin"},
+        "b/f2": current,
+    }))
+    cache = CacheManager(cache_dir=root, cache_ttl=timedelta(hours=1))
+    assert list(cache.cache_metadata) == ["b/f2"]
+    assert not old_file.exists()
+    assert outside.exists(), "a file outside the cache folder is never deleted"
+
+
+def test_the_index_is_written_whole(cache):
+    cache.add_to_cache("b", "f1", Path(cache.cache_dir) / "missing")
+    cache._save_cache_metadata()
+    assert [p.name for p in Path(cache.cache_dir).iterdir() if ".tmp-" in p.name] == []
+    reloaded = CacheManager(cache_dir=Path(cache.cache_dir), cache_ttl=timedelta(hours=1))
+    assert "b/f1" in reloaded.cache_metadata
+
+
+def _old_index(root, entries):
+    import json
+    (root / "cache_metadata.json").write_text(json.dumps({
+        key: {"bucket_id": "b", "file_id": fid, "path": str(path), "cached_at": "2026-11-19T00:00:00",
+              "size_bytes": 1, "filename": "x"}
+        for key, fid, path in entries
+    }))
+
+
+def test_an_old_entry_that_is_a_link_is_not_deleted(tmp_path):
+    root = tmp_path / "cache"
+    (root / "b").mkdir(parents=True)
+    target = root / "b" / "real"
+    target.write_bytes(b"x")
+    link = root / "b" / "link"
+    link.symlink_to(target)
+    _old_index(root, [("b_f1", "f1", link)])
+    CacheManager(cache_dir=root, cache_ttl=timedelta(hours=1))
+    assert link.is_symlink() and target.exists()
+
+
+def test_an_old_entry_behind_a_linked_bucket_folder_is_not_deleted(tmp_path):
+    root = tmp_path / "cache"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "data.bin"
+    victim.write_bytes(b"keep")
+    (root / "b").symlink_to(outside, target_is_directory=True)
+    _old_index(root, [("b_f1", "f1", root / "b" / "data.bin")])
+    CacheManager(cache_dir=root, cache_ttl=timedelta(hours=1))
+    assert victim.exists(), "a file reached through a linked folder is never deleted"
+
+
+def test_a_save_killed_mid_write_leaves_the_previous_index_whole(cache, monkeypatch):
+    import json
+    cache.add_to_cache("b", "f1", Path(cache.cache_dir) / "missing")
+    before = Path(cache.cache_metadata_file).read_text()
+
+    def torn_dump(data, f, **kwargs):
+        f.write("{")
+        raise OSError("killed")
+
+    monkeypatch.setattr(json, "dump", torn_dump)
+    cache.add_to_cache("b", "f2", Path(cache.cache_dir) / "missing")
+    assert Path(cache.cache_metadata_file).read_text() == before
+
+
+def test_each_save_uses_its_own_temporary_file(cache, monkeypatch):
+    import os
+    real_replace, sources = os.replace, []
+    monkeypatch.setattr(os, "replace", lambda src, dst: (sources.append(str(src)),
+                                                         real_replace(src, dst)))
+    cache._save_cache_metadata()
+    cache._save_cache_metadata()
+    assert len(sources) == 2 and len(set(sources)) == 2, sources

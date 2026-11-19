@@ -1307,7 +1307,8 @@ class TestCachedDownloadIsCompleteOrAbsent:
         for _ in range(2):
             mgr.cache_manager.cache_metadata.clear()
             assert mgr.download_file("b", "f").success
-        assert len(set(sources)) == 2, sources
+        file_writes = [s for s in sources if s.startswith("f.tmp-")]  # not the index file
+        assert len(file_writes) == 2 and len(set(file_writes)) == 2, sources
 
     def test_a_crash_mid_write_leaves_no_file_at_the_cache_path(self, file_manager, tmp_path, monkeypatch):
         import os

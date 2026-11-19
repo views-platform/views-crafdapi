@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from enum import Enum
 import json
+import uuid
 import os
 import logging
 
@@ -24,7 +25,8 @@ def _single_path_part(name: str) -> str:
     ``run1/x`` and ``run2/x`` to ``x`` would make two ids share one cache file.
     """
     part = str(name)
-    if part in ("", ".", "..") or Path(part).name != part or os.sep in part or "/" in part:
+    if (part in ("", ".", "..") or Path(part).name != part or os.sep in part or "/" in part
+            or any(ord(ch) < 32 for ch in part)):
         raise ValueError(f"not usable as a file name in the cache: {name!r}")
     return part
 
@@ -67,20 +69,52 @@ class CacheManager:
             try:
                 with open(self.cache_metadata_file, "r") as f:
                     data = json.load(f)
-                    self.cache_metadata = {
-                        k: CacheMetadata(**v) for k, v in data.items()
-                    }
+                    loaded = {k: CacheMetadata(**v) for k, v in data.items()}
+                self.cache_metadata = self._drop_old_entries(loaded)
             except (json.JSONDecodeError, IOError, TypeError) as e:
                 logger.warning(f"Failed to load cache metadata: {e}")
                 self.cache_metadata = {}
 
+    def _drop_old_entries(self, loaded: Dict[str, "CacheMetadata"]) -> Dict[str, "CacheMetadata"]:
+        """Keep entries written in the current form; remove the files of the others (#216).
+
+        Before #216 the key was "<bucket>_<file>" and the file was named after the store's file
+        name. Those entries are never matched again, so their files are deleted here, but only a
+        file that lies inside the cache folder and is reached through no link.
+        """
+        kept = {}
+        for key, entry in loaded.items():
+            if key == self._get_cache_key(entry.bucket_id, entry.file_id):
+                kept[key] = entry
+                continue
+            old = os.path.normpath(os.path.join(self._root, os.path.relpath(entry.path, self._root)))
+            # realpath(old) == old: no part of the path is a link, not the file and not a folder.
+            if (old.startswith(self._root_prefix) and os.path.isfile(old)
+                    and os.path.realpath(old) == old):
+                try:
+                    os.unlink(old)
+                except OSError as e:
+                    logger.warning("Could not delete an old cache file: %s", e)
+        if len(kept) != len(loaded):
+            logger.info("Dropped %d cache entries written before #216", len(loaded) - len(kept))
+        return kept
+
     def _save_cache_metadata(self):
+        """Written to a temporary file and moved into place, so a kill never leaves it torn."""
+        tmp = self.cache_metadata_file.with_name(
+            f"{self.cache_metadata_file.name}.tmp-{uuid.uuid4().hex}"
+        )
         try:
             data = {k: v.__dict__ for k, v in self.cache_metadata.items()}
-            with open(self.cache_metadata_file, "w") as f:
+            with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
+            os.replace(tmp, self.cache_metadata_file)
         except IOError as e:
             logger.warning(f"Failed to save cache metadata: {e}")
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     def _get_cache_key(self, bucket_id: str, file_id: str) -> str:
         # "/" cannot appear in a usable id, so two (bucket, file) pairs never share a key. With "_"
@@ -95,29 +129,42 @@ class CacheManager:
         file id is also unique, where two names can be the same. The result is checked to be
         inside the cache folder. It only computes the path; the download creates the folder.
 
-        Not covered: a process that can already write inside the cache folder could swap the bucket
-        folder for a link between this check and the write. Only the service account can write
-        there.
+        A bucket folder that is a link is refused, and a cached file that is a link is never read
+        (see ``_cached_path``). Not covered: a process that can already write inside the cache
+        folder could create such a link between this check and the write. Only the service account
+        can write there.
         """
         # os.path.realpath + a prefix check: the form CodeQL recognises as a path guard. Only the
         # bucket folder is resolved; the file part is a single name, so a cached file that is
         # itself a link is returned as the link, never as its target.
         bucket_dir = os.path.realpath(os.path.join(self._root, _single_path_part(bucket_id)))
-        full = os.path.join(bucket_dir, _single_path_part(file_id))
         # The bucket folder must lie strictly below the cache folder (not be the cache folder
-        # itself, where cache_metadata.json lives), and the check is on the path returned.
-        if not (bucket_dir.startswith(self._root_prefix) and full.startswith(self._root_prefix)):
+        # itself, where cache_metadata.json lives).
+        if not bucket_dir.startswith(self._root_prefix):
+            raise ValueError(f"bucket folder for {bucket_id!r} falls outside the cache folder")
+        # A bucket folder that is a link could make two bucket ids share one folder.
+        if bucket_dir != os.path.join(str(self._root), _single_path_part(bucket_id)):
+            raise ValueError(f"bucket folder for {bucket_id!r} is a link; not used")
+        full = os.path.normpath(os.path.join(bucket_dir, _single_path_part(file_id)))
+        # Given the check above this cannot fail. It is kept on purpose: CodeQL accepts a path as
+        # safe only when the value used is normalised and then checked in its own statement.
+        if not full.startswith(self._root_prefix):
             raise ValueError(f"cache path for {file_id!r} falls outside the cache folder")
         return Path(full)
 
     def _cached_path(self, metadata: "CacheMetadata") -> Optional[Path]:
         """The cache file for an entry, derived from its ids, never from the stored path (#216)."""
         try:
-            return self._get_cache_path(metadata.bucket_id, metadata.file_id)
+            path = self._get_cache_path(metadata.bucket_id, metadata.file_id)
         except ValueError as e:
             logger.warning("Cache entry %s/%s cannot be used: %s", metadata.bucket_id,
                            metadata.file_id, e)
             return None
+        if path.is_symlink():
+            logger.warning("Cache entry %s/%s is a link; not used", metadata.bucket_id,
+                           metadata.file_id)
+            return None
+        return path
 
     def validate_cache(
         self, bucket_id: str, file_id: str, remote_updated_at: str = None
