@@ -6,13 +6,15 @@ resurrecting object-dtype sample cells (C-148). This is the gate that must be gr
 before the disk cache is rewritten onto the value format. Synthetic data only.
 """
 import os
-import tempfile
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
 from views_crafdapi.data.handlers import ForecastDataset
+from tests.conftest import new_tmp_file
+
 
 pytestmark = pytest.mark.layer2_data
 
@@ -37,7 +39,7 @@ def _ragged_wire_dataset(with_nan_geo):
         vals = np.ones((len(units_), s), dtype=np.float32) * (7.0 if target == "lr_ged_sb" else 9.0)
         header = {"contract_version": "1.5", "sample_count": s, "target": target, "time_id": month,
                   "id_semantics": {"time": "views_month_id", "unit": "priogrid_id"}}
-        p = tempfile.mktemp(suffix=".parquet")
+        p = new_tmp_file(".parquet")
         arrow.save(p, values=vals, time=np.full(len(units_), month, dtype=np.int64),
                    unit=units_, level="pgm", metadata=header)
         b = open(p, "rb").read()
@@ -184,3 +186,15 @@ def test_value_dir_has_no_pickle(tmp_path):
     written = {p.suffix for p in (tmp_path / "v").rglob("*") if p.is_file()}
     assert ".pkl" not in written and ".pickle" not in written
     assert {".json", ".parquet", ".npz", ".npy"} & written
+
+
+@pytest.mark.parametrize("dropped", ForecastDataset._METADATA_COLS)
+def test_a_value_dir_missing_a_metadata_column_is_refused_not_served_short(dropped, tmp_path):
+    """C-261 (#167): `__init__` refuses a frame without the 9 metadata columns; `from_value` must
+    refuse a value-dir whose geo table lacks one, rather than serve output with that column gone."""
+    ds = ForecastDataset(make_fao_df(seed=3))
+    ds.to_value(tmp_path / "v")
+    geo_path = tmp_path / "v" / "geo.parquet"
+    pd.read_parquet(geo_path).drop(columns=[dropped]).to_parquet(geo_path)
+    with pytest.raises(ValueError, match=rf"geo\.parquet is missing metadata columns \[.{dropped}.\]"):
+        ForecastDataset.from_value(tmp_path / "v")

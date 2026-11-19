@@ -32,6 +32,8 @@
 - **Metadata consistency:** Every file upload via `upload_file_with_metadata()` stores a metadata document in an Appwrite database collection alongside the file in storage. Metadata includes `fileId`, `bucketId`, `filename`, `file_hash`, `uploaded_at`, and any caller-supplied fields.
 - **Orphan cleanup:** When metadata references a file that no longer exists in storage, the orphaned metadata document is deleted before re-uploading.
 - **Cache validation:** Downloaded files are cached locally with a configurable TTL. Cache is invalidated if the remote file's `$updatedAt` timestamp is newer than the cached version, or if the TTL has expired.
+- **Cached files stay inside the cache folder (#216):** a downloaded file is cached at `<cache folder>/<bucket id>/<file id>`, built from the ids only, never from the file's name in the store (which may contain `..` or start with `/`). Every read and delete derives the path the same way; the `path` recorded in `cache_metadata.json` is never read. An id that is not usable as one file name (`""`, `.`, `..`, or containing `/`) is refused, never shortened, and the download is served without caching; so is one whose bucket folder cannot be created. The bucket folder must lie strictly below the cache folder. Entries are keyed `<bucket id>/<file id>`, so two pairs never share a key. Entries cached before this change, under the store's file name, are a miss and are downloaded again. A bucket folder that is a link is refused, and a cached file that is a link is never read. Ids with control characters are refused. Entries written before #216 are dropped when the cache loads, and their files deleted if they lie inside the cache folder. `cache_metadata.json` is written to a temporary file and moved into place. Not covered: a process that can already write inside the cache folder could create a link between the check and the write; only the service account can write there.
+- **Cached downloads are whole or absent (C-288, #169):** `download_file` writes the cache file to a unique temp name, fsyncs it and `os.replace`s it into place, so a kill mid-write leaves the previous copy or none, never a torn file. A body whose length differs from the store's declared `sizeOriginal` is refused (`DOWNLOAD_INCOMPLETE`, which `/files/{bucket}/{file}/download` answers with 502) and nothing is cached. A body whose size cannot be checked — the metadata lookup failed — is served but not cached. A cached file whose size differs from the `size_bytes` recorded when it was cached — read once from the file just written and checked, so it is the size of a whole copy — makes `validate_cache` return `INVALID_SIZE`, so the next download re-fetches, and `get_cached_file_path` return `CACHE_FILE_WRONG_SIZE` (the `/files/{bucket}/{file}/cached` route that answered it with 409 was removed 2026-11-11, C-269). That holds for the re-encoded JSON manifest too. A file removed between lookups is a miss, not an error. A hard kill mid-write can leave a `<name>.tmp-<hex>` file in the bucket directory; nothing reads it, and nothing removes it.
 - **OperationResult pattern:** All public methods return `OperationResult(success, data, error, code)`. Methods never raise exceptions on Appwrite SDK errors; they catch `AppwriteException` and wrap it in a failure result. The only exception is the constructor, which raises `ValueError` if authentication fails.
 - **Authentication abstraction:** Supports both API key and session-based authentication via `AuthFactory`, selected by `AppwriteConfig.auth_method`.
 - **Metadata schema auto-creation:** Database, collection, and attributes are created automatically if they do not exist, using `MetadataManager.create_metadata_collection_if_not_exists()`. Dynamic attributes are inferred from metadata dict values.
@@ -103,11 +105,7 @@ The following public methods are grouped by domain. All return `OperationResult`
 
 #### Cache Operations
 
-- **`clear_cache(bucket_id=None, older_than_hours=None)`**
-  Clears the local file cache. When `bucket_id` is provided, only that bucket's cached files are removed. When `older_than_hours` is provided, only cache entries older than the threshold are removed. Delegates to `CacheManager.clear_cache()`.
-
-- **`get_cache_stats()`**
-  Returns cache statistics as a plain `Dict[str, Any]` (not wrapped in `OperationResult`). Delegates to `CacheManager.get_stats()`. This is the only public method that does not return `OperationResult`.
+None. `clear_cache` and `get_cache_stats` were removed 2026-11-11 with the routes that called them: the file cache is shared by every key, so no per-key manager may read or empty it (C-269). `CacheManager` keeps its own `clear_cache` and `get_stats`.
 
 #### Debug Operations
 
@@ -164,7 +162,7 @@ The following public methods are grouped by domain. All return `OperationResult`
 from views_crafdapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
 
 config = AppwriteConfig(
-    endpoint="https://cloud.appwrite.io/v1",
+    endpoint="https://fra.cloud.appwrite.io/v1",
     project_id="my_project",
     credentials="my-api-key",
     bucket_id="production_forecasts",

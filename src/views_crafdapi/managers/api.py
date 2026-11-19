@@ -127,7 +127,7 @@ def _too_large_detail(category: str, n_rows: int, estimated: int, budget: int) -
 
 _REQUIRED_APPWRITE_ENV_VARS = [
     "APPWRITE_ENDPOINT",
-    "APPWRITE_DATASTORE_PROJECT_ID",
+    "APPWRITE_CRAFD_PROJECT_ID",  # CRAF'd's own project, not the shared one (þing 04 D3)
     "APPWRITE_CRAFD_BUCKET_ID",
     "APPWRITE_CRAFD_BUCKET_NAME",
     "APPWRITE_CRAFD_COLLECTION_ID",
@@ -155,25 +155,35 @@ def _registry_coordinates(registry_path: str) -> dict[str, str]:
 def _validate_env_against_registry() -> None:
     """þing-01 #278 (D6): per-repo preflight. If the PLATFORM-001 registry is reachable
     (``APPWRITE_REGISTRY`` points at it), every coordinate present in the environment must MATCH the
-    registry's declared value — the registry is canonical. Fail loud naming the exact variable(s).
+    registry's declared value — the registry is canonical — and every required coordinate must have
+    a value there. Fail loud naming the exact variable(s), all problems in one message.
 
     Transition-safe: if the registry is not reachable in this environment, only the presence check
-    above runs (the central live validator is deferred — A7). This is the in-process preflight only.
+    in ``_validate_appwrite_env`` runs. That is the case on the server, whose service environment
+    does not set ``APPWRITE_REGISTRY``; there the env file is built from the registry at deploy
+    time and ``bootstrap.sh part2`` refuses to install one that lacks a required name.
     """
     path = os.getenv("APPWRITE_REGISTRY", "").strip()
     if not path or not os.path.isfile(path):
         return
     coords = _registry_coordinates(path)
-    mismatches = [
+    # A required name the registry does not carry would pass the comparison below unchecked
+    # (þing 04 orð_10), so its absence is a failure of its own.
+    problems = [
+        f"{name} has no value in the registry"
+        for name in _REQUIRED_APPWRITE_ENV_VARS
+        if name not in coords
+    ]
+    problems += [
         f"{name}={os.getenv(name)!r} but the registry declares {expected!r}"
         for name, expected in coords.items()
         if os.getenv(name) is not None and os.getenv(name) != expected
     ]
-    if mismatches:
+    if problems:
         msg = (
-            "APPWRITE coordinate(s) disagree with the PLATFORM-001 registry (þing-01 #278 / D6) — "
+            "APPWRITE coordinate(s) fail the PLATFORM-001 registry check (þing-01 #278 / D6) — "
             "the registry is canonical, fix the environment or update the registry by PR: "
-            + "; ".join(mismatches)
+            + "; ".join(problems)
         )
         logger.critical(msg)
         raise ValueError(msg)
@@ -369,7 +379,7 @@ class CrafdApiManager(APIManager):
             # set `_model_path`. Production always does (`CrafdApiManager(model_path=...)`).
             path_manager=getattr(self, "_model_path", None),
             endpoint=env["APPWRITE_ENDPOINT"],
-            project_id=env["APPWRITE_DATASTORE_PROJECT_ID"],
+            project_id=env["APPWRITE_CRAFD_PROJECT_ID"],
             credentials=x_api_key,
             auth_method="api_key",
             cache_ttl_hours=24,
@@ -584,10 +594,7 @@ class CrafdApiManager(APIManager):
                 # File management endpoints
                 "files": "/files/{bucket_id}",
                 "file_download": "/files/{bucket_id}/{file_id}/download",
-                "file_cached": "/files/{bucket_id}/{file_id}/cached",
                 "file_info": "/files/{bucket_id}/{file_id}/info",
-                "cache_stats": "/cache/stats",
-                "clear_cache": "/cache (DELETE)",
                 "provenance": "/provenance/{category}",
                 "health": "/health",
                 "liveness_ping": "/ping",
@@ -992,6 +999,9 @@ class CrafdApiManager(APIManager):
             try:
                 result = manager.get_file(bucket_id, file_id)
                 
+                if not result.success and result.status in (401, 403):
+                    # A refused key is 401, not a missing file (ADR-027 §4, #159).
+                    raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
                 if not result.success:
                     raise HTTPException(
                         status_code=404,
@@ -1020,6 +1030,9 @@ class CrafdApiManager(APIManager):
             """Download a file from Appwrite storage."""
             try:
                 file_info = manager.get_file(bucket_id, file_id)
+                if not file_info.success and file_info.status in (401, 403):
+                    # A refused key is 401, not a missing file (ADR-027 §4, #159).
+                    raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
                 if not file_info.success:
                     raise HTTPException(
                         status_code=404,
@@ -1034,7 +1047,10 @@ class CrafdApiManager(APIManager):
                     file_id=file_id,
                     use_cache=use_cache
                 )
-                
+
+                # C-288 (#169): the store's body was cut short — an upstream fault, not ours.
+                if result.code == "DOWNLOAD_INCOMPLETE":
+                    raise HTTPException(status_code=502, detail=result.error)
                 if not result.success:
                     raise HTTPException(
                         status_code=500,
@@ -1075,76 +1091,11 @@ class CrafdApiManager(APIManager):
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
-        @self.app.get("/files/{bucket_id}/{file_id}/cached")
-        async def get_cached_file(
-            bucket_id: str,
-            file_id: str,
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: AppWriteFileManager = Depends(self._get_appwrite_manager)
-        ):
-            """Get file from cache if available (fastest option)."""
-            try:
-                result = manager.cache_manager.get_cached_file_path(bucket_id, file_id)
-                
-                if not result.success:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"File not in cache: {result.error or 'Unknown error'}"
-                    )
-                
-                file_info = manager.get_file(bucket_id, file_id)
-                if file_info.success:
-                    fi_data = file_info.data if isinstance(file_info.data, dict) else {}
-                    filename = fi_data.get('name', file_id)
-                else:
-                    filename = file_id
-
-                cache_data = result.data if isinstance(result.data, dict) else {}
-                cache_path = cache_data.get("cache_path")
-                if not cache_path:
-                    raise HTTPException(status_code=500, detail="Cache path not found in result")
-                return FileResponse(
-                    path=cache_path,
-                    filename=filename,
-                    media_type='application/octet-stream'
-                )
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.get("/cache/stats")
-        async def get_cache_stats(
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: AppWriteFileManager = Depends(self._get_appwrite_manager)
-        ):
-            """Get cache statistics for the current API key."""
-            try:
-                stats = manager.get_cache_stats()
-                return stats
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.delete("/cache")
-        async def clear_cache(
-            bucket_id: Optional[str] = None,
-            older_than_hours: Optional[int] = None,
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: AppWriteFileManager = Depends(self._get_appwrite_manager)
-        ):
-            """Clear file cache for the current API key."""
-            try:
-                result = manager.clear_cache(
-                    bucket_id=bucket_id,
-                    older_than_hours=older_than_hours
-                )
-                return result.to_dict()
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
+        # No `/files/{b}/{f}/cached`, `/cache/stats` or `DELETE /cache` (removed 2026-11-11, C-269):
+        # the file cache is shared by every key, so `/cached` answered a revoked key and served
+        # one key's cached files to another, and the other two read or emptied every caller's
+        # cache. `/download` asks the store with the caller's key first, then uses the cache, and
+        # `/health` no longer reports the shared cache's contents.
 
         @self.app.get("/health")
         async def health_check(
@@ -1169,7 +1120,6 @@ class CrafdApiManager(APIManager):
                 health = {
                     "status": "healthy",
                     "appwrite_connected": result.success,
-                    "cache_stats": manager.get_cache_stats(),
                 }
                 # S3 (#246, C-50): a stale forecast degrades health rather than logging silently.
                 # #290 sibling: freshness must be about the SERVED / newest-manifested run, not the
@@ -1226,6 +1176,12 @@ class CrafdApiManager(APIManager):
                             "grace-fallback available=%s",
                             serving_state.get("reason"), serving_state.get("fallback_available"),
                         )
+                # C-282 (#170): which build wrote the forecast being served. After a deploy the
+                # slot can still be the previous build's; this says whether a fix is in effect.
+                # Reported, not judged: an older writer is not a fault and does not degrade.
+                served_entry = self._dataset_service.served_forecast_entry()
+                if served_entry is not None:
+                    health["served_entry"] = served_entry
                 return health
             except HTTPException:
                 raise

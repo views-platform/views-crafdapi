@@ -124,7 +124,7 @@ def test_the_config_carries_the_path_manager_so_the_name_filter_actually_applies
 
     env = {
         "APPWRITE_ENDPOINT": "https://example.invalid/v1",
-        "APPWRITE_DATASTORE_PROJECT_ID": "proj",
+        "APPWRITE_CRAFD_PROJECT_ID": "proj",
         "APPWRITE_CRAFD_BUCKET_ID": "bucket",
         "APPWRITE_CRAFD_BUCKET_NAME": "bucket-name",
         "APPWRITE_CRAFD_COLLECTION_ID": "coll",

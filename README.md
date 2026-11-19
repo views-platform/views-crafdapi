@@ -56,12 +56,14 @@ The API reads its configuration from the environment, loaded in `CrafdApiManager
 | **Local dev / notebooks** | `.env` at the root of **this** repo, resolved via `pyprojroot.here()` (`managers/model.py`); copy `.env.example` | same `.env` |
 | **Deployed** (`deployment/RELEASE_RUNBOOK.md`) | the **views-appwrite registry** (`APPWRITE_REGISTRY`), written into `.env.crafdapi` | **exported into the environment by the operator** — *"never from anyone's `.env`"* |
 
+Creating, sending, renewing and revoking a partner's key: `deployment/PARTNER_KEYS.md`.
+
 `views-models/.env` holds the key the **postprocessor** delivers with. It is a different consumer of the same secret, not this API's config source. Set the following for local work:
 
 ```bash
 # .env
-APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1
-APPWRITE_DATASTORE_PROJECT_ID=your-project-id
+APPWRITE_ENDPOINT=https://fra.cloud.appwrite.io/v1
+APPWRITE_CRAFD_PROJECT_ID=your-project-id
 APPWRITE_CRAFD_BUCKET_ID=predictions-bucket-id
 APPWRITE_CRAFD_BUCKET_NAME=predictions-bucket-name
 APPWRITE_CRAFD_COLLECTION_ID=file-metadata-collection-id
@@ -134,11 +136,6 @@ Files
 - GET `/files/{bucket_id}`
 - GET `/files/{bucket_id}/{file_id}/info`
 - GET `/files/{bucket_id}/{file_id}/download?download=true|false&use_cache=true|false`
-- GET `/files/{bucket_id}/{file_id}/cached`
-
-Cache
-- GET `/cache/stats`
-- DELETE `/cache?bucket_id=&older_than_hours=`
 
 ## Query Parameters and Headers
 
@@ -246,7 +243,7 @@ print(r.json())
 - Managers per API key are cached (`_manager_cache`)
 - Latest dataframe per API key and category cached for 4 hours (`_dataframe_cache`, `TTLCache(ttl=4*3600)`)
 - Global file bytes cache keyed by Appwrite file_id (`_file_cache`)
-- Clear caches via DELETE `/cache`
+- Caches are cleared by restarting the service. There is no clearing endpoint: the file cache is shared by every key, so no single caller may empty it (C-269)
 
 ## Geospatial Mapping
 

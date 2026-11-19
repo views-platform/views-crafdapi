@@ -1,6 +1,8 @@
 # ADR-027: Authentication and Per-API-Key Isolation
 
-**Status:** Accepted — amended 2026-10-16 (§4: what revocation does and does not reach, #159)
+**Status:** Amended (2026-11-18). §2–§3 (a separate copy of the data per key) are superseded: every partner sees the same forecast (service specification; ADR-040), and the per-key copies go with #208. §1 (the caller's key is passed to Appwrite) stays true until #208 decides whether the server has a key of its own.
+
+> Earlier status: Accepted — amended 2026-10-16 (§4: what revocation does and does not reach, #159)
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** ADR-026 (API surface), ADR-011 (caching strategy), ADR-013 (environment-variable validation), ADR-016 (concurrency safety), ADR-009 (boundary contracts), the live auth path in `src/views_crafdapi/managers/api.py` + `managers/appwrite/`
@@ -46,7 +48,7 @@ The key travels in a header and therefore **must be carried over TLS** — the d
 - Key validation (`_validate_api_key`) answers 401 only when the store refuses the key (401/403). Anything else — no response, 429, a timeout, a wrong endpoint or project, 5xx — is **503**: it says nothing about the key, and no longer tells a caller their key is wrong during an Appwrite outage.
 - No response carries the store's own error text, and a configuration error answers a fixed 500 (C-264).
 - **Not covered — partial descoping.** A key whose *storage* scope is narrowed but whose *database* scope is kept still passes the per-request metadata lookups, so a run already in the warm or disk cache keeps being served to it; only a fresh download is refused. Detecting that needs a storage check per request, which this does not add. To cut such a key off now, revoke it outright, or restart the service.
-- **Not covered — `/files/{bucket_id}/{file_id}/cached`** serves bytes from the local file cache and falls back to the file id for a name when `get_file` fails, so it still answers a revoked key (register C-268 remainder, C-269). Restarting the service, or evicting `_manager_cache`, remains the operator's way to cut that route off immediately.
+- ~~**Not covered — `/files/{bucket_id}/{file_id}/cached`** serves bytes from the local file cache and falls back to the file id for a name when `get_file` fails, so it still answers a revoked key (register C-268 remainder, C-269).~~ **Closed 2026-11-11:** the route was removed, with `/cache/stats` and `DELETE /cache`, and `/health` stopped reporting the shared cache (þing 04 D7, before the first partner key). `/files/*/info` and `/files/*/download` now answer a refused key with 401 rather than 404. Every route that serves data asks the store with the caller's key first.
 
 ### 5. Scope
 

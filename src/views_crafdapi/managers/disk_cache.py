@@ -23,12 +23,23 @@ if TYPE_CHECKING:
 
 import filelock
 
+from views_crafdapi.version import installed_version
+
 logger = logging.getLogger(__name__)
 
 # S6a (#208): `source_kind` + `provenance` round-trip so a disk-served forecast keeps its kind
 # (the §4.4 zero-manifest guard) and its C-86 lineage. Listing them here also auto-bumps
 # CACHE_SCHEMA_VERSION (see _derive_cache_schema_version), invalidating pre-S6 caches on read.
 _META_FIELDS = ("columns", "file_id", "provenance", "rows", "source_kind", "timestamp", "ttl_days")
+# C-282 (#170): `written_by` names the build that wrote the slot, so /health can say whether the
+# entry being served was produced by the code now running. Deliberately NOT in the fingerprint:
+# `read` tolerates its absence (a slot from an older build reads as written_by None), and
+# bumping the schema would delete every slot on deploy — the last-good copy included.
+_OPTIONAL_META_FIELDS = ("written_by",)
+# The version of the code in THIS process, fixed at import. `installed_version()` reads the
+# checkout on disk, which a deploy changes before the restart: read at write time, a still-running
+# old build would stamp its slots with the new version — the false "fix is in effect" this is for.
+_RUNNING_VERSION = installed_version()
 
 
 def _derive_cache_schema_version() -> int:
@@ -148,7 +159,10 @@ class CrafdDiskCacheManager:
         schema-version mismatch still deletes: that slot cannot be loaded at all.
 
         Returns:
-            Dict with 'dataset', 'file_id', 'timestamp' or None on cache miss/expired.
+            Dict with 'dataset', 'file_id', 'timestamp', 'source_kind', 'provenance' and
+            'written_by' (the version of the build that wrote the slot), or None on a miss:
+            absent, expired, lock contention, or a slot that cannot be loaded (logged at error,
+            e.g. C-261).
         """
         from views_crafdapi.data.handlers import ForecastDataset
 
@@ -168,9 +182,9 @@ class CrafdDiskCacheManager:
                 cached_version = meta.get("schema_version")
                 if cached_version != CACHE_SCHEMA_VERSION:
                     logger.warning(
-                        "Disk cache schema version mismatch for %s/%s: "
+                        "Disk cache schema version mismatch for %s: "
                         "expected %s, found %s. Invalidating.",
-                        api_key_hash, category,
+                        category,
                         CACHE_SCHEMA_VERSION, cached_version,
                     )
                     self._cleanup(value_dir, meta_path)
@@ -179,9 +193,9 @@ class CrafdDiskCacheManager:
                 cache_age = time.time() - meta.get("timestamp", 0)
                 if enforce_ttl and cache_age > self._ttl_seconds:
                     logger.info(
-                        "Disk cache expired for %s/%s (age: %.1f days); kept for the "
+                        "Disk cache expired for %s (age: %.1f days); kept for the "
                         "SLA-bounded last-good fallback",
-                        api_key_hash, category, cache_age / 86400,
+                        category, cache_age / 86400,
                     )
                     return None
 
@@ -193,22 +207,50 @@ class CrafdDiskCacheManager:
                 # rmtree — the unlinked inode stays live until the mapping is GC'd. Host is Linux.)
                 dataset = ForecastDataset.from_value(value_dir, mmap=True)
 
-                logger.info(
-                    "Disk cache hit for %s/%s (file_id: %s, age: %.1f days)",
-                    api_key_hash, category,
-                    meta.get("file_id"), cache_age / 86400,
+            # C-277 (#168): the bytes passed C-72 when they were written; nothing since has
+            # checked they still do. Re-run the same gate, so a disk read can never serve what
+            # ingest would refuse. Every caller inherits it, including the last-good fallback
+            # (which then answers 503) and the post-adopt read-backs. Outside the lock: the scan
+            # takes ~1-2 s, and the memmap keeps reading these bytes even if a writer replaces
+            # the slot meanwhile (see above). A failing slot is refused but KEPT: the next ingest
+            # overwrites it anyway, it is the evidence of what went wrong, and deleting it would
+            # destroy the only last-good copy if a later release tightened a rule.
+            try:
+                dataset.validate_value_plausibility()
+                dataset.validate_metadata_plausibility()
+            except ValueError as e:
+                logger.error(
+                    "Disk cache slot %s fails the C-72 plausibility gate; refusing it "
+                    "(kept for inspection): %s",
+                    category, e,
                 )
-                return {
-                    "dataset": dataset,
-                    "file_id": meta.get("file_id"),
-                    "timestamp": meta.get("timestamp"),
-                    # S6a (#208): default legacy so a pre-S6 meta (should already be invalidated by
-                    # the schema bump) still repopulates a safe kind; provenance may be absent.
-                    "source_kind": meta.get("source_kind", "legacy"),
-                    "provenance": meta.get("provenance"),
-                }
+                return None
+
+            logger.info(
+                "Disk cache hit for %s (file_id: %s, age: %.1f days)",
+                category,
+                meta.get("file_id"), cache_age / 86400,
+            )
+            return {
+                "dataset": dataset,
+                "file_id": meta.get("file_id"),
+                "timestamp": meta.get("timestamp"),
+                # S6a (#208): default legacy so a pre-S6 meta (should already be invalidated by
+                # the schema bump) still repopulates a safe kind; provenance may be absent.
+                "source_kind": meta.get("source_kind", "legacy"),
+                "provenance": meta.get("provenance"),
+                "written_by": meta.get("written_by"),
+            }
+        except filelock.Timeout:
+            logger.warning("Disk cache lock for %s held by another worker; treating as a miss",
+                           category)
+            return None
         except Exception as e:
-            logger.warning("Failed to read disk cache: %s", e)
+            # A slot that exists but cannot be loaded (corrupt, or an old-schema geo table, C-261)
+            # is a miss: the normal tier rebuilds from source; the last-good fallback answers 503.
+            # Logged at error with the traceback: it is never expected.
+            logger.error("Disk cache slot %s is unloadable, treating as a miss: %s",
+                         category, e, exc_info=True)
             return None
 
     def write(self, api_key_hash: str, category: str, dataset: "ForecastDataset", file_id: str,
@@ -251,12 +293,13 @@ class CrafdDiskCacheManager:
                     "ttl_days": self._ttl_seconds / 86400,
                     "source_kind": source_kind,
                     "provenance": provenance,
+                    "written_by": _RUNNING_VERSION,
                 }
                 self._write_meta(meta_path, meta)
 
                 logger.info(
-                    "Wrote disk cache for %s/%s (file_id: %s, rows: %d)",
-                    api_key_hash, category, file_id, len(dataset.dataframe),
+                    "Wrote disk cache for %s (file_id: %s, rows: %d)",
+                    category, file_id, len(dataset.dataframe),
                 )
                 return True
         except Exception as e:
@@ -304,11 +347,12 @@ class CrafdDiskCacheManager:
                     "ttl_days": self._ttl_seconds / 86400,
                     "source_kind": source_kind,
                     "provenance": provenance,
+                    "written_by": _RUNNING_VERSION,
                 }
                 self._write_meta(meta_path, meta)
                 logger.info(
-                    "Adopted disk cache value-dir for %s/%s (file_id: %s, rows: %d)",
-                    api_key_hash, category, file_id, rows,
+                    "Adopted disk cache value-dir for %s (file_id: %s, rows: %d)",
+                    category, file_id, rows,
                 )
                 return True
         except Exception as e:

@@ -230,9 +230,19 @@ class ForecastDataset(_GridDataset):
         directly, restores the scalar state from the manifest, re-derives index mappings,
         and re-asserts the C-155 store/index alignment. ``mmap`` propagates to the frame
         load (read-only memmap of the `(N,S)` block — keeps peak RAM at the working set).
+        Raises ``ValueError`` if ``geo.parquet`` lacks any of the 9 ``_METADATA_COLS`` (C-261).
         """
         directory = Path(directory)
         manifest = json.loads((directory / "manifest.json").read_text())
+        # C-261 (#167): the rule `__init__` applies to its source frame. A value-dir written by an
+        # older schema can lack a column; served as it is, that column silently drops out of
+        # every response. Checked before the sample/feature stores are loaded, which are large.
+        geo_metadata = pd.read_parquet(directory / "geo.parquet")
+        missing_cols = [col for col in cls._METADATA_COLS if col not in geo_metadata.columns]
+        if missing_cols:
+            raise ValueError(
+                f"value-dir geo.parquet is missing metadata columns {missing_cols} (C-261)"
+            )
         with np.load(directory / "index.npz") as idx:
             time, unit = idx["time"], idx["unit"]
         index = pd.MultiIndex.from_arrays(
@@ -281,7 +291,7 @@ class ForecastDataset(_GridDataset):
 
         ds.original_index = ds.dataframe.index.copy()
         ds._rebuild_index_mappings()
-        ds.geo_metadata = pd.read_parquet(directory / "geo.parquet")
+        ds.geo_metadata = geo_metadata
 
         n_rows = len(ds.dataframe)
         for label, store in (("sample", ds._sample_store), ("feature", ds._feature_store)):
@@ -521,14 +531,9 @@ class ForecastDataset(_GridDataset):
         if not isinstance(selected_vars, list):
             selected_vars = [selected_vars]
         
-        # Define which metadata columns to include for each level
-        level_metadata_mapping = {
-            "country": [],  # country_iso_a3 is used as index, no separate name column
-            "gaul0": ["country_iso_a3", "admin1_gaul0_name"],
-            "gaul1": ["country_iso_a3", "admin1_gaul1_name", "admin1_gaul0_name"],
-            "gaul2": ["country_iso_a3", "admin2_gaul2_name", "admin1_gaul1_name", "admin1_gaul0_name"],
-        }
-        metadata_cols_to_include = level_metadata_mapping.get(level, [])
+        # Which metadata columns this level carries (forecast.geography.metadata_table) — the
+        # same list `_aggregate_distributions` keeps, so every one is in `aggregated_df`.
+        metadata_cols_to_include = LEVEL_METADATA_COLUMNS.get(level, [])
         
         results = []
         for var_name in selected_vars:
@@ -612,8 +617,7 @@ class ForecastDataset(_GridDataset):
                     result_row.update({name: np.nan for name in value_cols})
 
                 for meta_col in metadata_cols_to_include:
-                    if meta_col in aggregated_df.columns:
-                        result_row[meta_col] = aggregated_df.iloc[position][meta_col]
+                    result_row[meta_col] = aggregated_df.iloc[position][meta_col]
 
                 var_results.append(result_row)
 
@@ -744,12 +748,9 @@ class ForecastDataset(_GridDataset):
                 raise KeyError(f"Invalid time IDs: {unknown}")
 
         # Which metadata columns this level carries (single source of truth in
-        # forecast.geography.metadata_table). Filtered to what `geo_metadata` actually has:
-        # the pre-S7 path skipped missing columns silently and this keeps that behaviour
-        # rather than changing it inside a performance change — the gap is register C-261.
-        metadata_cols_to_include = [
-            c for c in LEVEL_METADATA_COLUMNS.get(level, []) if c in self.geo_metadata.columns
-        ]
+        # forecast.geography.metadata_table). `geo_metadata` always has all of them: both
+        # `__init__` and `from_value` refuse a geo table without them (C-261).
+        metadata_cols_to_include = LEVEL_METADATA_COLUMNS.get(level, [])
 
         # Step 1: the group index and the metadata, from a frame carrying NO sample column.
         # This is the memory story. The path this replaces materialised one ndarray object per

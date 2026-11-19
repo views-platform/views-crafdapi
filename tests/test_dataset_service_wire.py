@@ -239,6 +239,33 @@ def test_bad_shard_hash_fails_visible_not_legacy():
     mgr.get_latest_provenance.assert_not_called()
 
 
+@pytest.mark.parametrize("drop", ["shard", "sidecar"])
+def test_a_missing_hash_fails_visible_like_a_wrong_one(drop):
+    """C-234: a manifest that pins no sha256 for an artifact verifies nothing, so the run is
+    Refused → 503 like a mismatched hash, never served unverified. It is refused from the manifest
+    alone, before any shard or sidecar is fetched."""
+    run = make_wire_run()
+    manifest = dict(run.manifest)
+    if drop == "shard":
+        shard = dict(manifest["shards"][0])
+        shard.pop("sha256")
+        manifest["shards"] = [shard]
+    else:
+        sidecar = dict(manifest["sidecar"])
+        sidecar.pop("sha256")
+        manifest["sidecar"] = sidecar
+    mgr, _ = _legacy_manager_with_manifest(run, manifest_bytes=json.dumps(manifest).encode())
+    svc = _service()
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataframe(mgr, "key", "forecast")
+    assert e.value.status_code == 503
+    assert svc.forecast_serving_state()["reason"] == "manifest_unhashed"
+    fetched = [c.args[0] for c in mgr.download_prediction.call_args_list]
+    assert fetched == ["mani_1"], "only the manifest may be fetched before the refusal"
+    mgr.resolve_artifact_file_ids.assert_not_called()
+    mgr.get_latest_provenance.assert_not_called()
+
+
 def test_incomplete_run_fails_visible_not_legacy():
     """§5.2: a run whose shard has fewer cells than the manifest declares → Refused → 503, not legacy."""
     run = make_wire_run()

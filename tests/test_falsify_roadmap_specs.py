@@ -34,7 +34,6 @@ def _flat(p: Path) -> str:
 
 
 _ROADMAP = _flat(Path(__file__).parent.parent / "reports" / "ROADMAP.md")
-_REFRESH = _flat(Path(__file__).parent.parent / "deployment" / "MONTHLY_REFRESH.md")
 
 
 # HARD 1 (resolved 2026-08-24): the goal says 'without anyone remembering to'; step 4 decides
@@ -48,17 +47,6 @@ def test_the_goal_does_not_contradict_step_4():
     keeps_a_manual = "Hop A stays manual" in _ROADMAP
     scope_is_stated = "It covers the **delivery**" in _ROADMAP and "does **not** cover" in _ROADMAP
     assert not (wants_no_memory and keeps_a_manual) or scope_is_stated
-
-
-# HARD 2 (resolved 2026-08-24): step 4 calls Hop B 'deterministic' and uses that as the
-# justification for automating it. MONTHLY_REFRESH.md:55-57 says the opposite — 'when you run it
-# determines what you get' — because Hop B resolves the newest manifested run and clips history
-# to the producer's boundary.
-def test_hop_b_is_not_called_deterministic_when_its_own_runbook_says_otherwise():
-    # Same shape: the word survives, in a sentence that retracts the claim.
-    runbook_says_time_dependent = "when* you run it determines *what* you get" in _REFRESH
-    retracted = "Hop B is not deterministic" in _ROADMAP
-    assert not runbook_says_time_dependent or retracted
 
 
 # HARD 3 (resolved 2026-08-24): the definition of done requires naming 'which pgm and cm

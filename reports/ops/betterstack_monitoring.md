@@ -22,7 +22,7 @@ for one event teaches people to ignore both.
 The freshness half is a workflow rather than a Better Stack monitor for the same reason
 views-datafactory's is: Better Stack's free tier cannot inspect a response *body*, and `/health`
 deliberately returns **200 with `status: "degraded"`** when the data is stale — HTTP status stays
-about service health. See `deployment/MONTHLY_REFRESH.md` for what to do when it fires.
+about service health. When it fires, the month's delivery is missing: ask views-models.
 
 - **Created:** 2026-08-06 (crafdapi v0.1.0 deploy).
 - **SSL/TLS verification:** on (catches an expired/broken cert on the public path).

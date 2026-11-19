@@ -22,6 +22,7 @@
 ## 3. Responsibilities and Guarantees
 
 - **Construction:** validates the 9 GAUL metadata columns (`_METADATA_COLS`), a 2-level `(month_id, priogrid_id)` MultiIndex, builds the dense grid (delegates `forecast.ingestion.dense_grid`), and splits geography into `self.geo_metadata` (a separate scalar table, ADR-013).
+- **Reconstruction:** `from_value(dir)` applies the same metadata-column rule to the value-dir's `geo.parquet` and raises `ValueError` naming any missing column (C-261, #167). Every reconstructed `geo_metadata` carries all 9 columns, so serving never drops one silently.
 - **Plausibility:** `validate_value_plausibility()` and `validate_metadata_plausibility()` delegate to `forecast.ingestion.plausibility` (C-72).
 - **Estimation (ADR-025, epic #222):** `calculate_hdi_map(...)` returns a DataFrame with the
   per-variable columns `{var}_map`, `{var}_hdi{50,90,95}_{lower,upper}` (three nested HDIs at the
@@ -55,7 +56,7 @@
 
 ## 6. Failure Modes and Loudness
 
-- Missing metadata columns / wrong index → `ValueError` at construction.
+- Missing metadata columns / wrong index → `ValueError` at construction, and missing metadata columns in a value-dir → `ValueError` from `from_value` (C-261). `CrafdDiskCacheManager.read` logs it at error and treats the slot as a miss. The normal disk tier then rebuilds from source. The last-good fallback cannot rebuild (its source is what failed), so it fails visible with a 503 rather than serve the short slot.
 - Non-finite or negative prediction samples, or implausible geo metadata → `ValueError` (C-72), surfaced as HTTP 500 by the ingestion path.
 - An entity absent from the last time step → loud `ValueError` (C-87), never a silent drop.
 

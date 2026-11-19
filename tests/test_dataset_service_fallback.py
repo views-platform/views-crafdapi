@@ -9,6 +9,7 @@ rather than serve a possibly-outdated forecast or drop to the legacy artifact (t
 import io
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -251,6 +252,28 @@ def test_restarted_worker_fallback_returns_last_good_dataset(tmp_path, phase):
     assert st["degraded"] is True and st["serving"] == "last_good_manifested"
 
 
+def test_an_implausible_last_good_slot_fails_visible_never_served(tmp_path):
+    """C-277 (#168): the last-good fallback reads the disk slot and cannot rebuild it. A slot
+    whose bytes now fail C-72 must give 503, never 200 with the implausible values."""
+    import numpy as np
+
+    run = make_wire_run()
+    mgr, state = _good_then_bad_manager(run, created_at=_iso(5))
+    _service(tmp_path).get_latest_dataset(mgr, "key", "forecast")
+    values = next(Path(tmp_path).rglob("*_forecast_value/frames/*/values.npy"))
+    block = np.load(values, mmap_mode="r+")
+    block[0, 0] = np.nan
+    block.flush()
+    del block
+
+    state["phase"] = "bad"
+    restarted = _service(tmp_path)
+    with pytest.raises(HTTPException) as e:
+        restarted.get_latest_dataset(mgr, "key", "forecast")
+    assert e.value.status_code == 503
+    assert restarted.forecast_serving_state()["fallback_available"] is False
+
+
 def _runs_manager(runs, *, created_at):
     """A store whose newest manifest is ``runs[state["phase"]]`` (a WireRun), or a refused run
     (``"bad"``: wrong shard hash). Each run keeps its own file ids, so two workers sharing one disk
@@ -449,3 +472,106 @@ def test_the_cold_manifest_refetch_refuses_on_its_own(tmp_path):
     with pytest.raises(HTTPException) as e:
         svc.get_latest_dataset(mgr, "key", "forecast")        # cold: nothing warm, nothing on disk
     assert e.value.status_code == 401
+
+
+def test_a_refused_download_leaves_no_served_entry(tmp_path):
+    """C-282 (#170): a request that fails (here a 401) serves nothing, so /health must not keep
+    naming the forecast this worker served before."""
+    from views_crafdapi.managers.appwrite import OperationResult
+
+    run = make_wire_run()
+    svc = _service(tmp_path)
+    mgr, state = _good_then_bad_manager(run, created_at=_iso(5))
+    svc.get_latest_dataset(mgr, "key", "forecast")
+    assert svc.served_forecast_entry()["source_kind"] == "wire"
+    svc._dataframe_cache.clear()
+    svc._file_cache.clear()
+
+    state["phase"] = "bad"
+    mgr.download_prediction.side_effect = lambda fid, *a, **k: OperationResult(
+        success=False, error="Download failed: user_unauthorized", code="user_unauthorized",
+        status=401,
+    )
+    with pytest.raises(HTTPException):
+        svc.get_latest_dataset(mgr, "key", "forecast")
+    assert svc.served_forecast_entry() is None
+
+
+@pytest.mark.parametrize("timestamp", [1e20, "yesterday", None])
+def test_a_bad_slot_timestamp_never_fails_the_serve(timestamp):
+    from views_crafdapi.managers.dataset_service import _served_entry
+
+    entry = _served_entry({"timestamp": timestamp, "written_by": "0.7.0", "source_kind": "wire"})
+    assert entry == {"written_by": "0.7.0", "written_at": None, "source_kind": "wire"}
+
+
+def _assert_entry(entry, written_by):
+    """The whole served entry: the slot's writer, a parseable UTC write time, a wire slot."""
+    assert entry["written_by"] == written_by
+    assert entry["source_kind"] == "wire"
+    written_at = datetime.fromisoformat(entry["written_at"])
+    assert written_at.tzinfo is not None
+    assert datetime.now(timezone.utc) - timedelta(minutes=5) < written_at <= datetime.now(timezone.utc)
+
+
+def test_every_serve_path_reports_the_whole_entry(tmp_path, monkeypatch):
+    """C-282 (#170): fresh ingest, disk hit after a restart, warm hit, and the last-good fallback
+    each report the slot's own writer, write time and kind."""
+    import views_crafdapi.managers.disk_cache as disk_cache
+
+    run = make_wire_run()
+    mgr, state = _good_then_bad_manager(run, created_at=_iso(5))
+    monkeypatch.setattr(disk_cache, "_RUNNING_VERSION", "0.6.9")
+    first = _service(tmp_path)
+    first.get_latest_dataset(mgr, "key", "forecast")
+    _assert_entry(first.served_forecast_entry(), "0.6.9")          # fresh ingest
+    monkeypatch.undo()
+
+    restarted = _service(tmp_path)
+    restarted.get_latest_dataset(mgr, "key", "forecast")
+    _assert_entry(restarted.served_forecast_entry(), "0.6.9")      # disk hit
+    restarted.get_latest_dataset(mgr, "key", "forecast")
+    _assert_entry(restarted.served_forecast_entry(), "0.6.9")      # warm hit
+
+    state["phase"] = "bad"
+    fallback = _service(tmp_path)
+    fallback.get_latest_dataset(mgr, "key", "forecast")
+    assert fallback.forecast_serving_state()["serving"] == "last_good_manifested"
+    _assert_entry(fallback.served_forecast_entry(), "0.6.9")       # last-good fallback
+
+
+def test_a_historical_request_never_touches_the_forecast_entry(tmp_path):
+    """The entry describes the forecast. Historical going to the store, then warm, then disk
+    must leave it exactly as the forecast serve set it."""
+    run = make_wire_run()
+    svc = _service(tmp_path)
+    mgr, _ = _good_then_bad_manager(run, created_at=_iso(5))
+    svc.get_latest_dataset(mgr, "key", "forecast")
+    entry = svc.served_forecast_entry()
+    assert entry is not None
+
+    svc.get_latest_dataset(mgr, "key", "historical")            # goes to the store
+    assert svc.served_forecast_entry() == entry
+    svc.get_latest_dataset(mgr, "key", "historical")            # warm hit
+    assert svc.served_forecast_entry() == entry
+    for slot in svc._dataframe_cache.values():
+        slot["historical"]["dataset"] = None                      # force the disk tier
+    svc.get_latest_dataset(mgr, "key", "historical")
+    assert svc.served_forecast_entry() == entry
+
+
+def test_a_warm_hit_reports_its_own_entry_not_the_last_one(tmp_path, monkeypatch):
+    """Two API keys on one worker: each warm hit replaces the entry with its own slot's."""
+    import views_crafdapi.managers.disk_cache as disk_cache
+
+    run = make_wire_run()
+    svc = _service(tmp_path)
+    svc._api_key_hash = lambda key: f"hash-{key}"    # one cache partition per key, as in production
+    mgr, _ = _good_then_bad_manager(run, created_at=_iso(5))
+    monkeypatch.setattr(disk_cache, "_RUNNING_VERSION", "0.6.9")
+    svc.get_latest_dataset(mgr, "key-a", "forecast")
+    monkeypatch.setattr(disk_cache, "_RUNNING_VERSION", "0.7.1")
+    svc.get_latest_dataset(mgr, "key-b", "forecast")
+    assert svc.served_forecast_entry()["written_by"] == "0.7.1"
+    svc.get_latest_dataset(mgr, "key-a", "forecast")             # warm hit for key a
+    assert svc.served_forecast_entry()["written_by"] == "0.6.9"

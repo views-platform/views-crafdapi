@@ -158,3 +158,53 @@ def test_a_meta_write_that_fails_halfway_is_never_visible_and_leaves_nothing_beh
     assert seen_mid_write == [False]
     assert not list(tmp_path.glob("*_meta.json.tmp"))
     assert cache.read("h", "forecast", enforce_ttl=False) is None
+
+
+# ── C-277 (#168): a disk read re-runs the C-72 gate ingest ran ─────────────────────────────────
+def _written_slot(tmp_path):
+    mgr = CrafdDiskCacheManager(tmp_path)
+    assert mgr.write("k", "forecast", ForecastDataset(make_fao_df(seed=5)), "fid")
+    return mgr, mgr._value_dir("k", "forecast")
+
+
+def _poke_sample(value_dir, value):
+    import numpy as np
+
+    path = next((value_dir / "frames").glob("*/values.npy"))
+    block = np.load(path, mmap_mode="r+")
+    block[-1, -1] = value
+    block.flush()
+    del block
+
+
+def _poke_geo(value_dir, col, value):
+    import pandas as pd
+
+    geo_path = value_dir / "geo.parquet"
+    geo = pd.read_parquet(geo_path)
+    geo.iloc[0, geo.columns.get_loc(col)] = value
+    geo.to_parquet(geo_path)
+
+
+@pytest.mark.parametrize("corrupt, reason", [
+    (lambda vd: _poke_sample(vd, float("nan")), "non-finite"),
+    (lambda vd: _poke_sample(vd, -1.0), "negative"),
+    (lambda vd: _poke_geo(vd, "pg_ycoord", 999.0), "pg_ycoord"),
+], ids=["nan-sample", "negative-sample", "bad-coordinate"])
+def test_an_implausible_slot_is_never_served_and_is_kept(tmp_path, caplog, corrupt, reason):
+    """The bytes on disk passed C-72 when written; nothing re-checked them on read. A slot that
+    now fails it is refused (None) on every read and logged at error with the reason. It is
+    kept: the next ingest overwrites it, and until then it is the evidence (and, if a rule was
+    tightened, the only copy of the last-good run)."""
+    import logging
+
+    mgr, value_dir = _written_slot(tmp_path)
+    assert mgr.read("k", "forecast") is not None  # the untouched slot is served
+    corrupt(value_dir)
+    with caplog.at_level(logging.ERROR, logger="views_crafdapi.managers.disk_cache"):
+        assert mgr.read("k", "forecast", enforce_ttl=False) is None
+        assert mgr.read("k", "forecast") is None   # refused again, not served on a second read
+    assert any(r.levelno == logging.ERROR and reason in r.getMessage()
+               and "plausibility gate" in r.getMessage() and "kept for inspection" in r.getMessage()
+               for r in caplog.records)
+    assert value_dir.exists() and mgr._meta_path("k", "forecast").exists()

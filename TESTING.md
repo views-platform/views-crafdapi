@@ -110,7 +110,7 @@ uv run pytest -m integration
 uv run pytest -rsx
 ```
 
-Integration tests require `APPWRITE_ENDPOINT`, `APPWRITE_DATASTORE_PROJECT_ID`, `APPWRITE_CRAFD_BUCKET_ID`, `APPWRITE_METADATA_DATABASE_ID`, `APPWRITE_CRAFD_COLLECTION_ID`, and `APPWRITE_DATASTORE_API_KEY`. They are excluded by default via `addopts = "-m 'not integration'"` in `pyproject.toml`.
+Integration tests require `APPWRITE_ENDPOINT`, `APPWRITE_CRAFD_PROJECT_ID`, `APPWRITE_CRAFD_BUCKET_ID`, `APPWRITE_METADATA_DATABASE_ID`, `APPWRITE_CRAFD_COLLECTION_ID`, and `APPWRITE_DATASTORE_API_KEY`. The key must be issued in the project `APPWRITE_CRAFD_PROJECT_ID` names (CRAF'd's own project since þing 04); a key from the shared project fails authentication there. They are excluded by default via `addopts = "-m 'not integration'"` in `pyproject.toml`.
 
 ### Verifying the counts
 

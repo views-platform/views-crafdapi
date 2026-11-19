@@ -1,7 +1,6 @@
 """S2 (#204): wire_reader builds a servable ForecastDataset from a manifested run."""
 
 import os
-import tempfile
 
 import numpy as np
 import pytest
@@ -9,6 +8,8 @@ import pytest
 from views_crafdapi.forecast.ingestion import wire_reader
 
 from ._wire_fixtures import make_wire_run
+from tests.conftest import new_tmp_file
+
 
 pytestmark = pytest.mark.layer2_data
 
@@ -169,7 +170,7 @@ def test_target_raggedness_zero_filled():
         vals = np.ones((len(units_), s), dtype=np.float32) * (7.0 if target == "lr_ged_sb" else 9.0)
         header = {"contract_version": "1.5", "sample_count": s, "target": target, "time_id": month,
                   "id_semantics": {"time": "views_month_id", "unit": "priogrid_id"}}
-        p = tempfile.mktemp(suffix=".parquet")
+        p = new_tmp_file(".parquet")
         arrow.save(p, values=vals, time=np.full(len(units_), month, dtype=np.int64), unit=units_, level="pgm", metadata=header)
         b = open(p, "rb").read()
         os.unlink(p)
@@ -252,12 +253,31 @@ def test_sample_count_header_mismatch_raises():
     unit = np.arange(100001, 100001 + n, dtype=np.int64)
     header = {"contract_version": "1.5", "sample_count": 99, "target": "lr_ged_sb", "time_id": 543,
               "id_semantics": {"time": "views_month_id", "unit": "priogrid_id"}}  # sample_count LIES
-    p = tempfile.mktemp(suffix=".parquet")
+    p = new_tmp_file(".parquet")
     arrow.save(p, values=values, time=time, unit=unit, level="pgm", metadata=header)
     data = open(p, "rb").read()
     os.unlink(p)
     with pytest.raises(ValueError, match="sample_count"):
         wire_reader.load_shard_state(data)
+
+
+def test_unhashed_artifacts_names_every_shard_and_the_sidecar_without_a_sha256():
+    manifest = wire_reader.parse_run_manifest({
+        "run_id": "r",
+        "shards": [{"name": "a", "sha256": "x"}, {"name": "b"}, {"name": "c", "sha256": ""}],
+        "sidecar": {"name": "side"},
+    })
+    assert manifest.unhashed_artifacts() == ["b", "c", "side"]
+    hashed = wire_reader.parse_run_manifest({
+        "run_id": "r", "shards": [{"name": "a", "sha256": "x"}],
+        "sidecar": {"name": "side", "sha256": "y"},
+    })
+    assert hashed.unhashed_artifacts() == []
+    empty_sidecar = wire_reader.parse_run_manifest({
+        "run_id": "r", "shards": [{"name": "a", "sha256": "x"}],
+        "sidecar": {"name": "side", "sha256": ""},
+    })
+    assert empty_sidecar.unhashed_artifacts() == ["side"]
 
 
 def test_verify_content_hash():
@@ -267,4 +287,7 @@ def test_verify_content_hash():
     wire_reader.verify_content_hash(good, hashlib.sha256(good).hexdigest(), "x")  # ok
     with pytest.raises(ValueError, match="content hash"):
         wire_reader.verify_content_hash(good, "0" * 64, "x")
-    wire_reader.verify_content_hash(good, None, "x")  # None → warn, no raise
+    # C-234: an absent hash verifies nothing, so it refuses like a wrong one.
+    for missing in (None, ""):
+        with pytest.raises(ValueError, match="no sha256 in manifest for x"):
+            wire_reader.verify_content_hash(good, missing, "x")

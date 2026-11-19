@@ -14,18 +14,19 @@ Run explicitly:
 """
 
 import os
-import tempfile
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from tests.conftest import new_tmp_file
+
 
 # All 9 vars required (not 6 like test_integration_appwrite_write.py) because
 # the HTTP path calls _validate_appwrite_env() which demands all 8 + we need
 # the API key for the X-API-Key header.
 REQUIRED_ENV_VARS = [
     "APPWRITE_ENDPOINT",
-    "APPWRITE_DATASTORE_PROJECT_ID",
+    "APPWRITE_CRAFD_PROJECT_ID",
     "APPWRITE_CRAFD_BUCKET_ID",
     "APPWRITE_CRAFD_BUCKET_NAME",
     "APPWRITE_CRAFD_COLLECTION_ID",
@@ -56,7 +57,7 @@ def appwrite_config():
 
     kwargs = dict(
         endpoint=os.getenv("APPWRITE_ENDPOINT"),
-        project_id=os.getenv("APPWRITE_DATASTORE_PROJECT_ID"),
+        project_id=os.getenv("APPWRITE_CRAFD_PROJECT_ID"),
         credentials=os.getenv("APPWRITE_DATASTORE_API_KEY"),
         auth_method="api_key",
         cache_ttl_hours=24,
@@ -123,7 +124,7 @@ def test_forecast_file(prediction_manager, file_manager, bucket_id):
     from tests.conftest import make_fao_df
 
     df = make_fao_df(n_cells=4, n_months=2, n_samples=10)
-    tmp = Path(tempfile.mktemp(suffix=".parquet"))
+    tmp = Path(new_tmp_file(".parquet"))
     df.to_parquet(tmp)
     file_id = None
     try:

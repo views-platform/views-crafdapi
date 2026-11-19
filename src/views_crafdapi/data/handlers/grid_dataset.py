@@ -755,8 +755,7 @@ class _GridDataset:
         if not getattr(self, "is_prediction", False):
             return
         for var in self.pred_vars:
-            arr = self._sample_array(var).astype(np.float64)
-            assert_prediction_samples_plausible(var, arr)
+            assert_prediction_samples_plausible(var, self._sample_array(var))
 
     def to_frames(self) -> dict:
         """Build a views-frames value object per target variable from the ingested grid (#88).

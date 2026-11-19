@@ -1,6 +1,8 @@
 # ADR-034 — The CRAF'd data contract (targets, geography, summary statistics, bucket)
 
-**Status:** Proposed (2026-08-02) — awaiting CRAF'd/product sign-off on the target list.
+**Status:** Superseded (2026-11-18) by the service specification and the data dictionary (three levels, FAO GAUL 2024 codes, the new summary columns). Kept as the record of what was decided.
+
+> Earlier status: Proposed (2026-08-02) — awaiting CRAF'd/product sign-off on the target list.
 **Deciders:** operator (Simon) + CRAF'd/product. Drafted with the design authority.
 **Story:** epic #1, S8 (#9). **Gates:** S10 (data-shape build) and the views-postprocessing CRAF'd producer.
 

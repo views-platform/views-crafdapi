@@ -20,7 +20,7 @@ pytestmark = pytest.mark.layer4_infra
 
 _REQUIRED_ENV = [
     "APPWRITE_ENDPOINT",
-    "APPWRITE_DATASTORE_PROJECT_ID",
+    "APPWRITE_CRAFD_PROJECT_ID",
     "APPWRITE_CRAFD_BUCKET_ID",
     "APPWRITE_CRAFD_BUCKET_NAME",
     "APPWRITE_CRAFD_COLLECTION_ID",
@@ -41,6 +41,7 @@ def clean_boot(monkeypatch, tmp_path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\nversion = '0'\n")
     for var in _REQUIRED_ENV:
         monkeypatch.setenv(var, "placeholder")
+    monkeypatch.delenv("APPWRITE_REGISTRY", raising=False)  # placeholders would fail the registry
     monkeypatch.chdir(tmp_path)  # no apis/un_crafd/ here — exactly like a fresh clone
     # create_app caches the app in module globals; reset so we build fresh under tmp cwd.
     monkeypatch.setattr(api_module, "app", None)

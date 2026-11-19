@@ -77,6 +77,11 @@ lines in total (crafd's 8 plus faoapi's `UNFAO_*`/`PROD_FORECASTS_*`, which craf
 `tomllib` (Python ≥3.11); the box venv (3.13) satisfies this, but a run under a system Python 3.10
 fails with `ModuleNotFoundError: tomllib` — always run it via the repo venv.
 
+*2026-11-11 (þing 04 D3): crafdapi now reads `APPWRITE_CRAFD_PROJECT_ID` (CRAF'd's own project) in
+place of `APPWRITE_DATASTORE_PROJECT_ID`. The verification above was true of the registry then; a
+registry edition without the new row now fails `bootstrap.sh part2`, which checks the built file
+against the deployed code's required names before installing it.*
+
 ---
 
 ## Decision

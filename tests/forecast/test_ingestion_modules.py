@@ -76,3 +76,67 @@ def test_fill_dense_grid_fails_loud_on_dropped_entity():
     df = _grid_df().drop(index=(601, 101))  # entity 101 now absent from last step
     with pytest.raises(ValueError, match="C-87"):
         fill_dense_grid(df, pd.Index([600, 601]), "month_id", "priogrid_id", 0)
+
+
+def test_prediction_samples_checked_across_chunk_boundaries():
+    """C-277 (#168): the check walks the block in row chunks (no float64 copy of a GB-scale
+    memmap). A fault anywhere, including the last row of a later chunk, is found and counted
+    in full; float32 input is checked as it is."""
+    from views_crafdapi.forecast.ingestion import plausibility
+
+    arr = np.ones((10, 3), dtype=np.float32)
+    arr[0, 0] = np.nan
+    arr[9, 2] = np.inf
+    with pytest.raises(ValueError, match="2 non-finite"):
+        plausibility.assert_prediction_samples_plausible("pred_x", arr, chunk_rows=4)
+    arr = np.ones((10, 3), dtype=np.float32)
+    arr[9, 2] = -2.5
+    with pytest.raises(ValueError, match=r"min -2\.5"):
+        plausibility.assert_prediction_samples_plausible("pred_x", arr, chunk_rows=4)
+    plausibility.assert_prediction_samples_plausible("pred_x", np.ones(5), chunk_rows=2)  # 1-D ok
+    for row in (0, 3, 7):  # an early chunk's minimum must survive later chunks; each chunk's last row
+        arr = np.ones((10, 3), dtype=np.float32)
+        arr[row, 1] = -1.0
+        with pytest.raises(ValueError, match="negative"):
+            plausibility.assert_prediction_samples_plausible("pred_x", arr, chunk_rows=4)
+        arr[row, 1] = np.nan
+        with pytest.raises(ValueError, match="1 non-finite"):
+            plausibility.assert_prediction_samples_plausible("pred_x", arr, chunk_rows=4)
+    plausibility.assert_prediction_samples_plausible("pred_x", np.ones((3, 0)), chunk_rows=2)  # no samples
+    plausibility.assert_prediction_samples_plausible("pred_x", np.float32(3.0))  # scalar
+    with pytest.raises(ValueError, match="1 non-finite"):
+        plausibility.assert_prediction_samples_plausible("pred_x", np.float32("nan"))
+
+
+def test_the_sample_check_never_copies_the_whole_block():
+    """C-277 (#168): the disk read runs this over a ~1.2 GB float32 memmap per target, so the
+    check must hold at most one chunk at a time — never a float64 copy of the block (the
+    ~2.4 GB per target the old upcast cost). 400,000 x 32 float32 is 51 MB; a float64 copy
+    would be 102 MB, one chunk's masks are ~2 MB."""
+    import tracemalloc
+
+    from views_crafdapi.forecast.ingestion import plausibility
+
+    arr = np.ones((400_000, 32), dtype=np.float32)
+    tracemalloc.start()
+    try:
+        plausibility.assert_prediction_samples_plausible("pred_x", arr)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 20 * 2**20, f"peak {peak / 2**20:.0f} MB: the check copied the block"
+
+
+def test_the_dataset_hands_the_stored_samples_to_the_check_uncopied(monkeypatch):
+    """C-277 (#168): `validate_value_plausibility` passes the float32 store itself, not an
+    upcast copy — the chunked check is pointless if its caller materialises the block first."""
+    from views_crafdapi.data.handlers import ForecastDataset, grid_dataset
+
+    ds = ForecastDataset(make_fao_df())
+    seen = []
+    monkeypatch.setattr(grid_dataset, "assert_prediction_samples_plausible",
+                        lambda var, samples: seen.append((var, samples)))
+    ds.validate_value_plausibility()
+    assert [v for v, _ in seen] == list(ds.pred_vars)
+    for var, samples in seen:
+        assert samples is ds._sample_array(var)

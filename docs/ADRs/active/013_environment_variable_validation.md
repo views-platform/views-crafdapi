@@ -22,7 +22,7 @@ The 8 required environment variables are:
 | Variable | Purpose |
 |----------|---------|
 | `APPWRITE_ENDPOINT` | Appwrite server URL |
-| `APPWRITE_DATASTORE_PROJECT_ID` | Project ID for the datastore |
+| `APPWRITE_CRAFD_PROJECT_ID` | CRAF'd's own Appwrite project (þing 04 D3; was `APPWRITE_DATASTORE_PROJECT_ID`, the shared project) |
 | `APPWRITE_CRAFD_BUCKET_ID` | Storage bucket ID for prediction files |
 | `APPWRITE_CRAFD_BUCKET_NAME` | Storage bucket name (used in logging and metadata) |
 | `APPWRITE_CRAFD_COLLECTION_ID` | Collection ID for file metadata |
