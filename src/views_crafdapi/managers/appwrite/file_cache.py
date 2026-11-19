@@ -18,9 +18,13 @@ logger = logging.getLogger(__name__)
 
 
 def _single_path_part(name: str) -> str:
-    """The last part of a name, refusing one that is empty or points to a folder (#216)."""
-    part = Path(str(name)).name
-    if part in ("", ".", ".."):
+    """A name usable as one file or folder name; anything else is refused, never shortened (#216).
+
+    Refused: empty, ``.``, ``..``, and any name containing a folder separator. Shortening
+    ``run1/x`` and ``run2/x`` to ``x`` would make two ids share one cache file.
+    """
+    part = str(name)
+    if part in ("", ".", "..") or Path(part).name != part or os.sep in part or "/" in part:
         raise ValueError(f"not usable as a file name in the cache: {name!r}")
     return part
 
@@ -79,7 +83,9 @@ class CacheManager:
             logger.warning(f"Failed to save cache metadata: {e}")
 
     def _get_cache_key(self, bucket_id: str, file_id: str) -> str:
-        return f"{bucket_id}_{file_id}"
+        # "/" cannot appear in a usable id, so two (bucket, file) pairs never share a key. With "_"
+        # they could: ("a_b", "c") and ("a", "b_c").
+        return f"{bucket_id}/{file_id}"
 
     def _get_cache_path(self, bucket_id: str, file_id: str) -> Path:
         """Where a downloaded file is cached: ``<cache folder>/<bucket id>/<file id>`` (#216).
@@ -97,9 +103,12 @@ class CacheManager:
         # bucket folder is resolved; the file part is a single name, so a cached file that is
         # itself a link is returned as the link, never as its target.
         bucket_dir = os.path.realpath(os.path.join(self._root, _single_path_part(bucket_id)))
-        if not os.path.join(bucket_dir, "").startswith(self._root_prefix):
+        full = os.path.join(bucket_dir, _single_path_part(file_id))
+        # The bucket folder must lie strictly below the cache folder (not be the cache folder
+        # itself, where cache_metadata.json lives), and the check is on the path returned.
+        if not (bucket_dir.startswith(self._root_prefix) and full.startswith(self._root_prefix)):
             raise ValueError(f"cache path for {file_id!r} falls outside the cache folder")
-        return Path(bucket_dir) / _single_path_part(file_id)
+        return Path(full)
 
     def _cached_path(self, metadata: "CacheMetadata") -> Optional[Path]:
         """The cache file for an entry, derived from its ids, never from the stored path (#216)."""

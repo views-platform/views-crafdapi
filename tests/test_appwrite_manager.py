@@ -304,7 +304,7 @@ class TestCacheManager:
             {"name": "test.txt", "$updatedAt": "2025-10-22T12:00:00.000Z"}
         )
         
-        cache_key = "bucket1_file123"
+        cache_key = "bucket1/file123"
         assert cache_key in manager.cache_metadata
         assert manager.cache_metadata[cache_key].filename == "test.txt"
 
@@ -334,7 +334,7 @@ class TestCacheManager:
         test_file.write_text("test content")
         
         # Fix: Use CacheMetadata object instead of dict
-        cache_key = "bucket1_file123"
+        cache_key = "bucket1/file123"
         manager.cache_metadata[cache_key] = CacheMetadata(
             bucket_id="bucket1",
             file_id="file123",
@@ -355,10 +355,10 @@ class TestCacheManager:
         test_file.write_text("test content")
         
         manager.add_to_cache("bucket1", "file123", test_file)
-        assert "bucket1_file123" in manager.cache_metadata
+        assert "bucket1/file123" in manager.cache_metadata
         
         manager.remove_from_cache("bucket1", "file123")
-        assert "bucket1_file123" not in manager.cache_metadata
+        assert "bucket1/file123" not in manager.cache_metadata
         assert not test_file.exists()
 
     def test_clear_cache_all(self, temp_cache_dir):
@@ -914,7 +914,8 @@ class TestErrorHandling:
         assert not result.success
         assert result.code == "storage_internal"
 
-    def test_download_file_io_error(self, file_manager):
+    def test_download_file_io_error(self, file_manager, tmp_path):
+        """A failure while writing the cache file itself answers IO_ERROR."""
         file_manager.storage.get_file_download.return_value = b"content"
         file_manager.get_file = Mock(
             return_value=OperationResult(
@@ -923,13 +924,10 @@ class TestErrorHandling:
                       "sizeOriginal": len(b"content")}
             )
         )
-        file_manager.cache_manager._get_cache_path = Mock(
-            return_value=Path("/nonexistent/dir/file.txt")
-        )
-
-        result = file_manager.download_file(
-            "bucket1", "file123", use_cache=False
-        )
+        file_manager.cache_manager._get_cache_path = Mock(return_value=tmp_path / "file123")
+        with patch("views_crafdapi.managers.appwrite.manager.os.fsync",
+                   side_effect=OSError("disk full")):
+            result = file_manager.download_file("bucket1", "file123", use_cache=False)
 
         assert not result.success
         assert result.code == "IO_ERROR"

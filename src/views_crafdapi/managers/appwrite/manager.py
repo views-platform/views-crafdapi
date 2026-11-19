@@ -825,25 +825,23 @@ class AppWriteFileManager:
             elif isinstance(file_bytes, str):
                 file_bytes = file_bytes.encode("utf-8")
 
-            # #216: the cache file is named by the ids. If they are not usable as a file name, the
-            # download is served below without caching it.
-            try:
-                cache_path = self.cache_manager._get_cache_path(bucket_id, file_id)
-            except ValueError:
-                cache_path = None
-                logger.warning(
-                    "Cannot name a cache file for %s/%s: serving the download without caching it",
-                    bucket_id, file_id,
-                )
-
-            # C-288: bytes whose size could not be checked (the metadata lookup failed) are served,
-            # but not cached — a cached entry is trusted on every later read.
+            # Some downloads are served but not cached:
+            # - C-288: the size could not be checked (the metadata lookup failed), and a cached
+            #   entry is trusted on every later read;
+            # - #216: the ids are not usable as a cache file name, or the folder cannot be made.
+            cache_path = None
             if received_as_bytes and declared_size is None:
-                logger.warning(
-                    "No declared size for %s/%s (file metadata unavailable): serving the "
-                    "download without caching it", bucket_id, file_id,
-                )
-            if cache_path is None or (received_as_bytes and declared_size is None):
+                reason = "file metadata unavailable, so its size cannot be checked"
+            else:
+                try:
+                    cache_path = self.cache_manager._get_cache_path(bucket_id, file_id)
+                    cache_path.parent.mkdir(exist_ok=True)
+                    reason = None
+                except (ValueError, OSError) as e:
+                    cache_path = None
+                    reason = f"no usable cache file ({e})"
+            if cache_path is None:
+                logger.warning("Serving %s/%s without caching it: %s", bucket_id, file_id, reason)
                 if save_path:
                     Path(save_path).write_bytes(file_bytes)
                     return OperationResult(
@@ -860,7 +858,6 @@ class AppWriteFileManager:
             # Save to cache atomically (C-288, the pattern of `disk_cache._write_meta`): a kill
             # mid-write leaves the previous file or none at the cache path, never a torn one that
             # the next read would trust.
-            cache_path.parent.mkdir(exist_ok=True)
             tmp = cache_path.with_name(f"{cache_path.name}.tmp-{uuid.uuid4().hex}")
             try:
                 with open(tmp, "wb") as f:

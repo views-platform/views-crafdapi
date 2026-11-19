@@ -90,11 +90,11 @@ def test_no_log_line_writes_a_key_or_its_fingerprint():
     assert not offenders, offenders
 
 
-def test_only_the_last_part_of_a_name_is_used():
-    """The first layer on its own: a name with folders keeps only its last part."""
-    assert _single_path_part("a/b/c.bin") == "c.bin"
-    assert _single_path_part("../../x") == "x"
-    assert _single_path_part("/etc/x") == "x"
+@pytest.mark.parametrize("name", ["a/b/c.bin", "../../x", "/etc/x", "run1/manifest"])
+def test_a_name_with_folders_is_refused_not_shortened(name):
+    """The first layer on its own. Shortening would let run1/x and run2/x share one file."""
+    with pytest.raises(ValueError):
+        _single_path_part(name)
 
 
 def test_a_bucket_folder_that_links_outside_is_refused(cache, tmp_path):
@@ -115,7 +115,7 @@ def test_an_entry_with_an_unusable_id_is_a_miss_not_an_error(cache):
     assert not cache.get_cached_file_path("..", "file1").success
 
 
-def test_a_download_with_an_unusable_id_is_served_but_not_cached(tmp_path):
+def _manager(tmp_path):
     from views_crafdapi.managers.appwrite.manager import AppWriteFileManager
     from views_crafdapi.managers.appwrite.config import AppwriteConfig, AuthMethod
     from views_crafdapi.managers.appwrite.results import OperationResult
@@ -136,6 +136,11 @@ def test_a_download_with_an_unusable_id_is_served_but_not_cached(tmp_path):
     mgr.get_file = Mock(return_value=OperationResult(
         success=True, data={"name": "x", "$updatedAt": "2026-01-01T00:00:00Z",
                             "sizeOriginal": len(b"content")}))
+    return mgr
+
+
+def test_a_download_with_an_unusable_id_is_served_but_not_cached(tmp_path):
+    mgr = _manager(tmp_path)
     result = mgr.download_file("..", "file1", use_cache=False)
     assert result.success
     assert result.data["file_bytes"] == b"content"
@@ -187,9 +192,30 @@ def test_a_cache_folder_reached_through_a_link_still_works(tmp_path):
     assert cache._get_cache_path("b", "f1") == real.resolve() / "b" / "f1"
 
 
-def test_a_bucket_id_with_folders_keeps_only_its_last_part(cache):
-    path = cache._get_cache_path("a/b", "f1")
-    assert path == Path(cache.cache_dir).resolve() / "b" / "f1"
+def test_a_bucket_id_with_folders_is_refused(cache):
+    with pytest.raises(ValueError):
+        cache._get_cache_path("a/b", "f1")
+
+
+def test_a_bucket_folder_that_is_the_cache_folder_itself_is_refused(cache):
+    """Files would land beside cache_metadata.json and could overwrite it."""
+    (Path(cache.cache_dir) / "b").symlink_to(Path(cache.cache_dir), target_is_directory=True)
+    with pytest.raises(ValueError):
+        cache._get_cache_path("b", "cache_metadata.json")
+
+
+def test_two_bucket_and_file_pairs_never_share_a_cache_key(cache):
+    assert cache._get_cache_key("a_b", "c") != cache._get_cache_key("a", "b_c")
+
+
+def test_a_download_whose_cache_folder_cannot_be_made_is_served_uncached(tmp_path):
+    mgr = _manager(tmp_path)
+    blocker = Path(mgr.cache_manager.cache_dir) / "b"
+    blocker.parent.mkdir(parents=True, exist_ok=True)
+    blocker.write_text("a file where the bucket folder should be")
+    result = mgr.download_file("b", "file1", use_cache=False)
+    assert result.success and result.data["from_cache"] is False
+    assert not mgr.cache_manager.cache_metadata
 
 
 def test_a_lookup_creates_no_folder(cache):
