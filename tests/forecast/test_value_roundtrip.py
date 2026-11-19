@@ -6,7 +6,6 @@ resurrecting object-dtype sample cells (C-148). This is the gate that must be gr
 before the disk cache is rewritten onto the value format. Synthetic data only.
 """
 import os
-import tempfile
 
 import numpy as np
 import pandas as pd
@@ -14,6 +13,8 @@ import pytest
 
 from tests.conftest import make_fao_df
 from views_crafdapi.data.handlers import ForecastDataset
+from tests.conftest import new_tmp_file
+
 
 pytestmark = pytest.mark.layer2_data
 
@@ -38,7 +39,7 @@ def _ragged_wire_dataset(with_nan_geo):
         vals = np.ones((len(units_), s), dtype=np.float32) * (7.0 if target == "lr_ged_sb" else 9.0)
         header = {"contract_version": "1.5", "sample_count": s, "target": target, "time_id": month,
                   "id_semantics": {"time": "views_month_id", "unit": "priogrid_id"}}
-        p = tempfile.mktemp(suffix=".parquet")
+        p = new_tmp_file(".parquet")
         arrow.save(p, values=vals, time=np.full(len(units_), month, dtype=np.int64),
                    unit=units_, level="pgm", metadata=header)
         b = open(p, "rb").read()

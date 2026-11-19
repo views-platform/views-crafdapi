@@ -311,7 +311,7 @@ class TestCacheManager:
     def test_validate_cache_valid(self, temp_cache_dir):
         manager = CacheManager(temp_cache_dir, timedelta(hours=24))
         
-        test_file = temp_cache_dir / "bucket1" / "test.txt"
+        test_file = temp_cache_dir / "bucket1" / "file123"
         test_file.parent.mkdir(parents=True)
         test_file.write_text("test content")
         
@@ -329,7 +329,7 @@ class TestCacheManager:
     def test_validate_cache_invalid_ttl(self, temp_cache_dir):
         manager = CacheManager(temp_cache_dir, timedelta(hours=1))
         
-        test_file = temp_cache_dir / "bucket1" / "test.txt"
+        test_file = temp_cache_dir / "bucket1" / "file123"
         test_file.parent.mkdir(parents=True)
         test_file.write_text("test content")
         
@@ -350,7 +350,7 @@ class TestCacheManager:
     def test_remove_from_cache(self, temp_cache_dir):
         manager = CacheManager(temp_cache_dir, timedelta(hours=24))
         
-        test_file = temp_cache_dir / "bucket1" / "test.txt"
+        test_file = temp_cache_dir / "bucket1" / "file123"
         test_file.parent.mkdir(parents=True)
         test_file.write_text("test content")
         
@@ -366,7 +366,7 @@ class TestCacheManager:
         
         # Add multiple files
         for i in range(3):
-            test_file = temp_cache_dir / "bucket1" / f"test{i}.txt"
+            test_file = temp_cache_dir / "bucket1" / f"file{i}"
             test_file.parent.mkdir(parents=True, exist_ok=True)
             test_file.write_text(f"content {i}")
             manager.add_to_cache("bucket1", f"file{i}", test_file)
@@ -1369,17 +1369,26 @@ class TestCachedDownloadIsCompleteOrAbsent:
         path.write_bytes(b'{"run_')
         assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.INVALID_SIZE
 
-    def test_an_entry_cached_before_this_change_is_checked_against_its_recorded_size(self, temp_cache_dir):
-        """Old cache_metadata.json rows already record `size_bytes`. A whole one stays valid (no
-        migration); one torn since — a pre-fix in-place rewrite killed mid-write — is caught."""
+    def test_an_entry_is_checked_against_its_recorded_size(self, temp_cache_dir):
+        """A whole cached copy is valid; one torn since (a write killed mid-way) is caught."""
         manager = CacheManager(temp_cache_dir, timedelta(hours=24))
-        f = temp_cache_dir / "bucket1" / "old.txt"
+        f = temp_cache_dir / "bucket1" / "file1"
         f.parent.mkdir(parents=True)
         f.write_text("old contents")
         manager.add_to_cache("bucket1", "file1", f)
         assert manager.validate_cache("bucket1", "file1") == CacheValidationResult.VALID
         f.write_text("old")
         assert manager.validate_cache("bucket1", "file1") == CacheValidationResult.INVALID_SIZE
+
+    def test_an_entry_cached_under_its_store_name_is_a_miss(self, temp_cache_dir):
+        """#216: entries written before the cache was named by file id point to the store name.
+        They are never read; the file is downloaded again and cached under its id."""
+        manager = CacheManager(temp_cache_dir, timedelta(hours=24))
+        f = temp_cache_dir / "bucket1" / "old.txt"
+        f.parent.mkdir(parents=True)
+        f.write_text("old contents")
+        manager.add_to_cache("bucket1", "file1", f)
+        assert manager.validate_cache("bucket1", "file1") == CacheValidationResult.NOT_FOUND
 
     def test_a_file_removed_mid_check_is_a_miss_not_an_error(self, temp_cache_dir, monkeypatch):
         """A concurrent clear can unlink the file between lookups; that is NOT_FOUND / missing."""

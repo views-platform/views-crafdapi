@@ -825,6 +825,17 @@ class AppWriteFileManager:
             elif isinstance(file_bytes, str):
                 file_bytes = file_bytes.encode("utf-8")
 
+            # #216: the cache file is named by the ids. If they are not usable as a file name, the
+            # download is served below without caching it.
+            try:
+                cache_path = self.cache_manager._get_cache_path(bucket_id, file_id)
+            except ValueError:
+                cache_path = None
+                logger.warning(
+                    "Cannot name a cache file for %s/%s: serving the download without caching it",
+                    bucket_id, file_id,
+                )
+
             # C-288: bytes whose size could not be checked (the metadata lookup failed) are served,
             # but not cached — a cached entry is trusted on every later read.
             if received_as_bytes and declared_size is None:
@@ -832,6 +843,7 @@ class AppWriteFileManager:
                     "No declared size for %s/%s (file metadata unavailable): serving the "
                     "download without caching it", bucket_id, file_id,
                 )
+            if cache_path is None or (received_as_bytes and declared_size is None):
                 if save_path:
                     Path(save_path).write_bytes(file_bytes)
                     return OperationResult(
@@ -844,12 +856,6 @@ class AppWriteFileManager:
                     data={"file_bytes": file_bytes, "from_cache": False},
                     code="RETURNED_FROM_REMOTE",
                 )
-
-            # Determine filename for caching
-            filename = file_metadata.get("name", file_id) if file_metadata else file_id
-            cache_path = self.cache_manager._get_cache_path(
-                bucket_id, file_id, filename
-            )
 
             # Save to cache atomically (C-288, the pattern of `disk_cache._write_meta`): a kill
             # mid-write leaves the previous file or none at the cache path, never a torn one that

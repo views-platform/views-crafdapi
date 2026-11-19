@@ -321,12 +321,12 @@ class DatasetService:
             self._identity_ok(category, cache, wire_identity,
                               manifest_doc is not _MANIFEST_UNFETCHED) and
             self._legacy_identity_ok(category, cache, latest_legacy_id)):
-            logger.debug(f"In-memory cache hit for {api_key_hash}/{category}")
+            logger.debug(f"In-memory cache hit for {category}")
             try:
                 staleness = self._check_staleness(cache["timestamp"])
                 if staleness.is_stale:
                     logger.warning(
-                        f"Stale {category} prediction for {api_key_hash}: "
+                        f"Stale {category} prediction: "
                         f"{staleness.age_hours:.1f}h old (threshold: {staleness.threshold_hours}h)"
                     )
             except Exception as e:
@@ -406,7 +406,7 @@ class DatasetService:
                 return dataset.copy()
 
         # Need to download from remote
-        logger.info(f"Refreshing latest {category} dataframe cache for API key: {api_key_hash}")
+        logger.info(f"Refreshing latest {category} dataframe cache")
         if category == "forecast":
             # C-282 (#170): from here nothing is served until a branch below succeeds, so a 503,
             # a 401 or a 500 leaves no entry naming a forecast this request did not serve.

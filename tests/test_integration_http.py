@@ -14,11 +14,12 @@ Run explicitly:
 """
 
 import os
-import tempfile
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from tests.conftest import new_tmp_file
+
 
 # All 9 vars required (not 6 like test_integration_appwrite_write.py) because
 # the HTTP path calls _validate_appwrite_env() which demands all 8 + we need
@@ -123,7 +124,7 @@ def test_forecast_file(prediction_manager, file_manager, bucket_id):
     from tests.conftest import make_fao_df
 
     df = make_fao_df(n_cells=4, n_months=2, n_samples=10)
-    tmp = Path(tempfile.mktemp(suffix=".parquet"))
+    tmp = Path(new_tmp_file(".parquet"))
     df.to_parquet(tmp)
     file_id = None
     try:

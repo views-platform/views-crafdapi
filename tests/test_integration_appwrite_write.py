@@ -21,6 +21,8 @@ from uuid import uuid4
 
 import pandas as pd
 import pytest
+from tests.conftest import new_tmp_file
+
 
 REQUIRED_ENV_VARS = [
     "APPWRITE_ENDPOINT",
@@ -149,7 +151,7 @@ class TestWriteReadRoundTrip:
         known_content = b"Tier-B round-trip probe: " + uuid4().bytes
         file_id = None
 
-        tmp = Path(tempfile.mktemp(suffix=".bin"))
+        tmp = Path(new_tmp_file(".bin"))
         tmp.write_bytes(known_content)
         try:
             upload = file_manager.upload_file(bucket_id, str(tmp))
@@ -171,7 +173,7 @@ class TestWriteReadRoundTrip:
         from tests.conftest import make_fao_df
 
         df_original = make_fao_df(n_cells=2, n_months=1, n_samples=5)
-        tmp = Path(tempfile.mktemp(suffix=".parquet"))
+        tmp = Path(new_tmp_file(".parquet"))
         df_original.to_parquet(tmp)
         file_id = None
 
@@ -203,7 +205,7 @@ class TestUploadWithMetadata:
     def test_upload_creates_file_and_metadata_document(self, file_manager, bucket_id):
         content = b"metadata probe " + uuid4().bytes
         filename = _unique_filename("meta")
-        tmp = Path(tempfile.mktemp(suffix=".bin"))
+        tmp = Path(new_tmp_file(".bin"))
         tmp.write_bytes(content)
         file_id = None
 
@@ -230,7 +232,7 @@ class TestUploadWithMetadata:
     def test_hash_dedup_returns_metadata_updated(self, file_manager, bucket_id):
         content = b"dedup probe " + uuid4().bytes
         filename = _unique_filename("dedup")
-        tmp = Path(tempfile.mktemp(suffix=".bin"))
+        tmp = Path(new_tmp_file(".bin"))
         tmp.write_bytes(content)
         file_id = None
 
@@ -262,7 +264,7 @@ class TestUploadWithMetadata:
     def test_orphan_cleanup_re_uploads_after_stale_metadata(self, file_manager, bucket_id):
         content = b"orphan probe " + uuid4().bytes
         filename = _unique_filename("orphan")
-        tmp = Path(tempfile.mktemp(suffix=".bin"))
+        tmp = Path(new_tmp_file(".bin"))
         tmp.write_bytes(content)
         file_id = None
         second_file_id = None
@@ -358,7 +360,7 @@ class TestADR018NormalizationLive:
 
     def test_upload_result_data_is_dict(self, file_manager, bucket_id):
         content = b"adr018 probe " + uuid4().bytes
-        tmp = Path(tempfile.mktemp(suffix=".bin"))
+        tmp = Path(new_tmp_file(".bin"))
         tmp.write_bytes(content)
         file_id = None
 
@@ -388,7 +390,7 @@ class TestPredictionManagerMutations:
         from tests.conftest import make_fao_df
 
         df = make_fao_df(n_cells=2, n_months=1, n_samples=5)
-        tmp = Path(tempfile.mktemp(suffix=".parquet"))
+        tmp = Path(new_tmp_file(".parquet"))
         df.to_parquet(tmp)
         file_id = None
 
@@ -422,7 +424,7 @@ class TestPredictionManagerMutations:
         from tests.conftest import make_fao_df
 
         df = make_fao_df(n_cells=2, n_months=1, n_samples=5)
-        tmp = Path(tempfile.mktemp(suffix=".parquet"))
+        tmp = Path(new_tmp_file(".parquet"))
         df.to_parquet(tmp)
         file_id = None
 

@@ -1,3 +1,5 @@
+import tempfile
+import os
 import io
 
 import numpy as np
@@ -97,3 +99,14 @@ def parquet_bytes():
     buf = io.BytesIO()
     df.to_parquet(buf)
     return buf.getvalue()
+
+
+def new_tmp_file(suffix: str) -> str:
+    """A new, empty temporary file, created safely; the caller deletes it.
+
+    Not ``tempfile.mktemp``, which returns a name without creating the file, so another process
+    could create it first (#218, CodeQL py/insecure-temporary-file).
+    """
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    return path

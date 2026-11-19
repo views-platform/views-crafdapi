@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
@@ -19,6 +18,8 @@ from typing import Any, Dict, List
 import numpy as np
 import pandas as pd
 from views_frames.io import arrow
+from tests.conftest import new_tmp_file
+
 
 _TARGET = "lr_ged_sb"
 _TIME_ID = 543
@@ -86,7 +87,7 @@ def make_wire_run(
         ),
         "sharding": {"scheme": "per_month", "index": 0, "count": 1},
     }
-    tmp = Path(tempfile.mktemp(suffix=".arrow.parquet"))
+    tmp = Path(new_tmp_file(".arrow.parquet"))
     arrow.save(tmp, values=values, time=time, unit=units, level="pgm", metadata=header)
     shard_bytes = tmp.read_bytes()
     tmp.unlink()
@@ -224,7 +225,7 @@ def make_multi_shard_run(
                 "provenance": {"ensemble": "fixture_ensemble", "pipeline_core_version": "0.0.0", "reconciled": False},
                 "sharding": {"scheme": "per_month", "index": months.index(month), "count": len(months)},
             }
-            tmp = Path(tempfile.mktemp(suffix=".arrow.parquet"))
+            tmp = Path(new_tmp_file(".arrow.parquet"))
             arrow.save(tmp, values=vals, time=time, unit=units, level="pgm", metadata=header)
             b = tmp.read_bytes()
             tmp.unlink()

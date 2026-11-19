@@ -1,7 +1,6 @@
 """S2 (#204): wire_reader builds a servable ForecastDataset from a manifested run."""
 
 import os
-import tempfile
 
 import numpy as np
 import pytest
@@ -9,6 +8,8 @@ import pytest
 from views_crafdapi.forecast.ingestion import wire_reader
 
 from ._wire_fixtures import make_wire_run
+from tests.conftest import new_tmp_file
+
 
 pytestmark = pytest.mark.layer2_data
 
@@ -169,7 +170,7 @@ def test_target_raggedness_zero_filled():
         vals = np.ones((len(units_), s), dtype=np.float32) * (7.0 if target == "lr_ged_sb" else 9.0)
         header = {"contract_version": "1.5", "sample_count": s, "target": target, "time_id": month,
                   "id_semantics": {"time": "views_month_id", "unit": "priogrid_id"}}
-        p = tempfile.mktemp(suffix=".parquet")
+        p = new_tmp_file(".parquet")
         arrow.save(p, values=vals, time=np.full(len(units_), month, dtype=np.int64), unit=units_, level="pgm", metadata=header)
         b = open(p, "rb").read()
         os.unlink(p)
@@ -252,7 +253,7 @@ def test_sample_count_header_mismatch_raises():
     unit = np.arange(100001, 100001 + n, dtype=np.int64)
     header = {"contract_version": "1.5", "sample_count": 99, "target": "lr_ged_sb", "time_id": 543,
               "id_semantics": {"time": "views_month_id", "unit": "priogrid_id"}}  # sample_count LIES
-    p = tempfile.mktemp(suffix=".parquet")
+    p = new_tmp_file(".parquet")
     arrow.save(p, values=values, time=time, unit=unit, level="pgm", metadata=header)
     data = open(p, "rb").read()
     os.unlink(p)

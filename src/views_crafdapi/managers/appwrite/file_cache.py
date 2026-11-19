@@ -16,6 +16,14 @@ from .results import OperationResult
 logger = logging.getLogger(__name__)
 
 
+def _single_path_part(name: str) -> str:
+    """The last part of a name, refusing one that is empty or points to a folder (#216)."""
+    part = Path(str(name)).name
+    if part in ("", ".", ".."):
+        raise ValueError(f"not usable as a file name in the cache: {name!r}")
+    return part
+
+
 class CacheValidationResult(Enum):
     VALID = "valid"
     INVALID_TTL = "invalid_ttl"
@@ -28,7 +36,7 @@ class CacheValidationResult(Enum):
 class CacheMetadata:
     bucket_id: str
     file_id: str
-    path: str
+    path: str  # recorded for inspection only; never read (#216: the path is derived from the ids)
     cached_at: str
     # C-288 (#169): the size of a whole copy. Recorded once, from a file that `download_file` has
     # just written atomically and checked against the store's `sizeOriginal`, so a later read
@@ -41,6 +49,7 @@ class CacheMetadata:
 class CacheManager:
     def __init__(self, cache_dir: Path, cache_ttl: timedelta):
         self.cache_dir = cache_dir
+        self._root = Path(cache_dir).resolve()
         self.cache_ttl = cache_ttl
         self.cache_metadata_file = cache_dir / "cache_metadata.json"
         self.cache_metadata: Dict[str, CacheMetadata] = {}
@@ -69,15 +78,28 @@ class CacheManager:
     def _get_cache_key(self, bucket_id: str, file_id: str) -> str:
         return f"{bucket_id}_{file_id}"
 
-    def _get_cache_path(
-        self, bucket_id: str, file_id: str, filename: str = None
-    ) -> Path:
-        bucket_cache_dir = self.cache_dir / bucket_id
-        bucket_cache_dir.mkdir(exist_ok=True)
+    def _get_cache_path(self, bucket_id: str, file_id: str) -> Path:
+        """Where a downloaded file is cached: ``<cache folder>/<bucket id>/<file id>`` (#216).
 
-        if filename:
-            return bucket_cache_dir / filename
-        return bucket_cache_dir / file_id
+        Only the ids are used, never the file's name in the store: the store accepts any name, and
+        a name such as ``../../x`` or ``/etc/x`` would put the file outside the cache folder. The
+        file id is also unique, where two names can be the same. The result is checked to be
+        inside the cache folder.
+        """
+        path = (self._root / _single_path_part(bucket_id) / _single_path_part(file_id)).resolve()
+        if not path.is_relative_to(self._root):
+            raise ValueError(f"cache path for {file_id!r} falls outside the cache folder")
+        path.parent.mkdir(exist_ok=True)
+        return path
+
+    def _cached_path(self, metadata: "CacheMetadata") -> Optional[Path]:
+        """The cache file for an entry, derived from its ids, never from the stored path (#216)."""
+        try:
+            return self._get_cache_path(metadata.bucket_id, metadata.file_id)
+        except ValueError as e:
+            logger.warning("Cache entry %s/%s cannot be used: %s", metadata.bucket_id,
+                           metadata.file_id, e)
+            return None
 
     def validate_cache(
         self, bucket_id: str, file_id: str, remote_updated_at: str = None
@@ -88,7 +110,9 @@ class CacheManager:
             return CacheValidationResult.NOT_FOUND
 
         metadata = self.cache_metadata[cache_key]
-        cache_path = Path(metadata.path)
+        cache_path = self._cached_path(metadata)
+        if cache_path is None:
+            return CacheValidationResult.NOT_FOUND
 
         size = self._size_on_disk(cache_path)
         if size is None:
@@ -148,8 +172,8 @@ class CacheManager:
         cache_key = self._get_cache_key(bucket_id, file_id)
 
         if cache_key in self.cache_metadata:
-            cache_path = Path(self.cache_metadata[cache_key].path)
-            if cache_path.exists():
+            cache_path = self._cached_path(self.cache_metadata[cache_key])
+            if cache_path is not None and cache_path.exists():
                 try:
                     cache_path.unlink()
                 except OSError as e:
@@ -167,7 +191,11 @@ class CacheManager:
             )
 
         metadata = self.cache_metadata[cache_key]
-        cache_path = Path(metadata.path)
+        cache_path = self._cached_path(metadata)
+        if cache_path is None:
+            return OperationResult(
+                success=False, error="File not in cache", code="NOT_CACHED"
+            )
         size = self._size_on_disk(cache_path)
         if size is None:
             return OperationResult(
@@ -211,8 +239,8 @@ class CacheManager:
             should_delete = True
 
             if should_delete:
-                cache_path = Path(metadata.path)
-                if cache_path.exists():
+                cache_path = self._cached_path(metadata)
+                if cache_path is not None and cache_path.exists():
                     try:
                         size = cache_path.stat().st_size
                         cache_path.unlink()

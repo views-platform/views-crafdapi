@@ -182,9 +182,9 @@ class CrafdDiskCacheManager:
                 cached_version = meta.get("schema_version")
                 if cached_version != CACHE_SCHEMA_VERSION:
                     logger.warning(
-                        "Disk cache schema version mismatch for %s/%s: "
+                        "Disk cache schema version mismatch for %s: "
                         "expected %s, found %s. Invalidating.",
-                        api_key_hash, category,
+                        category,
                         CACHE_SCHEMA_VERSION, cached_version,
                     )
                     self._cleanup(value_dir, meta_path)
@@ -193,9 +193,9 @@ class CrafdDiskCacheManager:
                 cache_age = time.time() - meta.get("timestamp", 0)
                 if enforce_ttl and cache_age > self._ttl_seconds:
                     logger.info(
-                        "Disk cache expired for %s/%s (age: %.1f days); kept for the "
+                        "Disk cache expired for %s (age: %.1f days); kept for the "
                         "SLA-bounded last-good fallback",
-                        api_key_hash, category, cache_age / 86400,
+                        category, cache_age / 86400,
                     )
                     return None
 
@@ -220,15 +220,15 @@ class CrafdDiskCacheManager:
                 dataset.validate_metadata_plausibility()
             except ValueError as e:
                 logger.error(
-                    "Disk cache slot %s/%s fails the C-72 plausibility gate; refusing it "
+                    "Disk cache slot %s fails the C-72 plausibility gate; refusing it "
                     "(kept for inspection): %s",
-                    api_key_hash, category, e,
+                    category, e,
                 )
                 return None
 
             logger.info(
-                "Disk cache hit for %s/%s (file_id: %s, age: %.1f days)",
-                api_key_hash, category,
+                "Disk cache hit for %s (file_id: %s, age: %.1f days)",
+                category,
                 meta.get("file_id"), cache_age / 86400,
             )
             return {
@@ -242,15 +242,15 @@ class CrafdDiskCacheManager:
                 "written_by": meta.get("written_by"),
             }
         except filelock.Timeout:
-            logger.warning("Disk cache lock for %s/%s held by another worker; treating as a miss",
-                           api_key_hash, category)
+            logger.warning("Disk cache lock for %s held by another worker; treating as a miss",
+                           category)
             return None
         except Exception as e:
             # A slot that exists but cannot be loaded (corrupt, or an old-schema geo table, C-261)
             # is a miss: the normal tier rebuilds from source; the last-good fallback answers 503.
             # Logged at error with the traceback: it is never expected.
-            logger.error("Disk cache slot %s/%s is unloadable, treating as a miss: %s",
-                         api_key_hash, category, e, exc_info=True)
+            logger.error("Disk cache slot %s is unloadable, treating as a miss: %s",
+                         category, e, exc_info=True)
             return None
 
     def write(self, api_key_hash: str, category: str, dataset: "ForecastDataset", file_id: str,
@@ -298,8 +298,8 @@ class CrafdDiskCacheManager:
                 self._write_meta(meta_path, meta)
 
                 logger.info(
-                    "Wrote disk cache for %s/%s (file_id: %s, rows: %d)",
-                    api_key_hash, category, file_id, len(dataset.dataframe),
+                    "Wrote disk cache for %s (file_id: %s, rows: %d)",
+                    category, file_id, len(dataset.dataframe),
                 )
                 return True
         except Exception as e:
@@ -351,8 +351,8 @@ class CrafdDiskCacheManager:
                 }
                 self._write_meta(meta_path, meta)
                 logger.info(
-                    "Adopted disk cache value-dir for %s/%s (file_id: %s, rows: %d)",
-                    api_key_hash, category, file_id, rows,
+                    "Adopted disk cache value-dir for %s (file_id: %s, rows: %d)",
+                    category, file_id, rows,
                 )
                 return True
         except Exception as e:
