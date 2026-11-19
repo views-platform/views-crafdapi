@@ -1,6 +1,8 @@
 # ADR-026: API Surface and Resource Model
 
-**Status:** Accepted
+**Status:** Superseded (2026-11-18) by the service specification, `docs/SERVICE_SPECIFICATION.md` (bulk files and slices). The code still serves the routes described here until #203, #206 and #207 are done.
+
+> Earlier status: Accepted
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** ADR-024 (raw-count serving), ADR-025 (output schema & naming), ADR-022 (deployment strategy), ADR-008 (observability & explicit failure), ADR-018 (SDK response normalization), the live route table in `src/views_crafdapi/managers/api.py`

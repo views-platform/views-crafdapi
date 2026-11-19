@@ -1,6 +1,8 @@
 # ADR-027: Authentication and Per-API-Key Isolation
 
-**Status:** Accepted — amended 2026-10-16 (§4: what revocation does and does not reach, #159)
+**Status:** Amended (2026-11-18). §2–§3 (a separate copy of the data per key) are superseded: every partner sees the same forecast (service specification; ADR-040), and the per-key copies go with #208. §1 (the caller's key is passed to Appwrite) stays true until #208 decides whether the server has a key of its own.
+
+> Earlier status: Accepted — amended 2026-10-16 (§4: what revocation does and does not reach, #159)
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** ADR-026 (API surface), ADR-011 (caching strategy), ADR-013 (environment-variable validation), ADR-016 (concurrency safety), ADR-009 (boundary contracts), the live auth path in `src/views_crafdapi/managers/api.py` + `managers/appwrite/`
