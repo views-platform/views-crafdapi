@@ -158,3 +158,48 @@ def test_the_disk_cache_logs_no_key_fingerprint(tmp_path, caplog):
         cache.read(fingerprint, "forecast")
     assert caplog.records, "the check must see some log lines"
     assert fingerprint not in caplog.text
+
+
+def test_a_sibling_folder_sharing_the_prefix_is_outside(tmp_path):
+    """/cache2/x starts with the text "/cache" but is not inside /cache."""
+    root = tmp_path / "cache"
+    root.mkdir()
+    sibling = tmp_path / "cache2"
+    sibling.mkdir()
+    (root / "b").symlink_to(sibling, target_is_directory=True)
+    cache = CacheManager(cache_dir=root, cache_ttl=timedelta(hours=1))
+    with pytest.raises(ValueError):
+        cache._get_cache_path("b", "f1")
+
+
+def test_a_cache_folder_at_the_filesystem_root_still_works():
+    """Runs __init__ for real: the prefix for "/" must be "/", not "//"."""
+    cache = CacheManager(cache_dir=Path("/"), cache_ttl=timedelta(hours=1))
+    assert cache._get_cache_path("b", "f1") == Path("/b/f1")
+
+
+def test_a_cache_folder_reached_through_a_link_still_works(tmp_path):
+    real = tmp_path / "real_cache"
+    real.mkdir()
+    link = tmp_path / "link_cache"
+    link.symlink_to(real, target_is_directory=True)
+    cache = CacheManager(cache_dir=link, cache_ttl=timedelta(hours=1))
+    assert cache._get_cache_path("b", "f1") == real.resolve() / "b" / "f1"
+
+
+def test_a_bucket_id_with_folders_keeps_only_its_last_part(cache):
+    path = cache._get_cache_path("a/b", "f1")
+    assert path == Path(cache.cache_dir).resolve() / "b" / "f1"
+
+
+def test_a_lookup_creates_no_folder(cache):
+    cache._get_cache_path("never-downloaded", "f1")
+    assert not (Path(cache.cache_dir) / "never-downloaded").exists()
+
+
+def test_a_cached_file_that_is_a_link_is_returned_as_the_link(cache):
+    bucket = Path(cache.cache_dir) / "b"
+    bucket.mkdir()
+    (bucket / "f2").write_bytes(b"x")
+    (bucket / "f1").symlink_to(bucket / "f2")
+    assert cache._get_cache_path("b", "f1") == bucket.resolve() / "f1"

@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from enum import Enum
 import json
+import os
 import logging
 
 
@@ -50,6 +51,8 @@ class CacheManager:
     def __init__(self, cache_dir: Path, cache_ttl: timedelta):
         self.cache_dir = cache_dir
         self._root = Path(cache_dir).resolve()
+        # "<root>/" — what every cache path must start with; correct for a root of "/" too.
+        self._root_prefix = os.path.join(str(self._root), "")
         self.cache_ttl = cache_ttl
         self.cache_metadata_file = cache_dir / "cache_metadata.json"
         self.cache_metadata: Dict[str, CacheMetadata] = {}
@@ -84,13 +87,19 @@ class CacheManager:
         Only the ids are used, never the file's name in the store: the store accepts any name, and
         a name such as ``../../x`` or ``/etc/x`` would put the file outside the cache folder. The
         file id is also unique, where two names can be the same. The result is checked to be
-        inside the cache folder.
+        inside the cache folder. It only computes the path; the download creates the folder.
+
+        Not covered: a process that can already write inside the cache folder could swap the bucket
+        folder for a link between this check and the write. Only the service account can write
+        there.
         """
-        path = (self._root / _single_path_part(bucket_id) / _single_path_part(file_id)).resolve()
-        if not path.is_relative_to(self._root):
+        # os.path.realpath + a prefix check: the form CodeQL recognises as a path guard. Only the
+        # bucket folder is resolved; the file part is a single name, so a cached file that is
+        # itself a link is returned as the link, never as its target.
+        bucket_dir = os.path.realpath(os.path.join(self._root, _single_path_part(bucket_id)))
+        if not os.path.join(bucket_dir, "").startswith(self._root_prefix):
             raise ValueError(f"cache path for {file_id!r} falls outside the cache folder")
-        path.parent.mkdir(exist_ok=True)
-        return path
+        return Path(bucket_dir) / _single_path_part(file_id)
 
     def _cached_path(self, metadata: "CacheMetadata") -> Optional[Path]:
         """The cache file for an entry, derived from its ids, never from the stored path (#216)."""

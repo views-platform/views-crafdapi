@@ -860,6 +860,7 @@ class AppWriteFileManager:
             # Save to cache atomically (C-288, the pattern of `disk_cache._write_meta`): a kill
             # mid-write leaves the previous file or none at the cache path, never a torn one that
             # the next read would trust.
+            cache_path.parent.mkdir(exist_ok=True)
             tmp = cache_path.with_name(f"{cache_path.name}.tmp-{uuid.uuid4().hex}")
             try:
                 with open(tmp, "wb") as f:
