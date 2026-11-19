@@ -112,8 +112,9 @@ class TestBootstrap:
     def test_deploy_key_is_read_only_by_instruction(self):
         assert "READ-ONLY deploy key" in _BOOTSTRAP
 
-    def test_preserves_the_legacy_unit_as_rollback(self):
-        assert "views-crafdapi-legacy.service" in _BOOTSTRAP
+    def test_requires_an_explicit_release_tag(self):
+        assert 'RELEASE_TAG="${RELEASE_TAG:-}"' in _BOOTSTRAP
+        assert "v0.1.0" not in _BOOTSTRAP
 
     # þing-01 #275 / PLATFORM-001 D2: the credential origin moved off the laptop `.env`.
     def test_credentials_no_longer_copied_from_a_personal_env(self):

@@ -115,24 +115,35 @@ Bitwarden.
 1. **The domain.** Ask the administrator of `viewsforecasting.org` to point the `A` record for
    `crafdapi.viewsforecasting.org` at the new server's IP address. Check with
    `dig +short crafdapi.viewsforecasting.org`.
-2. **The service account.** From your laptop, copy the setup script over:
+2. **The service account.** From your laptop, copy the setup script and the views-appwrite
+   registry over (the registry holds the Appwrite project, bucket and table ids):
    ```bash
    scp deployment/bootstrap.sh <you>@<server>:/tmp/crafd-bootstrap.sh
+   ```
+   ```bash
+   scp ../views-appwrite/docs/ADRs/platform/coordinate_registry.toml <you>@<server>:/tmp/coordinate_registry.toml
    ```
    Then, **ON THE BOX**, run `bash /tmp/crafd-bootstrap.sh part1`. It prints a public key.
 3. **The deploy key.** On GitHub, open views-crafdapi → Settings → Deploy keys → Add deploy key.
    Paste the printed key. Leave "write access" unticked.
 4. **The code and credentials.** **ON THE BOX**, put our reader key in the environment (the line
-   prompts; paste it alone), then build. The setup script reads the Appwrite coordinates from the
-   views-appwrite registry and refuses to run without the key.
+   prompts; paste it alone), then build. The setup script reads the registry from step 2 and
+   refuses to run without the key. Then remove the key from your shell.
    ```bash
    read -rsp "reader key: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
    ```
    ```bash
    RELEASE_TAG=vX.Y.Z bash /tmp/crafd-bootstrap.sh part2
    ```
+   ```bash
+   unset APPWRITE_DATASTORE_API_KEY
+   ```
 5. **The service.** `bash /tmp/crafd-bootstrap.sh part3` installs it. It does not start it yet.
-6. **nginx.** Create `/etc/nginx/sites-available/crafdapi`:
+6. **nginx.** Install nginx and certbot:
+   ```bash
+   sudo apt install -y nginx certbot python3-certbot-nginx
+   ```
+   Then create `/etc/nginx/sites-available/crafdapi`:
    ```nginx
    server {
        server_name crafdapi.viewsforecasting.org;
@@ -151,7 +162,8 @@ Bitwarden.
    ```bash
    sudo nginx -t && sudo systemctl reload nginx
    ```
-7. **The certificate,** only once step 1 works. certbot also sets up its own renewal:
+7. **The certificate,** only once step 1 works, and the server's firewall lets in ports 80 and
+   443. certbot also sets up its own renewal:
    ```bash
    sudo certbot --nginx -d crafdapi.viewsforecasting.org
    ```
