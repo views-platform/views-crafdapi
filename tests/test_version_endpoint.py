@@ -67,11 +67,6 @@ def test_version_endpoint_unauth(client, tmp_path, monkeypatch):
     assert body["deployed_tag"] is None
 
 
-def test_version_discoverable_from_root(client):
-    body = client.get("/").json()
-    assert body["endpoints"].get("version") == "/version"
-
-
 def test_version_exposes_served_contract_capability(client, tmp_path, monkeypatch):
     """S5 (#250, ADR-033 §7, C-171): /version exposes the wire-contract dialect this build renders,
     so deploy/serve capability skew (a producer delivering a dialect the deploy lags) is remotely

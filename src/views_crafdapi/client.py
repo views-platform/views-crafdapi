@@ -178,15 +178,3 @@ class CrafdApiClient:
 
         payload = self._get_json(f"{level}/analysis/{data_type}/hdi-map", params=params)
         return pd.DataFrame.from_records(payload["data"]["hdi_map"])
-
-    def provenance(self, category: str = "forecast") -> dict:
-        """Return the provenance/lineage of the latest *served* artifact for ``category``.
-
-        Wraps ``GET /provenance/{category}``: the run id / filename, creation time, methodology
-        version, and (for forecasts) the freshness verdict, served mode and
-        serving state —
-        everything needed to record *which forecast run produced a number or figure*.
-        """
-        if category not in ("historical", "forecast"):
-            raise ValueError(f"category must be 'historical' or 'forecast', got {category!r}")
-        return self._get_json(f"provenance/{category}")["data"]

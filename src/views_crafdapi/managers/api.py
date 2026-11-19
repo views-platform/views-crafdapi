@@ -4,7 +4,6 @@ import pandas as pd
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from pathlib import Path
-import io
 import os
 import shutil
 import tempfile
@@ -16,7 +15,7 @@ from views_crafdapi.managers.dataset_service import (
     DatasetService,
     refuse_if_unauthorized,
 )
-from views_crafdapi.managers.prediction import MetadataLookupError, PredictionStoreManager
+from views_crafdapi.managers.prediction import PredictionStoreManager
 from views_crafdapi.managers import freshness
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.version import version_info
@@ -24,7 +23,7 @@ from views_crafdapi.seam_contract import CONSUMER_DOCUMENT_NAME
 from views_crafdapi.managers.serialization import estimate_records_bytes
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from contextlib import asynccontextmanager
 import uvicorn
@@ -102,7 +101,8 @@ def _too_large_detail(category: str, n_rows: int, estimated: int, budget: int) -
 
     Prose, and separate from the serving path for that reason. The two categories need
     genuinely different advice rather than one message with a substituted noun: forecast has a
-    single-call parquet route, historical does not and has to be fetched as a stored file.
+    single-call parquet route; historical has none yet, so its only way through is a narrower
+    selection.
 
     A refusal that does not say what to do instead is an outage with better manners.
     """
@@ -118,11 +118,7 @@ def _too_large_detail(category: str, n_rows: int, estimated: int, budget: int) -
             "GET /data/forecast/bulk, which returns one row per admin-1 unit per month "
             "carrying every target."
         )
-    return detail + (
-        ", or fetch the complete table as a single stored file: GET /provenance/historical "
-        "for `bucket_id` and `artifact_id`, then "
-        "GET /files/{bucket_id}/{artifact_id}/download."
-    )
+    return detail + "."
 
 
 _REQUIRED_APPWRITE_ENV_VARS = [
@@ -209,7 +205,6 @@ from views_crafdapi.managers.serialization import (  # noqa: E402
 )
 from views_crafdapi.forecast.serialize.json_contract import to_consumer_columns  # noqa: E402
 from views_crafdapi.forecast.serialize.bulk_parquet import write_bulk_parquet  # noqa: E402
-from views_crafdapi.forecast import provenance as forecast_provenance  # noqa: E402
 
 class CrafdApiManager(APIManager):
     """
@@ -486,122 +481,9 @@ class CrafdApiManager(APIManager):
         """Delegate the data-fetch pipeline to the composed DatasetService (epic #144 / S2)."""
         return self._dataset_service.get_latest_dataset(manager, x_api_key, category, force_refresh)
 
-    def _forecast_lineage(self, manager: PredictionStoreManager) -> Optional[Dict[str, Any]]:
-        """The complete `/provenance/forecast` record, or ``None`` when no forecast exists.
-
-        #60: a forecast can be reported by three sources and they are not interchangeable —
-        `forecast/provenance.py` owns the precedence and the reasons. The bug this replaces
-        asked the LEGACY store first and 404'd on its silence; in a greenfield wire bucket that
-        silence is guaranteed, so a live, correctly-served run could never be reported.
-
-        Both store sources are fetched unconditionally. Gating one on the other's absence
-        silently inverts the precedence: a legacy record sitting beside a newer manifested run
-        would win, and the endpoint would name an artifact this build refuses to serve
-        (S1/#264) while `/health` reports the manifest.
-        """
-        served = self._dataset_service.served_forecast_provenance()
-        # `_load_wire_run` turns a failure of this query into Refused("manifest_lookup_error");
-        # `/health` swallows any failure, since its freshness block is best-effort. A store outage
-        # must degrade the lineage answer to the legacy record fetched below, not 500 the
-        # endpoint an operator is using to diagnose that very incident. Only a store failure:
-        # a config error or a bug propagates, as in `DatasetService` (ADR-033 §6a).
-        lookup_failed = None
-        try:
-            manifest = manager.get_latest_manifest_provenance()
-        except MetadataLookupError as e:
-            refuse_if_unauthorized(e)                                       # C-268, #159
-            logger.warning("Manifest lineage lookup failed (non-blocking): %s", e)
-            manifest, lookup_failed = None, e
-        try:
-            stored = manager.get_latest_provenance(filters={"category": "forecast"})
-        except MetadataLookupError as e:
-            refuse_if_unauthorized(e)
-            logger.warning("Stored lineage lookup failed (non-blocking): %s", e)
-            stored, lookup_failed = None, e
-        data = forecast_provenance.forecast_record(
-            served=served,
-            manifest_record=manifest.to_dict() if manifest else None,
-            stored_record=stored.to_dict() if stored else None,
-        )
-        if data is None:
-            if lookup_failed is not None:
-                # Nothing served here and the store could not be asked: "unavailable", not the
-                # 404 "no forecast exists" an empty answer would claim (C-233, #158). The
-                # store's own error text stays in the log, not the response (C-264).
-                raise HTTPException(status_code=503, detail="Metadata store unavailable")
-            return None
-        if served is None and manifest is None and lookup_failed is not None:
-            # The manifest — which outranks any stored record — could not be checked, so what
-            # is reported here may not be the forecast this build would serve (#158 review).
-            data["manifest_lookup_failed"] = True
-
-        # S3 (#246, ADR-033 §4): the freshness verdict of the served artifact.
-        data["freshness"] = freshness.forecast_freshness(
-            forecast_provenance.freshness_input(served, data),
-            self._forecast_freshness_sla_days,
-        )
-        # S4 (#249, ADR-033 §6): the bounded grace-fallback state. `degraded: True` means the
-        # newest run was refused and a last-good run is being served (or was refused past the
-        # SLA); its `reason` is surfaced as `refusal_reason`.
-        serving_state = self._dataset_service.forecast_serving_state()
-        if serving_state is not None:
-            data["serving_state"] = serving_state
-            # A refusal reason only when something was refused: serving the cached run
-            # unverified during a lookup outage is a degraded serve, not a refusal (#158).
-            if (serving_state.get("degraded") and serving_state.get("reason")
-                    and serving_state.get("serving") != "cached_unverified"):
-                data["refusal_reason"] = serving_state["reason"]
-        return data
-
     def _register_routes(self):
         """Register all API routes."""
         
-        @self.app.get("/")
-        async def root():
-            return {
-            "message": "CRAF'd Prediction API", 
-            "note": "Include 'X-API-Key' header with your Appwrite API key in all requests",
-            "endpoints": {
-                # Historical endpoints by level
-                "historical_pg_subset": "/pg/data/historical/subset",
-                "historical_country_subset": "/country/data/historical/subset",
-                "historical_gaul0_subset": "/gaul0/data/historical/subset",
-                "historical_gaul1_subset": "/gaul1/data/historical/subset",
-                "historical_gaul2_subset": "/gaul2/data/historical/subset",
-                
-                # Forecast endpoints by level
-                "forecast_bulk": "/data/forecast/bulk",
-                "forecast_pg_subset": "/pg/data/forecast/subset",
-                "forecast_country_subset": "/country/data/forecast/subset",
-                "forecast_gaul0_subset": "/gaul0/data/forecast/subset",
-                "forecast_gaul1_subset": "/gaul1/data/forecast/subset",
-                "forecast_gaul2_subset": "/gaul2/data/forecast/subset",
-                
-                # Historical HDI-MAP endpoints by level
-                "historical_pg_hdi_map": "/pg/analysis/historical/hdi-map",
-                "historical_country_hdi_map": "/country/analysis/historical/hdi-map",
-                "historical_gaul0_hdi_map": "/gaul0/analysis/historical/hdi-map",
-                "historical_gaul1_hdi_map": "/gaul1/analysis/historical/hdi-map",
-                "historical_gaul2_hdi_map": "/gaul2/analysis/historical/hdi-map",
-                
-                # Forecast HDI-MAP endpoints by level
-                "forecast_pg_hdi_map": "/pg/analysis/forecast/hdi-map",
-                "forecast_country_hdi_map": "/country/analysis/forecast/hdi-map",
-                "forecast_gaul0_hdi_map": "/gaul0/analysis/forecast/hdi-map",
-                "forecast_gaul1_hdi_map": "/gaul1/analysis/forecast/hdi-map",
-                "forecast_gaul2_hdi_map": "/gaul2/analysis/forecast/hdi-map",
-                
-                # File management endpoints
-                "files": "/files/{bucket_id}",
-                "file_download": "/files/{bucket_id}/{file_id}/download",
-                "file_info": "/files/{bucket_id}/{file_id}/info",
-                "provenance": "/provenance/{category}",
-                "health": "/health",
-                "liveness_ping": "/ping",
-                "version": "/version"
-            }
-        }
-
         @self.app.get("/ping")
         async def ping():
             """Unauthenticated liveness probe for external uptime monitors.
@@ -668,49 +550,6 @@ class CrafdApiManager(APIManager):
                 raise
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
-
-        # Provenance endpoint (C-86): expose the lineage of the currently-served artifact
-        # without fetching the (heavy) dataframe — answers "which file, from which upstream
-        # source/pipeline, is live right now?" so a silent source switch is auditable.
-        @self.app.get("/provenance/{category}")
-        async def get_provenance(
-            category: str,
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: PredictionStoreManager = Depends(self._get_prediction_manager)
-        ):
-            """Return the provenance/lineage record for the latest artifact of `category`."""
-            if category not in ("forecast", "historical"):
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Invalid category: {category}. Expected 'forecast' or 'historical'."
-                )
-            try:
-                if category == "forecast":
-                    data = self._forecast_lineage(manager)
-                else:
-                    try:
-                        provenance = manager.get_latest_provenance(filters={"category": category})
-                    except MetadataLookupError as e:
-                        refuse_if_unauthorized(e)                               # C-268, #159
-                        logger.warning("Historical lineage lookup failed: %s", e)
-                        raise HTTPException(
-                            status_code=503, detail="Metadata store unavailable"
-                        ) from e
-                    data = provenance.to_dict() if provenance else None
-
-                if data is None:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"No {category} prediction files found in the bucket: {self._prediction_bucket_id}"
-                    )
-                return {"success": True, "data": data}
-            except HTTPException:
-                raise
-            except Exception as e:
-                # A bug or a config error, not a store outage (those are 503 above). Its text is
-                # for the operator's log, not the response (C-264).
-                logger.exception("%s provenance failed", category)
-                raise HTTPException(status_code=500, detail="Provenance lookup failed") from e
 
         # Helper function for subset endpoints
         def create_subset_endpoint(category: str, level: Optional[str] = None):
@@ -943,159 +782,6 @@ class CrafdApiManager(APIManager):
                 methods=["GET"],
                 name=f"calculate_forecast_hdi_map_{route_prefix}"
             )
-
-        # File management endpoints (unchanged)
-        @self.app.get("/files/{bucket_id}")
-        async def list_files(
-            bucket_id: str,
-            limit: int = Query(100, ge=1, le=1000),
-            offset: int = Query(0, ge=0),
-            search: Optional[str] = None,
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: AppWriteFileManager = Depends(self._get_appwrite_manager)
-        ):
-            """List all files in a bucket with pagination."""
-            try:
-                queries = []
-                if search:
-                    queries.append(f"search('name','{search}')")
-                
-                result = manager.list_files(
-                    bucket_id=bucket_id,
-                    queries=queries,
-                    limit=limit,
-                    offset=offset
-                )
-                
-                if not result.success:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Error listing files: {result.error or 'Unknown error'}"
-                    )
-                
-                data = result.data if isinstance(result.data, dict) else {}
-                return {
-                    "bucket_id": bucket_id,
-                    "files": data.get("files", []),
-                    "total": data.get("total", 0),
-                    "pagination": {
-                        "limit": limit,
-                        "offset": offset
-                    }
-                }
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.get("/files/{bucket_id}/{file_id}/info")
-        async def get_file_info(
-            bucket_id: str,
-            file_id: str,
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: AppWriteFileManager = Depends(self._get_appwrite_manager)
-        ):
-            """Get file metadata without downloading the file."""
-            try:
-                result = manager.get_file(bucket_id, file_id)
-                
-                if not result.success and result.status in (401, 403):
-                    # A refused key is 401, not a missing file (ADR-027 §4, #159).
-                    raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
-                if not result.success:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"File not found: {result.error or 'Unknown error'}"
-                    )
-                
-                return {
-                    "file_id": file_id,
-                    "bucket_id": bucket_id,
-                    "metadata": result.data
-                }
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.get("/files/{bucket_id}/{file_id}/download")
-        async def download_file(
-            bucket_id: str,
-            file_id: str,
-            use_cache: bool = Query(True, description="Use cached version if available"),
-            download: bool = Query(False, description="Force file download with attachment header"),
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: AppWriteFileManager = Depends(self._get_appwrite_manager)
-        ):
-            """Download a file from Appwrite storage."""
-            try:
-                file_info = manager.get_file(bucket_id, file_id)
-                if not file_info.success and file_info.status in (401, 403):
-                    # A refused key is 401, not a missing file (ADR-027 §4, #159).
-                    raise HTTPException(status_code=401, detail=UNAUTHORIZED_DETAIL)
-                if not file_info.success:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"File not found: {file_info.error or 'Unknown error'}"
-                    )
-                
-                metadata = file_info.data if isinstance(file_info.data, dict) else {}
-                filename = metadata.get('name', file_id)
-                
-                result = manager.download_file(
-                    bucket_id=bucket_id,
-                    file_id=file_id,
-                    use_cache=use_cache
-                )
-
-                # C-288 (#169): the store's body was cut short — an upstream fault, not ours.
-                if result.code == "DOWNLOAD_INCOMPLETE":
-                    raise HTTPException(status_code=502, detail=result.error)
-                if not result.success:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"Download failed: {result.error or 'Unknown error'}"
-                    )
-                
-                media_type = "application/octet-stream"
-                file_extension = os.path.splitext(filename)[1].lower()
-                extension_to_media_type = {
-                    '.pdf': 'application/pdf',
-                    '.jpg': 'image/jpeg',
-                    '.jpeg': 'image/jpeg',
-                    '.png': 'image/png',
-                    '.gif': 'image/gif',
-                    '.txt': 'text/plain',
-                    '.json': 'application/json',
-                    '.zip': 'application/zip',
-                }
-                media_type = extension_to_media_type.get(file_extension, "application/octet-stream")
-                
-                dl_data = result.data if isinstance(result.data, dict) else {}
-                file_bytes = dl_data.get("file_bytes")
-
-                if download:
-                    return StreamingResponse(
-                        io.BytesIO(file_bytes),
-                        media_type=media_type,
-                        headers={"Content-Disposition": f"attachment; filename={filename}"}
-                    )
-                else:
-                    return StreamingResponse(
-                        io.BytesIO(file_bytes),
-                        media_type=media_type,
-                        headers={"Content-Disposition": f"inline; filename={filename}"}
-                    )
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e))
-
-        # No `/files/{b}/{f}/cached`, `/cache/stats` or `DELETE /cache` (removed 2026-11-11, C-269):
-        # the file cache is shared by every key, so `/cached` answered a revoked key and served
-        # one key's cached files to another, and the other two read or emptied every caller's
-        # cache. `/download` asks the store with the caller's key first, then uses the cache, and
-        # `/health` no longer reports the shared cache's contents.
 
         @self.app.get("/health")
         async def health_check(

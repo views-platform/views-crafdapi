@@ -328,11 +328,10 @@ jobs:
           The monthly delivery is done from views-models, not from here. Most likely this month's
           delivery was not run. Ask views-models; crafdapi itself needs nothing.
 
-          Start there, then check what is actually live:
+          Start there, then check how old the served forecast is (`forecast_freshness.created_at`):
 
           \`\`\`bash
-          curl -s https://crafdapi.viewsforecasting.org/health | python3 -m json.tool
-          curl -s -H "X-API-Key: \$KEY" https://crafdapi.viewsforecasting.org/provenance/forecast | python3 -m json.tool
+          curl -s -H "X-API-Key: \$KEY" https://crafdapi.viewsforecasting.org/health | python3 -m json.tool
           \`\`\`
 
           Detected by [data-freshness](${RUN_URL}). One issue is reused rather than duplicated, and

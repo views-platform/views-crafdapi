@@ -98,21 +98,16 @@ is the first month of the run live at the time of writing (`rusty_bucket`, month
 **If a later run has superseded it, that month is outside the window and every forecast cell
 returns an empty frame.** Both notebooks now open with a preflight cell that catches this and
 tells you what to change; without it the failure surfaces as a bare `KeyError` several cells
-later. To see the window the live run actually covers:
-
-```python
-client.provenance("forecast")     # run_id, created_at, methodology_version
-```
+later.
 
 ## Access, updates & citation
 
 - **Getting a key:** request an `APPWRITE_DATASTORE_API_KEY` from the VIEWS team
   (<https://viewsforecasting.org> / your CRAF'd–VIEWS point of contact). Base URL:
   `https://crafdapi.viewsforecasting.org`.
-- **Which run am I looking at?** Call `GET /provenance/{forecast|historical}` (or, in a notebook,
-  `client.provenance("forecast")`) — it returns the run id, creation time, and methodology version.
-  A new forecast run is published periodically and supersedes the previous one, so **record the run
-  id/vintage alongside any number or figure you cite** (forecasts are not reproducible across runs).
+- **Which forecast am I looking at?** The API serves one forecast, the latest good one. A new one
+  replaces it each month, so **record the date you fetched alongside any number or figure you
+  cite** (forecasts are not reproducible across runs).
 - **Methodology, skill & responsible use:** VIEWS (<https://viewsforecasting.org>).
 
 ## See also

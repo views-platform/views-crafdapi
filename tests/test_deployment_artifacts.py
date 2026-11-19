@@ -781,11 +781,23 @@ class TestTheJobsFixedPoints:
         GitHub user, and an unassignable login would leave every alarm unowned."""
         assert _ENV["MAINTAINER"] == "Polichinel"
 
-    def test_the_load_request_names_a_real_route_and_feature(self):
-        api = (_ROOT / "src" / "views_crafdapi" / "managers" / "api.py").read_text()
+    def test_the_load_request_names_a_real_route_and_feature(self, tmp_path):
+        from fastapi import FastAPI
+        from fastapi.routing import APIRoute
+
+        from views_crafdapi.managers.api import CrafdApiManager
+
+        mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
+        mgr.app = FastAPI()
+        mgr._register_routes()
         smoke = (_ROOT / "src" / "views_crafdapi" / "smoke.py").read_text()
         path, _, query = _ENV["LOAD_URL"].removeprefix("https://crafdapi.viewsforecasting.org").partition("?")
-        assert f'"{path}"' in api
+        assert ("GET", path) in {
+            (method, route.path)
+            for route in mgr.app.routes
+            if isinstance(route, APIRoute) and route.include_in_schema   # not FastAPI's own pages
+            for method in route.methods
+        }
         feature = dict(kv.split("=") for kv in query.split("&"))["features"]
         assert f'"{feature}"' in smoke     # the feature the smoke test reads from production
 

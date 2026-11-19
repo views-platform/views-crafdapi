@@ -113,11 +113,8 @@ Every endpoint requires `X-API-Key: <your appwrite key>`. The server validates k
 
 > **Full API reference:** see [`docs/api/README.md`](docs/api/README.md) for the consolidated endpoint catalogue, query parameters, response envelope, and examples — and the governing ADRs ([026 surface](docs/ADRs/active/026_api_surface_and_resource_model.md), [027 auth](docs/ADRs/active/027_authentication_and_per_key_isolation.md), [028 data source](docs/ADRs/active/028_terminal_consumer_boundary.md)). Interactive docs are served at `/docs` (Swagger) and `/redoc`.
 
-Root
-- GET `/` — lists endpoints and usage note
-
 Health
-- GET `/health` — checks Appwrite connectivity and cache stats
+- GET `/health` — checks the store connection and the age of the served forecast
 
 Subset (by level)
 - GET `/{pg|country|gaul1|gaul2}/data/historical/subset`
@@ -128,14 +125,10 @@ HDI-MAP (by level)
 - GET `/{pg|country|gaul1|gaul2}/analysis/forecast/hdi-map`
 
 > **Size limit.** The subset and hdi-map routes estimate the response before building it and
-> return `413` above 512 MiB, with a body naming how to narrow the request or fetch the whole
-> table instead. Filters lower the estimate; `aggregate=true` does not. Override with
+> return `413` above 512 MiB, with a body naming how to narrow the request (and, for the
+> forecast, the bulk file). Filters lower the estimate; `aggregate=true` does not. Override with
 > `CRAFDAPI_MAX_RESPONSE_BYTES`. See [docs/api/README.md](docs/api/README.md#35-response-size-limit).
 
-Files
-- GET `/files/{bucket_id}`
-- GET `/files/{bucket_id}/{file_id}/info`
-- GET `/files/{bucket_id}/{file_id}/download?download=true|false&use_cache=true|false`
 
 ## Query Parameters and Headers
 
@@ -213,12 +206,6 @@ curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/pg/data/forecast/s
 
 # Country-level aggregation for HDI/MAP
 curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/country/analysis/forecast/hdi-map?alpha=0.9&entity_ids=USA,FRA&aggregate=true"
-
-# List files in a bucket
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_CRAFD_BUCKET_ID?limit=50&search=forecast"
-
-# Download a file inline
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_CRAFD_BUCKET_ID/<file_id>/download?download=false"
 ```
 
 Python (requests)

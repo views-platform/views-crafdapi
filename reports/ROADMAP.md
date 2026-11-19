@@ -167,8 +167,7 @@ so running one first would prove the wrong thing.
 
 | check | passes when |
 |---|---|
-| `/provenance/forecast` | shows a **new** `run_id`, not `rusty_bucket_forecasting_20260727_095355` |
-| `/health` | `healthy`, `forecast_freshness.is_stale: false` |
+| `/health` | `healthy`, `forecast_freshness.is_stale: false`, and `forecast_freshness.created_at` is the new delivery's date (`/provenance` was removed, #207) |
 | `smoke.py --expect-tag <live tag>` | ALL PASS, both coverage checks included |
 | `/data/forecast/bulk` | byte count **differs from 461,991** |
 

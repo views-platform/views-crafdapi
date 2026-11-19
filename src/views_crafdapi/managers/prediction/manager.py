@@ -292,22 +292,6 @@ class PredictionStoreManager:
             return None
         return self._provenance_from(files_list[0])
 
-    def get_latest_manifest_provenance(self) -> Optional[PredictionProvenance]:
-        """#60: the lineage record of the newest *manifested wire run*, or ``None``.
-
-        `get_latest_provenance({"category": "forecast"})` cannot answer this. That query names
-        no `type`, so the §11.4 transition guard pins it to the legacy type — correctly, since
-        it exists to stop a legacy selection resolving a wire artifact. `crafd_bucket` holds no
-        legacy documents, so the pinned query matches nothing and a caller that stops there
-        concludes "no forecast" about a bucket that is serving one.
-
-        This goes through `get_latest_manifest`, whose `type` is explicit, so the guard leaves
-        it alone. Store-side and therefore worker-independent — unlike
-        `DatasetService.served_forecast_provenance()`, which is `None` until *this* worker has
-        served a forecast."""
-        doc = self.get_latest_manifest()
-        return self._provenance_from(doc) if doc else None
-
     @staticmethod
     def _provenance_from(doc: Dict[str, Any]) -> Optional[PredictionProvenance]:
         """Build the lineage record for one store document. The record shape is owned here and

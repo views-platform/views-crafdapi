@@ -1,6 +1,6 @@
 # ADR-033: Fail-Visible Forecast Selection and Serving
 
-**Status:** Active (ratified 2026-07-28, S7/#252 — against the shipped S1–S6 behaviour); amended 2026-10-16 — §6a, the composed degraded-serving policy (epic #154); amended 2026-10-17 — §6a rule 8, integrity hashes are mandatory (#166)
+**Status:** Active (ratified 2026-07-28, S7/#252 — against the shipped S1–S6 behaviour); amended 2026-10-16 — §6a, the composed degraded-serving policy (epic #154); amended 2026-10-17 — §6a rule 8, integrity hashes are mandatory (#166); amended 2026-11-20 — §5, `GET /provenance/forecast` removed (#207, service specification). `/health` still reports the freshness verdict, the serving state with its refusal reason, and the build that wrote the served forecast. No route reports the served run's id any more.
 **Deciders:** Simon (maintainer)
 **Records:** the decisions of Epic #244, from the 2026-07-27 expert-code-review of the run-0 non-serving incident (#243).
 
@@ -54,7 +54,7 @@ A configurable freshness threshold on the served artifact's age. Past it, `/heal
 When no current forecast is servable (nothing promoted per §2/§3, or the last-good is past the freshness SLA), the data endpoints return **HTTP 200 with an explicit `stale`/`unavailable` flag + machine-readable freshness metadata**, with `/health` red and an alarm; a **hard error (503)** is reserved for "no prior forecast at all." **This depends on FAO's consumption pattern and is surfaced to FAO as a decision point in Pre-Release Note 07;** it is locked on their reply. Touches the API surface — see ADR-026 amendment.
 
 **Observability surface — delivered (S3/S4/S7).** The single decision (Rationale §"one decision, many surfaces") is exposed on two endpoints, independent of the still-pending §5 *data-endpoint* HTTP-status choice:
-- **`GET /provenance/forecast`** reports the full **served** decision: `{artifact_id, mode ("wire"/"legacy"), status (producer-declared maturity), freshness (verdict vs the SLA), serving_state, refusal_reason?}`. It is sourced from the run actually being served (`DatasetService.served_forecast_provenance()` / `forecast_serving_state()`), which is authoritative — it may differ from the store's newest record; `refusal_reason` appears only while a bounded grace fallback (§6) is active.
+- ~~**`GET /provenance/forecast`**~~ (removed 2026-11-20, #207) reported the full **served** decision: `{artifact_id, mode ("wire"/"legacy"), status (producer-declared maturity), freshness (verdict vs the SLA), serving_state, refusal_reason?}`. It is sourced from the run actually being served (`DatasetService.served_forecast_provenance()` / `forecast_serving_state()`), which is authoritative — it may differ from the store's newest record; `refusal_reason` appears only while a bounded grace fallback (§6) is active.
 - **`/health`** is `status:"degraded"` (HTTP 200 — *service* up, *data* not) when either the served forecast is past the freshness SLA (§4) **or** a grace fallback is active (§6, the newest run was refused); a WARNING is logged. `status:"degraded"` is the external monitor's page condition (ADR-032 §2a). HTTP 503 on `/health` remains reserved for Appwrite being unreachable (a genuine service outage). `GET /version` carries `served_contract_version` (§7).
 
 ### 6. Bounded, alarmed fallback (settles D-24)

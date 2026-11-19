@@ -81,15 +81,53 @@ HEADERS = {"X-API-Key": "test-api-key"}
 # ============================================================
 
 
-class TestRootEndpoint:
+# FastAPI adds these pages itself; they are not part of the service.
+_FASTAPI_OWN_PAGES = {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc"}
 
-    def test_root_returns_endpoint_catalog(self, app_client):
+
+def _named_routes(text):
+    """Every path a message names (anything starting with `/`), without trailing punctuation."""
+    import re
+
+    return [m.rstrip(".,;:") for m in re.findall(r"(?<![\w])/[\w{}./-]+", text)]
+
+
+class TestTheRouteList:
+    """The service offers exactly these routes (#207, docs/SERVICE_SPECIFICATION.md). A new route
+    changes this list on purpose; it never appears by accident. #204 and #205 shrink the level
+    routes further."""
+
+    _LEVEL_ROUTES = {
+        f"/{level}/{kind}/{category}/{name}"
+        for level in ("pg", "country", "gaul0", "gaul1", "gaul2")
+        for kind, name in (("data", "subset"), ("analysis", "hdi-map"))
+        for category in ("forecast", "historical")
+    }
+    _EXPECTED = {
+        ("GET", path)
+        for path in {"/ping", "/version", "/health", "/data/forecast/bulk"} | _LEVEL_ROUTES
+    }
+
+    def test_exactly_these_routes_are_offered(self, app_client):
+        """Every route of any kind, with its methods. Only FastAPI's own documentation pages are
+        left out, and they are named, so nothing else can hide among them."""
+        _, mgr, _ = app_client
+        offered = {
+            (method, route.path)
+            for route in mgr.app.routes
+            if route.path not in _FASTAPI_OWN_PAGES
+            for method in (getattr(route, "methods", None) or {"ANY"}) - {"HEAD"}
+        }
+        assert offered == self._EXPECTED
+
+    @pytest.mark.parametrize("path", [
+        "/", "/provenance/forecast", "/provenance/historical",
+        "/files/test-bucket", "/files/test-bucket/file_001/info",
+        "/files/test-bucket/file_001/download",
+    ])
+    def test_a_removed_route_answers_404(self, app_client, path):
         client, _, _ = app_client
-        resp = client.get("/")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "endpoints" in body
-        assert "message" in body
+        assert client.get(path, headers=HEADERS).status_code == 404
 
 
 class TestHealthEndpoint:
@@ -266,13 +304,6 @@ class TestRemovedCacheRoutes:
         client, _, _ = app_client
         assert client.request(method, path, headers=HEADERS).status_code in (404, 405)
 
-    def test_route_index_does_not_advertise_them(self, app_client):
-        client, _, _ = app_client
-        advertised = set(client.get("/").json()["endpoints"].values())
-        assert not advertised & {
-            "/files/{bucket_id}/{file_id}/cached", "/cache/stats", "/cache (DELETE)"
-        }
-
     def test_health_does_not_report_the_shared_cache(self, app_client):
         client, mgr, _ = app_client
         sentinel = "shared-cache-sentinel-7c1"
@@ -284,21 +315,6 @@ class TestRemovedCacheRoutes:
         assert resp.status_code == 200
         assert sentinel not in resp.text
         assert not mock_appwrite.cache_manager.get_stats.called
-
-    @pytest.mark.parametrize("status", [401, 403])
-    @pytest.mark.parametrize("path", ["/files/b/f/info", "/files/b/f/download"])
-    def test_a_refused_key_on_a_file_route_is_401_not_404(self, app_client, path, status):
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.get_file.return_value = OperationResult(
-            success=False, error="Get file failed: unauthorized", code="user_unauthorized",
-            status=status,
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get(path, headers=HEADERS)
-        assert resp.status_code == 401
-        assert not mock_appwrite.download_file.called
-
 
 # ============================================================
 # Data endpoints
@@ -384,16 +400,16 @@ class TestResponseSizeBound:
         assert resp.status_code == 413
 
     @pytest.mark.parametrize(
-        "category,expected",
-        [("historical", "/provenance/historical"), ("forecast", "/data/forecast/bulk")],
+        "category,expected,routes_named",
+        [("historical", "Narrow it", []), ("forecast", "Narrow it", ["/data/forecast/bulk"])],
     )
     def test_the_refusal_says_how_to_get_the_data(
-        self, app_client, monkeypatch, category, expected
+        self, app_client, monkeypatch, category, expected, routes_named
     ):
         """A refusal that does not name a way through is an outage with better manners.
 
         The two categories get different advice on purpose: forecast has a single-call parquet
-        route and historical does not.
+        route and historical does not. Neither may name a route that no longer exists (#207).
         """
         client, _, _ = app_client
         monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", "1")
@@ -401,7 +417,11 @@ class TestResponseSizeBound:
         assert resp.status_code == 413
         detail = resp.json()["detail"]
         assert expected in detail
-        assert "filters" in detail or "filter" in detail
+        # Exactly the routes it should name, and each one exists: no removed or made-up route,
+        # and no forecast-only advice on a historical refusal.
+        assert _named_routes(detail) == routes_named
+        offered = {r.path for r in client.app.routes}
+        assert all(route in offered for route in routes_named)
 
     def test_a_narrow_selection_is_still_admitted(self, app_client, monkeypatch):
         """The property the design turns on, end to end through the route.
@@ -578,127 +598,9 @@ class TestOperationResultDataConsumers:
         )
         assert resp.status_code == 500
 
-    def test_missing_file_bytes_on_file_download_serves_empty(self, app_client):
-        """Site 2 (api.py:1158): result.data missing 'file_bytes' silently serves empty response.
-        io.BytesIO(None) returns empty bytes on Python 3.10+ — no error raised."""
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.get_file.return_value = OperationResult(
-            success=True, data={"name": "test.txt"}
-        )
-        mock_appwrite.download_file.return_value = OperationResult(
-            success=True, data={}
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket/file_001/download", headers=HEADERS)
-        assert resp.status_code == 200
-        assert resp.content == b""
-
-# ============================================================
-# File + cache endpoint smoke tests (C-06 Sprint 5)
-# ============================================================
-
-
-class TestFileEndpoints:
-
-    def test_list_files_returns_200(self, app_client):
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.list_files.return_value = OperationResult(
-            success=True, data={"files": [], "total": 0}
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket", headers=HEADERS)
-        assert resp.status_code == 200
-        assert resp.json()["total"] == 0
-
-    def test_file_info_returns_200(self, app_client):
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.get_file.return_value = OperationResult(
-            success=True, data={"name": "test.parquet", "$id": "file_001"}
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket/file_001/info", headers=HEADERS)
-        assert resp.status_code == 200
-        assert resp.json()["file_id"] == "file_001"
-
-# ============================================================
-# File endpoint error paths — P-6 .get() bug regression (Sprint 7)
-# ============================================================
-
-
-class TestFileEndpointErrorPaths:
-
-    def test_list_files_failure_returns_404(self, app_client):
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.list_files.return_value = OperationResult(
-            success=False, error="Bucket not found", code="NOT_FOUND"
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket", headers=HEADERS)
-        assert resp.status_code == 404
-        assert "Bucket not found" in resp.json()["detail"]
-
-    def test_get_file_info_failure_returns_404(self, app_client):
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.get_file.return_value = OperationResult(
-            success=False, error="File not found", code="NOT_FOUND"
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket/file_001/info", headers=HEADERS)
-        assert resp.status_code == 404
-        assert "File not found" in resp.json()["detail"]
-
-    def test_download_file_not_found_returns_404(self, app_client):
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.get_file.return_value = OperationResult(
-            success=False, error="File not found", code="NOT_FOUND"
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket/file_001/download", headers=HEADERS)
-        assert resp.status_code == 404
-        assert "File not found" in resp.json()["detail"]
-
-    def test_download_file_download_failure_returns_500(self, app_client):
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.get_file.return_value = OperationResult(
-            success=True, data={"name": "test.bin"}
-        )
-        mock_appwrite.download_file.return_value = OperationResult(
-            success=False, error="Storage unavailable", code="STORAGE_ERROR"
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket/file_001/download", headers=HEADERS)
-        assert resp.status_code == 500
-        assert "Storage unavailable" in resp.json()["detail"]
-
-    def test_a_download_cut_short_by_the_store_is_502(self, app_client):
-        """C-288 (#169): a body shorter than the store declares is an upstream fault, kept apart
-        from our own 500s so a caller can retry it."""
-        client, mgr, _ = app_client
-        mock_appwrite = MagicMock()
-        mock_appwrite.get_file.return_value = OperationResult(success=True,
-                                                              data={"name": "shard.parquet"})
-        mock_appwrite.download_file.return_value = OperationResult(
-            success=False, error="Download failed: received 10 bytes, the store declares 100",
-            code="DOWNLOAD_INCOMPLETE",
-        )
-        mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
-        resp = client.get("/files/test-bucket/file_001/download", headers=HEADERS)
-        assert resp.status_code == 502
-        assert "declares 100" in resp.json()["detail"]
-
-
 class TestHTTPExceptionPassthrough:
 
     @pytest.mark.parametrize("method,path", [
-        pytest.param("GET", "/files/test-bucket", id="list-files"),
-        pytest.param("GET", "/files/test-bucket/file_001/info", id="file-info"),
         pytest.param("GET", "/health", id="health"),
     ])
     def test_auth_failure_returns_401(self, app_client, method, path):
@@ -710,381 +612,6 @@ class TestHTTPExceptionPassthrough:
         mgr.app.dependency_overrides[mgr._get_appwrite_manager] = reject_key
         resp = client.request(method, path, headers=HEADERS)
         assert resp.status_code == 401
-
-
-class TestProvenanceEndpoint:
-    """C-86: /provenance/{category} exposes the lineage record of the served artifact."""
-
-    def test_provenance_returns_record(self, app_client):
-        from views_crafdapi.managers.prediction import PredictionProvenance
-
-        client, _, mock_pm = app_client
-        mock_pm.get_latest_provenance.return_value = PredictionProvenance(
-            file_id="file_002",
-            source="views-datafactory",
-            created_at="2025-10-22T12:00:00.000Z",
-            filename="forecast.parquet",
-            file_hash="deadbeef",
-        )
-        resp = client.get("/provenance/forecast", headers=HEADERS)
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert body["data"]["source"] == "views-datafactory"
-        assert body["data"]["file_id"] == "file_002"
-        assert body["data"]["file_hash"] == "deadbeef"
-        mock_pm.get_latest_provenance.assert_called_once()
-
-    def test_provenance_invalid_category_422(self, app_client):
-        client, _, _ = app_client
-        resp = client.get("/provenance/bogus", headers=HEADERS)
-        assert resp.status_code == 422
-
-    def test_provenance_not_found_404(self, app_client):
-        client, _, mock_pm = app_client
-        mock_pm.get_latest_provenance.return_value = None
-        resp = client.get("/provenance/historical", headers=HEADERS)
-        assert resp.status_code == 404
-
-    def test_provenance_reports_a_manifested_run_with_no_legacy_record(self, app_client):
-        """#60 regression, reproduced from production 2026-08-14.
-
-        `crafd_bucket` is greenfield on the wire contract, so a type-less category query — which
-        ADR-013 §11.4 correctly pins to `type="model"` — matches nothing. The route used to stop
-        there and 404 while the API was serving that very run: `/health` reported a forecast
-        created 18:35:54 and smoke.py returned 1,030 IDN cells, but `/provenance/forecast`
-        answered "No forecast prediction files found in the bucket: crafd_bucket".
-
-        Nothing here is served by this worker, so the served record is absent too — the manifest
-        is the ONLY source that can answer, which is exactly the production shape.
-
-        The manifest lineage is built by the REAL `_provenance_from` from a real manifest store
-        document, not hand-stubbed — otherwise the method the fix adds never executes and the
-        test cannot fail for the reason it claims.
-        """
-        from views_crafdapi.managers.prediction.manager import PredictionStoreManager
-
-        # A manifest document exactly as views-postprocessing's wire sink uploads it:
-        # PredictionMetadata.to_dict() emits {loa,name,type,targets,category,description} —
-        # note there is NO `source`/`pipeline` field, which is why `source` reads "unknown".
-        manifest_doc = {
-            "fileId": "6a7f5fda000d0f4e1c22",
-            "filename": "rusty_bucket_forecasting_20260727_095355__manifest.json",
-            "$createdAt": "2026-08-14T18:35:54.962+00:00",
-            "name": "un_crafd",
-            "type": "sampled_forecast_manifest",
-            "category": "forecast",
-            "loa": "pgm",
-            "targets": ["lr_ged_sb", "lr_ged_ns", "lr_ged_os"],
-        }
-
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_provenance.return_value = None          # no legacy doc: greenfield
-        mock_pm.get_latest_manifest_provenance.side_effect = (
-            lambda: PredictionStoreManager._provenance_from(manifest_doc)
-        )
-        mgr._dataset_service._last_forecast_provenance = None      # cold worker
-
-        resp = client.get("/provenance/forecast", headers=HEADERS)
-        assert resp.status_code == 200, "a served run must never be reported as absent"
-        data = resp.json()["data"]
-        assert data["file_id"] == "6a7f5fda000d0f4e1c22"
-        assert data["name"] == "un_crafd"
-        assert data["targets"] == ["lr_ged_sb", "lr_ged_ns", "lr_ged_os"]
-        assert "freshness" in data
-        # Honest about what a manifest alone cannot say. The ensemble identity lives in the
-        # shard header, not the manifest's store metadata; and nothing here has been served, so
-        # this describes the newest manifested run rather than a verified-servable artifact.
-        assert data["source"] == "unknown"  # no producer stamps source on a manifest
-        assert data["mode"] is None
-
-    def test_provenance_prefers_the_manifest_over_a_legacy_record(self, app_client):
-        """The route must fetch BOTH store sources and let the module rank them.
-
-        Gating the manifest lookup on `stored is None` inverts the documented precedence: a
-        legacy record beside a newer manifested run would win, and /provenance would name an
-        artifact this build refuses to serve (S1/#264) while /health reports the manifest.
-        """
-        from views_crafdapi.managers.prediction import PredictionProvenance
-
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_provenance.return_value = PredictionProvenance(
-            file_id="legacy_001", source="orange_ensemble", name="orange_ensemble",
-            created_at="2026-03-01T00:00:00.000Z", filename="old.parquet", file_hash="cafe",
-        )
-        mock_pm.get_latest_manifest_provenance.return_value = PredictionProvenance(
-            file_id="manifest_001", source="unknown", name="un_crafd",
-            created_at="2026-08-13T00:00:00.000Z", filename="run__manifest.json",
-        )
-        mgr._dataset_service._last_forecast_provenance = None
-
-        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
-        assert data["file_id"] == "manifest_001"
-        assert data["source"] != "orange_ensemble"
-        assert mock_pm.get_latest_manifest_provenance.called, "the manifest must always be consulted"
-
-    def test_provenance_degrades_to_legacy_when_the_manifest_lookup_raises(self, app_client):
-        """A store outage must not 500 the endpoint an operator uses to diagnose it.
-
-        `_load_wire_run` refuses with the reason and `/health` is best-effort; this degrades.
-        """
-        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
-
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_manifest_provenance.side_effect = MetadataLookupError(
-            "appwrite is down", status=503
-        )
-        mock_pm.get_latest_provenance.return_value = PredictionProvenance(
-            file_id="legacy_001", source="orange_ensemble",
-            created_at="2026-03-01T00:00:00.000Z", filename="old.parquet",
-        )
-        mgr._dataset_service._last_forecast_provenance = None
-
-        resp = client.get("/provenance/forecast", headers=HEADERS)
-        assert resp.status_code == 200, "must degrade to the legacy record, not 500"
-        assert resp.json()["data"]["file_id"] == "legacy_001"
-        # #158 review: but it must say the manifest could not be checked — a legacy record is
-        # not "the forecast" when the manifest that would outrank it is unknown.
-        assert resp.json()["data"]["manifest_lookup_failed"] is True
-
-    @pytest.mark.parametrize("error", [RuntimeError, ValueError, KeyError, TypeError])
-    def test_a_non_store_error_in_the_manifest_lineage_lookup_is_not_a_503(
-        self, app_client, caplog, error
-    ):
-        """Only a store failure degrades lineage; a bug or a config error is not reported as
-        "Metadata store unavailable" (the policy `DatasetService` follows, ADR-033 §6a). Its
-        text goes to the log, not the response (C-264)."""
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_manifest_provenance.side_effect = error("collection not configured")
-        mock_pm.get_latest_provenance.return_value = None
-        mgr._dataset_service._last_forecast_provenance = None
-
-        with caplog.at_level("ERROR"):
-            resp = client.get("/provenance/forecast", headers=HEADERS)
-        assert resp.status_code == 500, resp.text
-        assert "collection not configured" not in resp.text, "internal text leaked (C-264)"
-        assert resp.json()["detail"] == "Provenance lookup failed", "fixed: not even the error's type"
-        # The cause goes to the log, with where it happened — on this route's own record.
-        logged = [r for r in caplog.records if r.getMessage() == "forecast provenance failed"]
-        assert logged, "the route must log the failure"
-        assert logged[0].exc_info is not None, "a bug must be logged with its traceback"
-        assert "collection not configured" in str(logged[0].exc_info[1]), "the cause must reach the log"
-
-    def test_a_non_store_error_in_the_historical_lineage_lookup_is_not_a_503(
-        self, app_client, caplog
-    ):
-        """The historical branch follows the same rule: a bug is a 500 with a generic detail and
-        a logged traceback, not "Metadata store unavailable" (C-233, C-264)."""
-        client, _, mock_pm = app_client
-        mock_pm.get_latest_provenance.side_effect = RuntimeError("collection not configured")
-
-        with caplog.at_level("ERROR"):
-            resp = client.get("/provenance/historical", headers=HEADERS)
-        assert resp.status_code == 500, resp.text
-        assert "collection not configured" not in resp.text, "internal text leaked (C-264)"
-        assert resp.json()["detail"] == "Provenance lookup failed", "fixed: not even the error's type"
-        logged = [r for r in caplog.records if r.getMessage() == "historical provenance failed"]
-        assert logged and logged[0].exc_info is not None
-
-    def test_historical_provenance_is_503_when_the_store_lookup_fails(self, app_client):
-        """C-233 (#158): a failed lookup is "store unavailable", not "no historical files"."""
-        from views_crafdapi.managers.prediction import MetadataLookupError
-
-        client, _, mock_pm = app_client
-        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("down", status=503)
-        resp = client.get("/provenance/historical", headers=HEADERS)
-        assert resp.status_code == 503, resp.text
-        assert "down" not in resp.text      # the store's own error text stays in the log (C-264)
-
-    def test_forecast_provenance_is_503_when_every_lookup_fails_and_nothing_is_served(self, app_client):
-        """With nothing served on this worker and both store lookups failing there is no answer to
-        give — but the honest refusal is 503, not a 404 claiming no forecast exists (#158)."""
-        from views_crafdapi.managers.prediction import MetadataLookupError
-
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_manifest_provenance.side_effect = MetadataLookupError("down", status=503)
-        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("down", status=503)
-        mgr._dataset_service._last_forecast_provenance = None
-        resp = client.get("/provenance/forecast", headers=HEADERS)
-        assert resp.status_code == 503, resp.text
-        assert resp.json()["detail"] == "Metadata store unavailable"
-
-    def test_no_manifest_lookup_flag_when_a_forecast_is_being_served(self, app_client):
-        """The flag means "nothing here could be checked against the manifest". A worker that is
-        serving a forecast reports that run, so a failed manifest lookup does not taint it."""
-        from views_crafdapi.managers.prediction import MetadataLookupError
-
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_manifest_provenance.side_effect = MetadataLookupError("down", status=503)
-        mock_pm.get_latest_provenance.return_value = None
-        mgr._dataset_service._last_forecast_provenance = {
-            "file_id": "wire_run_9", "mode": "wire", "source": "rusty_bucket",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
-        assert "manifest_lookup_failed" not in data
-
-    def test_no_manifest_lookup_flag_when_only_the_stored_lookup_failed(self, app_client):
-        """The manifest was checked and answered; only the outranked legacy lookup failed. The
-        answer is the manifest's, so it is not unchecked."""
-        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
-
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_manifest_provenance.side_effect = None
-        mock_pm.get_latest_manifest_provenance.return_value = PredictionProvenance(
-            file_id="manifest_001", source="rusty_bucket",
-            created_at=datetime.now(timezone.utc).isoformat(), filename="run__manifest.json",
-        )
-        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("down", status=503)
-        mgr._dataset_service._last_forecast_provenance = None
-        resp = client.get("/provenance/forecast", headers=HEADERS)
-        assert resp.status_code == 200, resp.text
-        assert "manifest_lookup_failed" not in resp.json()["data"]
-
-    def test_an_unverified_serve_is_not_reported_as_a_refusal(self, app_client):
-        """`refusal_reason` means a run was refused. Serving the cached run unverified during a
-        lookup outage is not a refusal, so it must not appear (#158 review)."""
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_manifest_provenance.return_value = None
-        mock_pm.get_latest_provenance.return_value = None
-        mgr._dataset_service._last_forecast_provenance = {
-            "file_id": "wire_run_9", "mode": "wire", "source": "rusty_bucket",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        mgr._dataset_service._forecast_serving_state = {
-            "degraded": True, "reason": "manifest_lookup_error",
-            "fallback_available": True, "serving": "cached_unverified",
-        }
-        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
-        assert "refusal_reason" not in data
-        assert data["serving_state"]["serving"] == "cached_unverified"
-
-    def test_provenance_404s_when_the_store_answers_with_nothing_usable(self, app_client):
-        """An unstubbed MagicMock's `to_dict()` collapses to `{}` — a truthy object carrying no
-        record. The 404 must be decided by production semantics, not by mock configuration."""
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_provenance.return_value = None
-        mgr._dataset_service._last_forecast_provenance = None
-        # deliberately NOT stubbing get_latest_manifest_provenance
-
-        assert client.get("/provenance/forecast", headers=HEADERS).status_code == 404
-
-    def test_provenance_404s_only_when_there_is_genuinely_no_forecast(self, app_client):
-        """The 404 must survive the fix — an empty bucket is still an empty bucket."""
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_provenance.return_value = None
-        mock_pm.get_latest_manifest_provenance.return_value = None
-        mgr._dataset_service._last_forecast_provenance = None
-
-        assert client.get("/provenance/forecast", headers=HEADERS).status_code == 404
-
-    def test_provenance_exposes_full_served_decision(self, app_client):
-        """S7 (#252, ADR-033 observability): /provenance/forecast reports the full *served* decision
-        — artifact_id, mode, status, freshness, and refusal_reason when degraded — sourced from the
-        served run (authoritative), not merely the store's newest record."""
-        from views_crafdapi.managers.prediction import PredictionProvenance
-
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_provenance.return_value = PredictionProvenance(
-            file_id="store_newest", source="datafactory",
-            created_at="2026-01-01T00:00:00.000Z", filename="f.parquet", file_hash="d",
-        )
-        fresh = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-        mgr._dataset_service._last_forecast_provenance = {
-            "file_id": "wire_run_9", "mode": "wire", "status": "candidate",
-            "source": "rusty_bucket", "created_at": fresh,
-        }
-        mgr._dataset_service._forecast_serving_state = {
-            "degraded": True, "reason": "schema_capability_mismatch", "fallback_available": True,
-        }
-        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
-        assert data["artifact_id"] == "wire_run_9"     # served run, not "store_newest"
-        assert data["mode"] == "wire"
-        assert data["status"] == "candidate"
-        assert data["source"] == "rusty_bucket"
-        assert data["freshness"]["is_stale"] is False  # from the served run's created_at
-        assert data["refusal_reason"] == "schema_capability_mismatch"
-
-    def test_provenance_overlays_served_identity_labels_not_legacy(self, app_client):
-        """#290: when a wire run is served, name/filename/created_at must reflect THAT run — not
-        the store's newest legacy record. Otherwise stale labels (e.g. "orange_ensemble") bleed
-        through a live rusty_bucket serve and read as still-serving-the-placeholder."""
-        from views_crafdapi.managers.prediction import PredictionProvenance
-
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_provenance.return_value = PredictionProvenance(
-            file_id="store_newest", source="orange_ensemble", name="orange_ensemble",
-            created_at="2026-03-10T10:52:03.762Z",
-            filename="forecast_dataset_20260310_114703.parquet", file_hash="d",
-        )
-        fresh = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-        mgr._dataset_service._last_forecast_provenance = {
-            "file_id": "wire_run_9", "run_id": "rusty_bucket_forecasting_20260727_095355",
-            "mode": "wire", "source": "rusty_bucket", "name": "rusty_bucket",
-            "filename": "rusty_bucket_forecasting_20260727_095355__manifest.json",
-            "created_at": fresh, "targets": ["lr_ged_sb", "lr_ged_ns", "lr_ged_os"],
-        }
-        mgr._dataset_service._forecast_serving_state = {"degraded": False}
-        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
-        assert data["name"] == "rusty_bucket"                    # not "orange_ensemble"
-        assert data["filename"].startswith("rusty_bucket_")      # not the legacy filename
-        assert data["created_at"] == fresh                       # served run, not 2026-03-10
-        assert data["run_id"] == "rusty_bucket_forecasting_20260727_095355"
-        # #290 full reconcile: the descriptive fields describe the served wire run, not the
-        # legacy test record.
-        assert data["file_id"] == "wire_run_9"                   # served id, not the legacy file_id
-        assert data["targets"] == ["lr_ged_sb", "lr_ged_ns", "lr_ged_os"]  # wire targets, not pred_ln_*
-        assert data["file_hash"] is None                         # wire = many shards, no single hash
-        assert "rusty_bucket_forecasting_20260727_095355" in data["description"]  # not "test DataFrame"
-
-    def test_provenance_self_heals_wire_run_cached_before_290(self, app_client):
-        """#290 hardening: a wire run cached by a PRE-fix build carries no name/filename in its
-        served provenance (only source/run_id/mode). /provenance must still reconstruct them from
-        source/run_id so the legacy label never survives — self-heals without a force_refresh."""
-        from views_crafdapi.managers.prediction import PredictionProvenance
-
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_provenance.return_value = PredictionProvenance(
-            file_id="store_newest", source="orange_ensemble", name="orange_ensemble",
-            created_at="2026-03-10T10:52:03.762Z",
-            filename="forecast_dataset_20260310_114703.parquet", file_hash="d",
-        )
-        fresh = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-        # Pre-#290 cached shape: source/run_id/mode/created_at, but NO name/filename.
-        mgr._dataset_service._last_forecast_provenance = {
-            "file_id": "wire_run_9", "run_id": "rusty_bucket_forecasting_20260727_095355",
-            "mode": "wire", "source": "rusty_bucket", "created_at": fresh,
-        }
-        mgr._dataset_service._forecast_serving_state = {"degraded": False}
-        data = client.get("/provenance/forecast", headers=HEADERS).json()["data"]
-        assert data["name"] == "rusty_bucket"                    # reconstructed from source
-        assert data["filename"] == "rusty_bucket_forecasting_20260727_095355"  # from run_id
-        assert data["created_at"] == fresh
-        assert "orange_ensemble" not in (data["name"], data["filename"])
-        # a pre-fix cache carries no targets — honest-absent (None), never the legacy pred_ln_*
-        assert data["file_id"] == "wire_run_9"
-        assert data["targets"] is None
-        assert data["file_hash"] is None
-        assert "rusty_bucket_forecasting_20260727_095355" in data["description"]
-
-    def test_provenance_surfaces_grace_fallback_state(self, app_client):
-        """S4 (#249, ADR-033 §6): when a bounded grace fallback is active, /provenance/forecast
-        flags it under `serving_state` so a consumer sees the newest run was refused."""
-        from views_crafdapi.managers.prediction import PredictionProvenance
-
-        client, mgr, mock_pm = app_client
-        mock_pm.get_latest_provenance.return_value = PredictionProvenance(
-            file_id="mani_good", source="fixture_ensemble",
-            created_at="2026-07-23T12:00:00.000Z", filename="f.parquet", file_hash="d",
-        )
-        mgr._dataset_service._forecast_serving_state = {
-            "degraded": True, "reason": "ingest_failed", "fallback_available": True,
-            "file_id": "mani_good",
-        }
-        resp = client.get("/provenance/forecast", headers=HEADERS)
-        assert resp.status_code == 200
-        state = resp.json()["data"]["serving_state"]
-        assert state["degraded"] is True and state["reason"] == "ingest_failed"
 
 
 class TestHealthKeysTheFreshnessMonitorParses:
@@ -1179,8 +706,6 @@ class TestARevokedKeyIsRefusedOnItsNextRequest:
         "/pg/data/historical/subset",
         "/country/data/historical/subset?aggregate=true",
         "/data/forecast/bulk",
-        "/provenance/forecast",
-        "/provenance/historical",
     ]
 
     @pytest.mark.parametrize("route", ROUTES)
@@ -1191,7 +716,7 @@ class TestARevokedKeyIsRefusedOnItsNextRequest:
         revoked = MetadataLookupError("general_unauthorized_scope: missing scope", status=401,
                                       appwrite_type="general_unauthorized_scope")
         for lookup in ("get_latest_manifest", "get_latest_file_id", "get_latest_provenance",
-                       "get_latest_manifest_provenance", "resolve_artifact_file_ids"):
+                       "resolve_artifact_file_ids"):
             getattr(mock_pm, lookup).side_effect = revoked
 
         resp = client.get(route, headers=HEADERS)
@@ -1225,25 +750,6 @@ class TestARevokedKeyIsRefusedOnItsNextRequest:
             return good
         mock_pm.get_latest_manifest.side_effect = manifest
         assert client.get("/pg/analysis/forecast/hdi-map", headers=HEADERS).status_code == 401
-
-    @pytest.mark.parametrize("refused", ["manifest", "stored"])
-    def test_each_lineage_lookup_refuses_on_its_own(self, app_client, refused):
-        """Either of the two lineage lookups refusing is enough; the other answering is not a way
-        around it (#159 guard audit)."""
-        from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
-
-        client, mgr, mock_pm = app_client
-        mgr._dataset_service._last_forecast_provenance = None
-        revoked = MetadataLookupError("no", status=401)
-        record = PredictionProvenance(file_id="m", source="s", created_at="2026-10-01T00:00:00Z",
-                                      filename="run__manifest.json")
-        if refused == "manifest":
-            mock_pm.get_latest_manifest_provenance.side_effect = revoked
-            mock_pm.get_latest_provenance.return_value = record
-        else:
-            mock_pm.get_latest_manifest_provenance.return_value = record
-            mock_pm.get_latest_provenance.side_effect = revoked
-        assert client.get("/provenance/forecast", headers=HEADERS).status_code == 401
 
     @pytest.mark.parametrize("refused", ["manifest", "stored"])
     def test_each_health_freshness_lookup_refuses_on_its_own(self, app_client, refused):

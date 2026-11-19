@@ -33,8 +33,3 @@ def test_ping_needs_no_appwrite(client):
     """Liveness must not depend on Appwrite — two calls with no creds both succeed."""
     assert client.get("/ping").status_code == 200
     assert client.get("/ping").status_code == 200
-
-
-def test_ping_is_discoverable_from_root(client):
-    body = client.get("/").json()
-    assert body["endpoints"].get("liveness_ping") == "/ping"
