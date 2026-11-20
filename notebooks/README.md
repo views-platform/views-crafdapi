@@ -25,7 +25,7 @@ coverage live for historical **and** forecast.
 
 | Notebook | Shows | Needs an API key? |
 |---|---|---|
-| [`01_quickstart.ipynb`](01_quickstart.ipynb) | The HTTP API end to end — authentication, a global-coverage check, historical + forecast subsetting (`pg`/`country`/`gaul0-2`), posterior samples, and HDI/MAP uncertainty (cell-level + aggregated). Data via `CrafdApiClient`; `sample_idx` and `/analysis` shown as raw HTTP with an endpoint reference. | **Yes** (live API) |
+| [`01_quickstart.ipynb`](01_quickstart.ipynb) | The HTTP API end to end — authentication, a global-coverage check, historical + forecast subsetting (`pg`/`country`/`gaul1`), posterior samples, and HDI/MAP uncertainty (cell-level + aggregated). Data via `CrafdApiClient`; `sample_idx` and `/analysis` shown as raw HTTP with an endpoint reference. | **Yes** (live API) |
 | [`02_visualization.ipynb`](02_visualization.ipynb) | PRIO-GRID pixel maps via `views_crafdapi.plotting` — **global coverage maps (historical & forecast)**, single-month, shared-scale multi-month panels, all three features, regional GAUL-1 zooms, cross-country comparison. | **Yes** (live API) |
 | [`03_offline_demo.ipynb`](03_offline_demo.ipynb) | The analytics the service performs — subsetting, HDI/MAP, geographic aggregation, a map — run **in-process on synthetic data** (`_synthetic.py`). | **No** |
 

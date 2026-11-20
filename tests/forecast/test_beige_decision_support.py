@@ -85,17 +85,19 @@ class TestResponseSelfDescribes:
             assert any(c.endswith(f"_hdi{pct}_lower") for c in cols), f"missing hdi{pct}"
             assert any(c.endswith(f"_hdi{pct}_upper") for c in cols)
 
-    def test_response_states_aggregation_and_level(self, beige_client):
-        """Scenarios 4 + 5 (aggregate-over-trust, GAUL-2 small-area over-trust):
+    @pytest.mark.parametrize("category", ["historical", "forecast"])
+    @pytest.mark.parametrize("level,aggregate", [("pg", "false"), ("country", "true"), ("gaul1", "true")])
+    def test_response_states_aggregation_and_level(self, beige_client, level, aggregate, category):
+        """Scenarios 4 + 5 (aggregate-over-trust, small-area over-trust):
         the response self-describes the spatial `level` and the `aggregate`
         flag, so an aggregated / small-area estimate is labelled as such."""
         resp = beige_client.get(
-            "/gaul2/analysis/forecast/hdi-map?aggregate=true", headers=HEADERS
+            f"/{level}/analysis/{category}/hdi-map?aggregate={aggregate}", headers=HEADERS
         )
         assert resp.status_code == 200
         data = resp.json()["data"]
-        assert data["level"] == "gaul2"
-        assert data["parameters"]["aggregate"] is True
+        assert data["level"] == level
+        assert data["parameters"]["aggregate"] is (aggregate == "true")
 
     def test_response_states_category(self, beige_client):
         resp = beige_client.get("/pg/analysis/historical/hdi-map", headers=HEADERS)
@@ -119,7 +121,7 @@ class TestSevereScenarioIsARobustTailNotAHardBound:
     robust tail severity — not a guaranteed ceiling — and the three nested HDIs (50⊆90⊆95)
     bracket the MAP. Raw min/max were deliberately dropped in #222/S4."""
 
-    @pytest.mark.parametrize("aggregate,level", [(False, None), (True, "gaul0")])
+    @pytest.mark.parametrize("aggregate,level", [(False, None), (True, "gaul1")])
     def test_nested_hdis_bracket_map_and_severe_is_upper_tail(self, aggregate, level):
         ds = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=200, seed=7))
         df = ds.calculate_hdi_map(level=level, aggregate=aggregate)  # var-keyed (no endpoint rename)

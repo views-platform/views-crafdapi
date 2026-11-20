@@ -77,14 +77,14 @@ def test_wire_ragged_value_roundtrip_store_geo_and_hdi_identical(with_nan_geo, t
         assert np.array_equal(out._sample_store[var], ds._sample_store[var], equal_nan=True)
     # NaN GAUL geography must survive the geo.parquet round-trip
     assert out.geo_metadata.equals(ds.geo_metadata)
-    for level in [None, "country", "gaul0", "gaul1", "gaul2"]:
+    for level in [None, "country", "gaul1"]:
         kw = {"aggregate": True, "level": level} if level is not None else {}
         assert ds.calculate_hdi_map(**kw).equals(out.calculate_hdi_map(**kw)), f"hdi diverges (level={level})"
 
 # (n_cells, n_months, n_samples, seed) — even/odd S, varied grid (matches the parity corpus).
 _CORPUS = [(4, 2, 64, 1), (4, 2, 65, 2), (3, 3, 100, 3), (4, 1, 257, 4), (2, 2, 2, 5)]
 
-_LEVELS = [None, "country", "gaul0", "gaul1", "gaul2"]
+_LEVELS = [None, "country", "gaul1"]
 
 
 def _make_feature_df(n_cells=4, n_months=2, seed=7):

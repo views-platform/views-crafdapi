@@ -146,7 +146,8 @@ ensemble exists to deliver**, and ADR-013 lists cm as an explicit non-goal.
 
 #81 also names a risk that is easy to miss and would surface as a partner complaint: with cm
 authoritative at `/country` and pgm aggregated at `/gaul0`, **the same geography would be served two
-different numbers by two endpoints, and nothing would detect the divergence.**
+different numbers by two endpoints, and nothing would detect the divergence.** (2026-11-20: `/gaul0`
+was removed in #205, so this pair no longer exists.)
 
 ### ADR-034 — decided
 

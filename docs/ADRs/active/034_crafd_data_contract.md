@@ -90,6 +90,9 @@ PRIO-GRID cell × month (`loa=pgm`) base grain, aggregated (conservation-correct
 ADR-014) to GAUL admin-1 / admin-0 + ISO3. Endpoint level vocabulary `pg` / `country` /
 `gaul0` / `gaul1` / `gaul2`, same reference shapefiles. Unchanged from FAO.
 
+> **Amended 2026-11-20 (#205):** the service specification keeps three levels, `pg` / `country` /
+> `gaul1`. `gaul0` (the same geography as `country`) and `gaul2` are no longer served.
+
 ### 5. Configurability discipline — the served contract is one declared constant
 
 Both the credible **masses** (§3) and the exceedance **thresholds** (§3) are single declared

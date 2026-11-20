@@ -26,7 +26,7 @@ The pin is `appwrite-seam-v1.5.2`, the same tag `seam_contract.REGISTRY_PIN_TAG`
 - Robust file parsing (parquet, CSV, JSON, pickle, feather)
 - Posterior analysis: MAP + empirical HDIs via `PosteriorDistributionAnalyzer`
 - Priogrid-to-country/GAUL mapping and metadata joins
-- Subset and aggregate results at levels: pg, country, gaul1, gaul2
+- Subset and aggregate results at three levels: grid cell (`pg`), country and admin 1 (`gaul1`)
 
 ## Requirements
 
@@ -117,12 +117,12 @@ Health
 - GET `/health` — checks the store connection and the age of the served forecast
 
 Subset (by level)
-- GET `/{pg|country|gaul1|gaul2}/data/historical/subset`
-- GET `/{pg|country|gaul1|gaul2}/data/forecast/subset`
+- GET `/{pg|country|gaul1}/data/historical/subset`
+- GET `/{pg|country|gaul1}/data/forecast/subset`
 
 HDI-MAP (by level)
-- GET `/{pg|country|gaul1|gaul2}/analysis/historical/hdi-map`
-- GET `/{pg|country|gaul1|gaul2}/analysis/forecast/hdi-map`
+- GET `/{pg|country|gaul1}/analysis/historical/hdi-map`
+- GET `/{pg|country|gaul1}/analysis/forecast/hdi-map`
 
 > **Size limit.** The subset and hdi-map routes estimate the response before building it and
 > return `413` above 512 MiB, with a body naming how to narrow the request (and, for the
@@ -239,7 +239,7 @@ print(r.json())
   - PRIO-GRID
   - GAUL Level 1/2
 - `ForecastDataset` joins/aggregates results using metadata columns and supports:
-  - level: `country|gaul1|gaul2`
+  - level: `country|gaul1`
   - aggregation: sum for pred_* targets, first for constant metadata
 
 ## Development

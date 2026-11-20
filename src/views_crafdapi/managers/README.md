@@ -180,7 +180,7 @@ uvicorn views_crafdapi.managers.api:app --workers 4
 Routes are dynamically registered for each geographic level:
 
 ```python
-LEVELS = ["pg", "country", "gaul0", "gaul1", "gaul2"]
+LEVELS = ["pg", "country", "gaul1"]
 CATEGORIES = ["historical", "forecast"]
 ```
 

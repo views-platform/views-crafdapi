@@ -326,6 +326,11 @@ class ForecastDataset(_GridDataset):
         """
         assert_geo_metadata_plausible(self.geo_metadata)
 
+    def _check_level(self, level: Optional[str]) -> None:
+        """Refuse a level the service does not serve. `None` means the grid cell."""
+        if level is not None and level not in self.levels:
+            raise ValueError(f"Level must be one of {list(self.levels.keys())}, got {level}")
+
     def _get_pg_cells(self, level: str, code: Union[str, int]) -> list[int]:
         if level not in self.levels.keys():
             raise ValueError(f"Level must be one of {list(self.levels.keys())}, got {level}")
@@ -394,7 +399,7 @@ class ForecastDataset(_GridDataset):
         
         Args:
             df: DataFrame with array-valued target columns (raw distributions)
-            level: Geographic level to aggregate to ('country', 'gaul0', 'gaul1', 'gaul2')
+            level: Geographic level to aggregate to ('country' or 'gaul1')
             
         Returns:
             DataFrame with MultiIndex (time_id, geo_unit) and distributions summed element-wise
@@ -664,7 +669,7 @@ class ForecastDataset(_GridDataset):
             entity_ids: Entity codes (ISO3 for country, GAUL codes for admin levels)
             enforce_non_negative: Clip MAP estimates to >= 0
             with_metadata: Include geographic metadata columns in output
-            level: Geographic level ('country', 'gaul0', 'gaul1', 'gaul2')
+            level: Geographic level ('country' or 'gaul1')
             aggregate: If True, aggregate to the specified level
             
         Returns:
@@ -675,6 +680,7 @@ class ForecastDataset(_GridDataset):
             - {var}_min: Minimum sample value (when aggregate=True)
             - {var}_max: Maximum sample value (when aggregate=True)
         """
+        self._check_level(level)
         # Resolve entity_ids to PRIO-GRID cells if a level is specified
         if level is not None and entity_ids is not None:
             if isinstance(entity_ids, (str, int)):
@@ -1033,7 +1039,8 @@ class ForecastDataset(_GridDataset):
         """
         if aggregate and level is None:
             raise ValueError("Must specify 'level' when aggregate=True")
-        
+        self._check_level(level)
+
         if level is not None and entity_ids is not None:
             if isinstance(entity_ids, (str, int)):
                 entity_ids = [entity_ids]

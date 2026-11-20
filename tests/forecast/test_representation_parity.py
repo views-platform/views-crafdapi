@@ -248,7 +248,7 @@ def _object_oracle_aggregated_sums(ds, var, level):
     return {k: np.stack(v).sum(axis=0) for k, v in groups.items()}
 
 
-@pytest.mark.parametrize("level", ["country", "gaul0", "gaul1", "gaul2"])
+@pytest.mark.parametrize("level", ["country", "gaul1"])
 def test_served_aggregation_joint_sum_matches_object_oracle(level):
     """S4b parity net: the served aggregated distributions (`get_subset_dataframe`
     `aggregate=True`) are byte-identical to the object-cell joint-sum oracle, at every
@@ -265,7 +265,7 @@ def test_served_aggregation_joint_sum_matches_object_oracle(level):
             assert np.array_equal(served[k], oracle[k]), f"{level}/{var}/{k}: sum diverges"
 
 
-@pytest.mark.parametrize("level", ["country", "gaul0", "gaul1", "gaul2"])
+@pytest.mark.parametrize("level", ["country", "gaul1"])
 def test_served_aggregated_hdi_map_byte_identical_to_oracle(level):
     """The end-to-end served aggregate collapse (`calculate_hdi_map` aggregate=True) is
     byte-identical to collapsing the object-cell oracle sums — MAP, the three fixed HDIs
