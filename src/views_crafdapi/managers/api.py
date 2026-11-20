@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from pathlib import Path
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -18,7 +19,7 @@ from views_crafdapi.managers.dataset_service import (
 from views_crafdapi.managers.prediction import PredictionStoreManager
 from views_crafdapi.managers import freshness
 from views_crafdapi.data.handlers import ForecastDataset
-from views_crafdapi.forecast.geography.metadata_table import LEVELS
+from views_crafdapi.time import date_to_month_id, month_id_to_date
 from views_crafdapi.version import version_info
 from views_crafdapi.seam_contract import CONSUMER_DOCUMENT_NAME
 from views_crafdapi.managers.serialization import estimate_records_bytes
@@ -97,29 +98,45 @@ def _human_bytes(n: float) -> str:
     return f"{n:.1f} GiB"
 
 
-def _too_large_detail(category: str, n_rows: int, estimated: int, budget: int) -> str:
-    """The body of the 413.
-
-    Prose, and separate from the serving path for that reason. The two categories need
-    genuinely different advice rather than one message with a substituted noun: forecast has a
-    single-call parquet route; historical has none yet, so its only way through is a narrower
-    selection.
-
-    A refusal that does not say what to do instead is an outage with better manners.
-    """
-    detail = (
-        f"This {category} selection is {n_rows:,} rows and would need about "
-        f"{_human_bytes(estimated)} to render as JSON, above this endpoint's "
-        f"{_human_bytes(budget)} limit. "
-        "Narrow it with the time_ids, entity_ids, features or sample_idx filters"
+def _too_large_detail(n_rows: int, estimated: int, budget: int) -> str:
+    """The body of the 413: what was asked, and what to do instead."""
+    return (
+        f"This slice is {n_rows:,} rows and would need about {_human_bytes(estimated)} to "
+        f"render as JSON, above the {_human_bytes(budget)} limit. Ask for fewer places or "
+        "months, or use the bulk download."
     )
-    if category == "forecast":
-        return detail + (
-            ", or fetch the whole forecast in one call as parquet: "
-            "GET /data/forecast/bulk, which returns one row per admin-1 unit per month "
-            "carrying every target."
-        )
-    return detail + "."
+
+
+def _parse_names(raw: Optional[str]) -> Optional[list[str]]:
+    """A comma-separated list, or `None` when the option is left out."""
+    if raw is None:
+        return None
+    names = [part.strip() for part in raw.split(",") if part.strip()]
+    if not names:
+        raise ValueError("An option was given but empty; leave it out to get everything")
+    return names
+
+
+def _parse_places(raw: Optional[str]) -> Optional[list[int]]:
+    """Place ids are whole numbers at every level (PRIO-GRID cell, GAUL admin-1, GAUL country)."""
+    names = _parse_names(raw)
+    if names is None:
+        return None
+    bad = [n for n in names if not re.fullmatch(r"\d+", n)]
+    if bad:
+        raise ValueError(f"Place ids must be whole numbers, got {bad[:20]}")
+    return [int(n) for n in names]
+
+
+def _parse_months(raw: Optional[str]) -> Optional[list[int]]:
+    """Months written year-month (`2027-01`), returned as VIEWS month ids."""
+    names = _parse_names(raw)
+    if names is None:
+        return None
+    bad = [n for n in names if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", n)]
+    if bad:
+        raise ValueError(f"Months must be written year-month, such as 2027-01; got {bad[:20]}")
+    return [date_to_month_id(int(n[:4]), int(n[5:])) for n in names]
 
 
 _REQUIRED_APPWRITE_ENV_VARS = [
@@ -196,15 +213,8 @@ def _validate_appwrite_env() -> dict[str, str]:
     return env
 
 
-# HTTP (de)serialization helpers live in `serialization.py` (SRP; epic #144 / C-36).
-# Re-exported here so existing importers (`from ...managers.api import dataframe_to_dict`,
-# etc.) keep resolving; the routes below call them by name.
-from views_crafdapi.managers.serialization import (  # noqa: E402
-    dataframe_to_dict,
-    parse_list_param,
-    parse_string_list_param,
-)
-from views_crafdapi.forecast.serialize.json_contract import to_consumer_columns  # noqa: E402
+from views_crafdapi.managers.serialization import convert_numpy_types  # noqa: E402
+from views_crafdapi.forecast.serialize import outcome_table  # noqa: E402
 from views_crafdapi.forecast.serialize.bulk_parquet import write_bulk_parquet  # noqa: E402
 
 class CrafdApiManager(APIManager):
@@ -519,7 +529,6 @@ class CrafdApiManager(APIManager):
 
         @self.app.get("/data/forecast/bulk")
         async def get_forecast_bulk_parquet(
-            force_refresh: bool = Query(False, description="Force refresh the cache"),
             x_api_key: str = Header(..., description="Appwrite API Key"),
             manager: PredictionStoreManager = Depends(self._get_prediction_manager),
         ):
@@ -529,10 +538,10 @@ class CrafdApiManager(APIManager):
             load. Historical is best-effort: if no historical artifact is available, `s_actual`
             is served as NaN rather than failing the download."""
             try:
-                forecast_ds = self._get_latest_dataset(manager, x_api_key, "forecast", force_refresh)
+                forecast_ds = self._get_latest_dataset(manager, x_api_key, "forecast")
                 try:
                     historical_ds = self._get_latest_dataset(
-                        manager, x_api_key, "historical", force_refresh
+                        manager, x_api_key, "historical"
                     )
                 except HTTPException:
                     historical_ds = None
@@ -552,229 +561,107 @@ class CrafdApiManager(APIManager):
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
-        # Helper function for subset endpoints
-        def create_subset_endpoint(category: str, level: Optional[str] = None):
-            async def subset_endpoint(
-                time_ids: Optional[str] = Query(None, description="Time IDs to include (comma-separated)"),
-                features: Optional[str] = Query(None, description="Feature names to include (comma-separated)"),
-                sample_idx: Optional[str] = Query(None, description="Sample indices to include (comma-separated)"),
-                entity_ids: Optional[str] = Query(None, description="Entity IDs to include (comma-separated)"),
-                with_metadata: bool = Query(True, description="Include geographic metadata"),
-                aggregate: bool = Query(False, description="Aggregate to specified level"),
-                force_refresh: bool = Query(False, description="Force refresh the cache"),
-                x_api_key: str = Header(..., description="Appwrite API Key"),
-                manager: PredictionStoreManager = Depends(self._get_prediction_manager)
-            ):
-                """Get a subset of the latest dataframe at the specified level."""
-                try:
-                    parsed_time_ids = parse_list_param(time_ids)
-                    parsed_features = parse_string_list_param(features)
-                    parsed_sample_idx = parse_list_param(sample_idx)
-                    
-                    # For country level, parse as strings; for others, parse as integers
-                    if level == "country":
-                        parsed_entity_ids = parse_string_list_param(entity_ids)
-                    else:
-                        parsed_entity_ids = parse_list_param(entity_ids)
-                    
-                    dataset = self._get_latest_dataset(manager, x_api_key, category, force_refresh)
+        @self.app.get("/slice/{level}/{outcome}")
+        async def get_slice(
+            level: str,
+            outcome: str,
+            places: Optional[str] = Query(None, description="Place ids at this level, comma-separated"),
+            months: Optional[str] = Query(None, description="Months written year-month (2027-01), comma-separated"),
+            columns: Optional[str] = Query(None, description="Summary column names, comma-separated"),
+            x_api_key: str = Header(..., description="Appwrite API Key"),
+            manager: PredictionStoreManager = Depends(self._get_prediction_manager),
+        ):
+            """A slice of one outcome at one level: four options, as the specification says.
 
-                    # C-284: decide before materialising. `served_payload_shape` takes the SAME
-                    # filters as the call below and reads index levels and array shapes only, so
-                    # the guard costs nothing -- which is the point. A guard that has to build
-                    # the payload in order to judge whether building it is affordable has
-                    # already lost. Filters are passed because they are what CRAF'd uses: a
-                    # bound computed on the full table would refuse every narrow request.
-                    n_rows, n_keyed, n_elements = dataset.served_payload_shape(
-                        time_ids=parsed_time_ids,
-                        features=parsed_features,
-                        sample_idx=parsed_sample_idx,
-                        entity_ids=parsed_entity_ids,
-                        with_metadata=with_metadata,
-                        level=level,
-                        aggregate=aggregate,
+            Rows are places and months; columns are the place's id and names, `month`, and the
+            outcome's summary columns (all, or the ones named). Never samples.
+            """
+            if level not in outcome_table.LEVELS:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Unknown level {level!r}. Levels: {', '.join(outcome_table.LEVELS)}",
+                )
+            try:
+                parsed_places = _parse_places(places)
+                parsed_months = _parse_months(months)
+                asked_columns = _parse_names(columns)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            try:
+                forecast_ds = self._get_latest_dataset(manager, x_api_key, "forecast")
+                if outcome not in outcome_table.outcomes(forecast_ds):
+                    raise HTTPException(
+                        status_code=404,
+                        detail=(
+                            f"Unknown outcome {outcome!r}. Outcomes: "
+                            f"{', '.join(outcome_table.outcomes(forecast_ds))}"
+                        ),
                     )
-                    estimated = estimate_records_bytes(n_rows, n_keyed, n_elements)
-                    budget = _max_response_bytes()
-                    if estimated > budget:
+                value_columns = outcome_table.value_columns(outcome)
+                if asked_columns is not None:
+                    unknown = [c for c in asked_columns if c not in value_columns]
+                    if unknown:
                         raise HTTPException(
-                            status_code=413,
-                            detail=_too_large_detail(category, n_rows, estimated, budget),
+                            status_code=422,
+                            detail=f"Unknown columns {unknown}. Columns: {', '.join(value_columns)}",
                         )
-                    
-                    subset_df = dataset.get_subset_dataframe(
-                        time_ids=parsed_time_ids,
-                        features=parsed_features,
-                        sample_idx=parsed_sample_idx,
-                        entity_ids=parsed_entity_ids,
-                        with_metadata=with_metadata,
-                        level=level,
-                        aggregate=aggregate
-                    )
-                    
-                    result = {
-                        "success": True,
-                        "data": {
-                            "dataframe": dataframe_to_dict(subset_df),
-                            "shape": subset_df.shape,
-                            "columns": subset_df.columns.tolist(),
-                            "category": category,
-                            "level": level or "pg",
-                            "parameters": {
-                                "time_ids": parsed_time_ids,
-                                "features": parsed_features,
-                                "sample_idx": parsed_sample_idx,
-                                "entity_ids": parsed_entity_ids,
-                                "with_metadata": with_metadata,
-                                "aggregate": aggregate
-                            }
-                        }
-                    }
-                    
-                    return result
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e))
-            
-            return subset_endpoint
-
-        # Helper function for HDI-MAP endpoints
-        def create_hdi_map_endpoint(category: str, level: Optional[str] = None):
-            async def hdi_map_endpoint(
-                alpha: float = Query(0.9, description="Credibility level for HDI (e.g., 0.9 for 90% HDI)"),
-                time_ids: Optional[str] = Query(None, description="Time IDs to include (comma-separated)"),
-                features: Optional[str] = Query(None, description="Feature names to include (comma-separated)"),
-                sample_idx: Optional[str] = Query(None, description="Sample indices to include (comma-separated)"),
-                entity_ids: Optional[str] = Query(None, description="Entity IDs to include (comma-separated)"),
-                enforce_non_negative: bool = Query(False, description="Force MAP estimates to be non-negative"),
-                with_metadata: bool = Query(True, description="Include geographic metadata"),
-                aggregate: bool = Query(False, description="Aggregate to specified level"),
-                force_refresh: bool = Query(False, description="Force refresh the cache"),
-                x_api_key: str = Header(..., description="Appwrite API Key"),
-                manager: PredictionStoreManager = Depends(self._get_prediction_manager)
-            ):
-                """Calculate HDI and MAP estimates at the specified level."""
+                    value_columns = [c for c in value_columns if c in set(asked_columns)]
                 try:
-                    parsed_time_ids = parse_list_param(time_ids)
-                    parsed_features = parse_string_list_param(features)
-                    parsed_sample_idx = parse_list_param(sample_idx)
-                    
-                    # For country level, parse as strings; for others, parse as integers
-                    if level == "country":
-                        parsed_entity_ids = parse_string_list_param(entity_ids)
-                    else:
-                        parsed_entity_ids = parse_list_param(entity_ids)
-                    
-                    dataset = self._get_latest_dataset(manager, x_api_key, category, force_refresh)
+                    historical_ds = self._get_latest_dataset(manager, x_api_key, "historical")
+                except HTTPException as e:
+                    if e.status_code in (401, 403):
+                        raise  # a refused key is not a missing history (C-268)
+                    historical_ds = None
+                    logger.warning("slice: no historical artifact; recorded deaths served as empty")
 
-                    # C-284: decide before materialising. `served_payload_shape` takes the SAME
-                    # filters as the call below and reads index levels and array shapes only, so
-                    # the guard costs nothing -- which is the point. A guard that has to build
-                    # the payload in order to judge whether building it is affordable has
-                    # already lost. Filters are passed because they are what CRAF'd uses: a
-                    # bound computed on the full table would refuse every narrow request.
-                    n_rows, n_keyed, n_elements = dataset.served_payload_shape(
-                        time_ids=parsed_time_ids,
-                        features=parsed_features,
-                        sample_idx=parsed_sample_idx,
-                        entity_ids=parsed_entity_ids,
-                        with_metadata=with_metadata,
-                        level=level,
-                        aggregate=aggregate,
-                    )
-                    estimated = estimate_records_bytes(n_rows, n_keyed, n_elements)
-                    budget = _max_response_bytes()
-                    if estimated > budget:
+                identity = outcome_table.place_identity(forecast_ds, level)
+                if parsed_places is not None:
+                    unknown = [p for p in parsed_places if p not in identity.index]
+                    if unknown:
                         raise HTTPException(
-                            status_code=413,
-                            detail=_too_large_detail(category, n_rows, estimated, budget),
+                            status_code=422,
+                            detail=f"Unknown place ids at level {level!r}: {unknown[:20]}",
                         )
-                    
-                    hdi_map_df = dataset.calculate_hdi_map(
-                        alpha=alpha,
-                        time_ids=parsed_time_ids,
-                        features=parsed_features,
-                        sample_idx=parsed_sample_idx,
-                        entity_ids=parsed_entity_ids,
-                        enforce_non_negative=enforce_non_negative,
-                        with_metadata=with_metadata,
-                        level=level,
-                        aggregate=aggregate
+                all_months = outcome_table.served_months(forecast_ds, historical_ds)
+                if parsed_months is not None:
+                    unknown = [month_id_to_date(m) for m in parsed_months if m not in set(all_months)]
+                    if unknown:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"No data for months {unknown[:20]}. Months served: "
+                                f"{month_id_to_date(all_months[0])} to {month_id_to_date(all_months[-1])}"
+                            ),
+                        )
+
+                # Decide before computing (C-284): the size follows from the request alone.
+                n_rows = (
+                    len(parsed_places) if parsed_places is not None else len(identity)
+                ) * (len(parsed_months) if parsed_months is not None else len(all_months))
+                n_columns = len(outcome_table.IDENTITY_COLUMNS[level]) + 1 + len(value_columns)
+                estimated = estimate_records_bytes(n_rows, n_columns, 0)
+                budget = _max_response_bytes()
+                if estimated > budget:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=_too_large_detail(n_rows, estimated, budget),
                     )
 
-                    # ADR-025 consumer naming (#222/S4): the reduction emits internal var-keyed
-                    # quantity columns; the sb/ns/os rename is applied ONCE here, on the forecast
-                    # response — the single boundary where real forecast vars are guaranteed to
-                    # conform (historical keeps its own columns).
-                    if category == "forecast":
-                        hdi_map_df = to_consumer_columns(hdi_map_df)
-
-                    result = {
-                        "success": True,
-                        "data": {
-                            "hdi_map": dataframe_to_dict(hdi_map_df),
-                            "shape": hdi_map_df.shape,
-                            "columns": hdi_map_df.columns.tolist(),
-                            "category": category,
-                            "level": level or "pg",
-                            "parameters": {
-                                "alpha": alpha,
-                                "time_ids": parsed_time_ids,
-                                "features": parsed_features,
-                                "sample_idx": parsed_sample_idx,
-                                "entity_ids": parsed_entity_ids,
-                                "enforce_non_negative": enforce_non_negative,
-                                "with_metadata": with_metadata,
-                                "aggregate": aggregate
-                            }
-                        }
-                    }
-                    
-                    return result
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    raise HTTPException(status_code=500, detail=str(e))
-            
-            return hdi_map_endpoint
-
-        # Subset and HDI-MAP routes for the specification's three levels: the grid cell (`pg`,
-        # no level) and the levels the dataset can aggregate to (`LEVELS`: country, admin 1).
-        for level in [None, *LEVELS]:
-            route_prefix = level or "pg"
-            
-            # Historical subset
-            self.app.add_api_route(
-                f"/{route_prefix}/data/historical/subset",
-                create_subset_endpoint("historical", level),
-                methods=["GET"],
-                name=f"get_historical_subset_{route_prefix}"
-            )
-            
-            # Forecast subset
-            self.app.add_api_route(
-                f"/{route_prefix}/data/forecast/subset",
-                create_subset_endpoint("forecast", level),
-                methods=["GET"],
-                name=f"get_forecast_subset_{route_prefix}"
-            )
-            
-            # Historical HDI-MAP
-            self.app.add_api_route(
-                f"/{route_prefix}/analysis/historical/hdi-map",
-                create_hdi_map_endpoint("historical", level),
-                methods=["GET"],
-                name=f"calculate_historical_hdi_map_{route_prefix}"
-            )
-            
-            # Forecast HDI-MAP
-            self.app.add_api_route(
-                f"/{route_prefix}/analysis/forecast/hdi-map",
-                create_hdi_map_endpoint("forecast", level),
-                methods=["GET"],
-                name=f"calculate_forecast_hdi_map_{route_prefix}"
-            )
+                table = outcome_table.build_outcome_table(
+                    forecast_ds, historical_ds, level, outcome,
+                    places=parsed_places, months=parsed_months,
+                )
+                table = table[outcome_table.IDENTITY_COLUMNS[level] + ["month"] + value_columns]
+                return {
+                    "level": level,
+                    "outcome": outcome,
+                    "columns": table.columns.tolist(),
+                    "rows": convert_numpy_types(table.astype(object).to_dict(orient="records")),
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.get("/health")
         async def health_check(

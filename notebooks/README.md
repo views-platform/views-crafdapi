@@ -23,6 +23,10 @@ coverage live for historical **and** forecast.
 
 ## The three notebooks
 
+> **`01` and `02` describe the old routes.** The service now answers slices at
+> `/slice/{level}/{outcome}`, and the client methods these two notebooks call (`fetch_subset`,
+> `hdi_map`) are gone. They are being rewritten (#223); until then they do not run.
+
 | Notebook | Shows | Needs an API key? |
 |---|---|---|
 | [`01_quickstart.ipynb`](01_quickstart.ipynb) | The HTTP API end to end — authentication, a global-coverage check, historical + forecast subsetting (`pg`/`country`/`gaul1`), posterior samples, and HDI/MAP uncertainty (cell-level + aggregated). Data via `CrafdApiClient`; `sample_idx` and `/analysis` shown as raw HTTP with an endpoint reference. | **Yes** (live API) |

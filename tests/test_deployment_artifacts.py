@@ -519,7 +519,7 @@ class TestTheAlarmHasAnOwnerAndADeadline:
         assert "$LOAD_URL" in load["run"] and "-o health2.json" in load["run"]
         assert "mv health2.json health.json" in load["run"]   # a cut-off fetch never replaces it
         assert _STEPS["Assess again"]["run"].startswith("python3 assess.py")
-        assert "time_ids=0&entity_ids=0" in _ENV["LOAD_URL"]   # no hardcoded month to go stale
+        assert _ENV["LOAD_URL"].endswith("?places=0")   # no hardcoded month to go stale
 
     def test_a_rejected_key_raises_an_alarm_and_fails_the_run(self, tmp_path):
         """C-345 in views-faoapi: an expired key made their monitor exit quietly."""
@@ -559,7 +559,7 @@ import json, sys
 args = sys.argv[1:]
 state = json.load(open({state!r}))
 url = next(a for a in args if a.startswith("http"))
-key = "load" if "/data/forecast/subset" in url else "health"
+key = "load" if "/slice/" in url else "health"
 with open({log!r}, "a") as f:
     f.write(json.dumps([key] + args) + "\\n")
 queue = state[key]
@@ -781,9 +781,10 @@ class TestTheJobsFixedPoints:
         GitHub user, and an unassignable login would leave every alarm unowned."""
         assert _ENV["MAINTAINER"] == "Polichinel"
 
-    def test_the_load_request_names_a_real_route_and_feature(self, tmp_path):
+    def test_the_load_request_names_a_real_route_and_outcome(self, tmp_path):
         from fastapi import FastAPI
         from fastapi.routing import APIRoute
+        from starlette.routing import Match
 
         from views_crafdapi.managers.api import CrafdApiManager
 
@@ -791,15 +792,16 @@ class TestTheJobsFixedPoints:
         mgr.app = FastAPI()
         mgr._register_routes()
         smoke = (_ROOT / "src" / "views_crafdapi" / "smoke.py").read_text()
-        path, _, query = _ENV["LOAD_URL"].removeprefix("https://crafdapi.viewsforecasting.org").partition("?")
-        assert ("GET", path) in {
-            (method, route.path)
+        path, _, _ = _ENV["LOAD_URL"].removeprefix("https://crafdapi.viewsforecasting.org").partition("?")
+        scope = {"type": "http", "path": path, "method": "GET"}
+        assert any(
+            route.matches(scope)[0] == Match.FULL
             for route in mgr.app.routes
             if isinstance(route, APIRoute) and route.include_in_schema   # not FastAPI's own pages
-            for method in route.methods
-        }
-        feature = dict(kv.split("=") for kv in query.split("&"))["features"]
-        assert f'"{feature}"' in smoke     # the feature the smoke test reads from production
+        )
+        level, outcome = path.removeprefix("/slice/").split("/")
+        assert (level, outcome) == ("grid", "sb")
+        assert f'"{outcome}"' in smoke     # the outcome the smoke test reads from production
 
 
 class TestTheSecondLookIsTheOneActedOn:

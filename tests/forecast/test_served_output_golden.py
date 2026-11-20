@@ -13,7 +13,7 @@ import pytest
 
 from tests.conftest import make_fao_df
 from views_crafdapi.data.handlers import ForecastDataset
-from views_crafdapi.managers.api import dataframe_to_dict
+from views_crafdapi.managers.serialization import dataframe_to_dict
 
 pytestmark = pytest.mark.layer2_data
 

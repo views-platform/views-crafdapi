@@ -181,58 +181,17 @@ class TestAuthErrorLive:
 # ============================================================
 
 
-class TestDataSubsetLive:
+class TestSliceLive:
+    """The slice through HTTP against the real store: auth → download → parse →
+    ForecastDataset → summary → serialize. One test per level; above the grid cell the
+    samples are summed first, then summarised."""
 
-    def test_forecast_subset_through_http(self, integration_client, test_forecast_file):
-        """Full pipeline: HTTP → auth → _get_latest_dataset → download from
-        Appwrite → parquet parse → ForecastDataset → get_subset_dataframe →
-        dataframe_to_dict → convert_numpy_types → JSON response."""
+    @pytest.mark.parametrize("level", ["grid", "admin1", "country"])
+    def test_a_slice_through_http(self, integration_client, test_forecast_file, level):
         client, api_key = integration_client
-        resp = client.get(
-            "/pg/data/forecast/subset",
-            params={"force_refresh": "true"},
-            headers={"X-API-Key": api_key},
-        )
-        assert resp.status_code == 200
+        resp = client.get(f"/slice/{level}/sb", headers={"X-API-Key": api_key})
+        assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert body["success"] is True
-        assert body["data"]["category"] == "forecast"
-        assert body["data"]["level"] == "pg"
-        assert len(body["data"]["dataframe"]) > 0
-
-
-class TestHdiMapLive:
-
-    def test_forecast_hdi_map_through_http(self, integration_client, test_forecast_file):
-        """Statistical pipeline through HTTP: auth → download → parse →
-        ForecastDataset → PosteriorDistributionAnalyzer → HDI/MAP → serialize."""
-        client, api_key = integration_client
-        resp = client.get(
-            "/pg/analysis/forecast/hdi-map",
-            params={"force_refresh": "true"},
-            headers={"X-API-Key": api_key},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert "hdi_map" in body["data"]
-        columns = body["data"]["columns"]
-        assert any("_map" in col for col in columns)
-
-
-class TestAggregationLive:
-
-    def test_country_aggregation_through_http(self, integration_client, test_forecast_file):
-        """Aggregation pipeline through HTTP: auth → download → parse →
-        ForecastDataset → _aggregate_distributions → _elementwise_sum →
-        serialize."""
-        client, api_key = integration_client
-        resp = client.get(
-            "/country/data/forecast/subset",
-            params={"aggregate": "true"},
-            headers={"X-API-Key": api_key},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert body["data"]["level"] == "country"
+        assert body["level"] == level and body["outcome"] == "sb"
+        assert len(body["rows"]) > 0
+        assert "sb_map" in body["columns"] and "month" in body["columns"]

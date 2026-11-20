@@ -82,7 +82,8 @@ class _Client:
             raise self._health_exc
         return self._health
 
-    def fetch_subset(self, level, time_ids, entity_ids, *, data_type="historical", features=None):
+    def slice(self, level, outcome, *, places=None, months=None, columns=None):
+        self.asked = (level, outcome, places, months, columns)
         if self._fetch_exc_then:
             raise self._fetch_exc_then.pop(0)
         return self._fetch
@@ -107,26 +108,35 @@ def test_health_unreachable_fails():
 
 
 # ── coverage ───────────────────────────────────────────────────────────────
-def _df(countries):
-    return pd.DataFrame({"country_iso_a3": countries, "pg_xcoord": range(len(countries))})
+def _df(countries, values=None, column="sb_map"):
+    values = values if values is not None else [1.0] * len(countries)
+    return pd.DataFrame({"admin1_code": range(len(countries)), "country_iso3": countries, column: values})
 
 
 def test_coverage_present_passes():
     c = _Client(fetch=_df(["IDN", "IDN", "IDN"]))
-    r = smoke.check_coverage(c, "country", 559, "IDN", "forecast", ["pred_lr_ged_sb"])
-    assert r.ok and "IDN present=True" in r.detail
+    r = smoke.check_coverage(c, "2026-07", "IDN", "sb_map")
+    assert r.ok and "IDN: 3 rows, 3 with a value" in r.detail
+    assert c.asked == ("admin1", "sb", None, ["2026-07"], ["sb_map"])
 
 
 def test_coverage_empty_fails():
-    c = _Client(fetch=_df([]))
-    assert not smoke.check_coverage(c, "country", 559, "IDN", "historical").ok
+    c = _Client(fetch=_df([], column="sb_actual"))
+    assert not smoke.check_coverage(c, "2024-12", "IDN", "sb_actual").ok
 
 
 def test_coverage_country_absent_fails():
     # served something, but the requested non-African country isn't in it (a regional-scope regression)
-    c = _Client(fetch=_df(["NGA", "ETH"]))
-    r = smoke.check_coverage(c, "country", 540, "IDN", "historical")
-    assert not r.ok and "IDN present=False" in r.detail
+    c = _Client(fetch=_df(["NGA", "ETH"], column="sb_actual"))
+    r = smoke.check_coverage(c, "2024-12", "IDN", "sb_actual")
+    assert not r.ok and "IDN: 0 rows" in r.detail
+
+
+def test_coverage_country_present_but_without_values_fails():
+    # the rows exist but carry nothing: the country is named, not covered
+    c = _Client(fetch=_df(["IDN", "IDN"], values=[None, None]))
+    r = smoke.check_coverage(c, "2026-07", "IDN", "sb_map")
+    assert not r.ok and "0 with a value" in r.detail
 
 
 # ── retry-once on cold-server timeout ────────────────────────────────────────
@@ -146,7 +156,7 @@ def test_fetch_retry_once_recovers():
 
 def test_check_coverage_retries_on_timeout():
     c = _Client(fetch=_df(["IDN"]), fetch_exc_then=[requests.exceptions.Timeout("cold")])
-    r = smoke.check_coverage(c, "country", 559, "IDN", "forecast", ["pred_lr_ged_sb"])
+    r = smoke.check_coverage(c, "2026-07", "IDN", "sb_map")
     assert r.ok  # first call timed out, retry succeeded
 
 
@@ -154,9 +164,28 @@ def test_check_coverage_retries_on_timeout():
 def test_run_without_key_flags_auth(monkeypatch):
     _patch_get(monkeypatch, {"/ping": _resp(200, {"status": "ok"}),
                              "/version": _resp(200, {"version": "1.3.9", "deployed_tag": "v1.3.9"})})
-    results = smoke.run("http://x", "", expect_tag=None, forecast_month=559, hist_month=540)
+    results = smoke.run("http://x", "", expect_tag=None, forecast_month="2026-07", hist_month="2024-12")
     names = {r.name: r.ok for r in results}
     assert names["ping"] and names["version"] and names["auth"] is False
+
+
+def test_run_checks_the_forecast_month_for_summaries_and_the_past_month_for_recorded_deaths(monkeypatch):
+    """The history check must ask for the recorded deaths; asking it for a forecast column
+    would check the forecast twice and the history never."""
+    _patch_get(monkeypatch, {"/ping": _resp(200, {"status": "ok"}),
+                             "/version": _resp(200, {"version": "1.3.9", "deployed_tag": "v1.3.9"})})
+    asked = []
+
+    class Recording(_Client):
+        def slice(self, level, outcome, *, places=None, months=None, columns=None):
+            asked.append((months, columns))
+            return _df(["IDN"], column=columns[0])
+
+    healthy = {"status": "healthy", "appwrite_connected": True, "forecast_freshness": {"is_stale": False}}
+    monkeypatch.setattr(smoke, "CrafdApiClient", lambda base, key, timeout: Recording(health=healthy))
+    results = smoke.run("http://x", "key", expect_tag=None, forecast_month="2026-07", hist_month="2024-12")
+    assert all(r.ok for r in results), results
+    assert asked[:2] == [(["2026-07"], ["sb_map"]), (["2024-12"], ["sb_actual"])]
 
 
 class TestExpectTagCannotSilentlyInspectNothing:

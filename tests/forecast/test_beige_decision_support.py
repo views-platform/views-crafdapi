@@ -78,41 +78,32 @@ class TestResponseSelfDescribes:
         """Scenario 2 (HDI-as-confidence-interval): the credible level is legible from the
         column NAME (`hdi50`/`hdi90`/`hdi95`) — a consumer reads the exact mass off the column,
         never inferring frequentist coverage. Dropping a level fails this test."""
-        resp = beige_client.get("/pg/analysis/forecast/hdi-map", headers=HEADERS)
+        resp = beige_client.get("/slice/grid/sb", headers=HEADERS)
         assert resp.status_code == 200
-        cols = resp.json()["data"]["columns"]
+        cols = resp.json()["columns"]
         for pct in (50, 90, 95):
-            assert any(c.endswith(f"_hdi{pct}_lower") for c in cols), f"missing hdi{pct}"
-            assert any(c.endswith(f"_hdi{pct}_upper") for c in cols)
+            assert f"sb_hdi{pct}_lower" in cols, f"missing hdi{pct}"
+            assert f"sb_hdi{pct}_upper" in cols
 
-    @pytest.mark.parametrize("category", ["historical", "forecast"])
-    @pytest.mark.parametrize("level,aggregate", [("pg", "false"), ("country", "true"), ("gaul1", "true")])
-    def test_response_states_aggregation_and_level(self, beige_client, level, aggregate, category):
-        """Scenarios 4 + 5 (aggregate-over-trust, small-area over-trust):
-        the response self-describes the spatial `level` and the `aggregate`
-        flag, so an aggregated / small-area estimate is labelled as such."""
-        resp = beige_client.get(
-            f"/{level}/analysis/{category}/hdi-map?aggregate={aggregate}", headers=HEADERS
-        )
+    @pytest.mark.parametrize("level", ["grid", "admin1", "country"])
+    def test_response_states_level_and_outcome(self, beige_client, level):
+        """Scenarios 4 + 5 (aggregate-over-trust, small-area over-trust): the response states
+        its level, so a summed (admin-1, country) or small-area (grid) estimate is labelled
+        as such. Above the grid cell a slice is always summed: there is no switch for it."""
+        resp = beige_client.get(f"/slice/{level}/ns", headers=HEADERS)
         assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["level"] == level
-        assert data["parameters"]["aggregate"] is (aggregate == "true")
-
-    def test_response_states_category(self, beige_client):
-        resp = beige_client.get("/pg/analysis/historical/hdi-map", headers=HEADERS)
-        assert resp.json()["data"]["category"] == "historical"
+        body = resp.json()
+        assert body["level"] == level
+        assert body["outcome"] == "ns"
 
     def test_map_is_never_served_without_uncertainty(self, beige_client):
-        """Scenario 1 (MAP-as-point-prediction): every served MAP is accompanied by HDI bounds
-        (and the severe-outcome summary) in the same payload — the point estimate is never
-        naked, and the retired raw min/max never reappear."""
-        resp = beige_client.get("/pg/analysis/forecast/hdi-map", headers=HEADERS)
-        cols = resp.json()["data"]["columns"]
-        assert any(c.endswith("_map") for c in cols)
-        assert any(c.endswith("_hdi90_lower") for c in cols)
-        assert any(c.endswith("_hdi90_upper") for c in cols)
-        assert any(c.endswith("_severe_scenario") for c in cols)
+        """Scenario 1 (MAP-as-point-prediction): unless the partner names fewer columns, every
+        MAP comes with HDI bounds and the severe-outcome summary in the same payload, and the
+        retired raw min/max never reappear."""
+        resp = beige_client.get("/slice/grid/sb", headers=HEADERS)
+        cols = resp.json()["columns"]
+        for col in ("sb_map", "sb_hdi90_lower", "sb_hdi90_upper", "sb_severe_scenario"):
+            assert col in cols
         assert not any(c.endswith("_min") or c.endswith("_max") for c in cols)
 
 
