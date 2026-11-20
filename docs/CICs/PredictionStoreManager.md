@@ -47,7 +47,7 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 ### Latest-file resolution
 - `get_latest_file_id` returns the `fileId` of the newest prediction matching the given filters (sorted by `$createdAt` descending).
 - `get_latest_file_metadata` returns `Optional[PredictionFileMetadata]` — the file ID plus `$createdAt`/`$updatedAt` timestamps for the newest matching prediction. Returns `None` when no predictions match.
-- `get_latest_provenance` returns `Optional[PredictionProvenance]` — the lineage of the newest matching artifact: its identity (file ID, hash, `$createdAt`, filename), the declared upstream `source`/`pipeline` (`"unknown"` if unstamped), and the faoapi `methodology_version` (from `views_crafdapi.methodology.METHODOLOGY_VERSION`, ADR-023) that computes the published HDI/MAP. The serving layer logs this when an artifact enters service and exposes it at `GET /provenance/{category}`, so a silent viewser→datafactory source switch or methodology re-baseline is auditable (C-86).
+- `get_latest_provenance` returns `Optional[PredictionProvenance]` — the lineage of the newest matching artifact: its identity (file ID, hash, `$createdAt`, filename), the declared upstream `source`/`pipeline` (`"unknown"` if unstamped), and the faoapi `methodology_version` (from `views_crafdapi.methodology.METHODOLOGY_VERSION`, ADR-023) that computes the published HDI/MAP. The serving layer logs this when an artifact enters service (no route returns it since #207), so a silent viewser→datafactory source switch or methodology re-baseline is auditable (C-86).
 - `download_latest_file` combines latest-file resolution with download in a single call.
 
 #### Quarantine / rollback override (C-71)
@@ -90,7 +90,6 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 - `get_latest_file_id(...)` returns `Optional[str]` -- the file ID or `None`.
 - `get_latest_file_metadata(...)` returns `Optional[PredictionFileMetadata]` -- file ID with creation/update timestamps, or `None`.
 - `get_latest_provenance(...)` returns `Optional[PredictionProvenance]` -- a lineage record (file ID, declared upstream `source`/`pipeline`, hash, timestamp, filename, name, category, targets, description) for the newest matching artifact, or `None` (C-86).
-- `get_latest_manifest_provenance()` returns `Optional[PredictionProvenance]` -- the same lineage record for the newest **wire run manifest**, or `None` (#60). It exists because `get_latest_provenance({"category": "forecast"})` *cannot* answer that question: naming a category and no `type` triggers the ADR-013 §11.4 guard, which pins the query to `type="model"` — correct for selection, and fatal for a lineage query on a bucket with no legacy documents. Goes through `get_latest_manifest`, whose `type` is explicit, so the guard leaves it alone. Both build their record through one private `_provenance_from(doc)`, so a lineage query added later cannot drift from the one beside it. **`source` is `"unknown"` on this path** — no producer stamps `source`/`pipeline` on a manifest (register C-252).
 - `get_predictions_by_metadata(...)` returns `List[Dict]` sorted by `$createdAt` descending.
 - `list_all_predictions()` returns `List[Dict]` filtered by current model name.
 - `list_all_predictions_unfiltered()` returns `List[Dict]` with no model filter.

@@ -189,27 +189,6 @@ class TestHdiMap:
             client.hdi_map("country", [559], "NGA")
 
 
-class TestProvenance:
-    @patch("views_crafdapi.client.requests.get")
-    def test_returns_data_record(self, mock_get, client):
-        mock_get.return_value = _mock_response(json_data={"success": True, "data": {
-            "run_id": "rusty_bucket_forecasting_20260727", "created_at": "2026-07-27T09:53:55Z",
-            "mode": "wire", "methodology_version": "3.0.0"}})
-        prov = client.provenance("forecast")
-        assert prov["run_id"].startswith("rusty_bucket") and prov["mode"] == "wire"
-        assert mock_get.call_args[0][0].endswith("/provenance/forecast")
-
-    def test_invalid_category(self, client):
-        with pytest.raises(ValueError, match="category must be"):
-            client.provenance("nope")
-
-    @patch("views_crafdapi.client.requests.get")
-    def test_error_raises(self, mock_get, client):
-        mock_get.return_value = _mock_response(status_code=404, json_data={"detail": "none"})
-        with pytest.raises(RuntimeError, match="404"):
-            client.provenance("historical")
-
-
 class TestPackageExport:
     def test_faoapiclient_is_top_level_export(self):
         import views_crafdapi

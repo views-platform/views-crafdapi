@@ -155,17 +155,6 @@ def test_forecast_file(prediction_manager, file_manager, bucket_id):
 # ============================================================
 
 
-class TestRootEndpointLive:
-
-    def test_root_returns_catalog(self, integration_client):
-        client, _ = integration_client
-        resp = client.get("/")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "endpoints" in body
-        assert "message" in body
-
-
 class TestHealthEndpointLive:
 
     def test_health_with_real_credentials(self, integration_client):
@@ -177,18 +166,6 @@ class TestHealthEndpointLive:
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "healthy"
-
-
-class TestFileListingLive:
-
-    def test_list_files_returns_structure(self, integration_client, bucket_id):
-        client, api_key = integration_client
-        resp = client.get(f"/files/{bucket_id}", headers={"X-API-Key": api_key})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert isinstance(body["files"], list)
-        assert isinstance(body["total"], int)
-        assert body["total"] >= 0
 
 
 class TestAuthErrorLive:

@@ -4,10 +4,10 @@
 |-------------------|------------------------------------------------|
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
-| Last Updated      | 2026-10-21                                     |
+| Last Updated      | 2026-11-20                                     |
 | Total Concerns    | 97                                             |
-| Open Concerns     | 61                                             |
-| Resolved Concerns | 36                                             |
+| Open Concerns     | 56                                             |
+| Resolved Concerns | 41                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -355,11 +355,12 @@ Same family as `C-243` (two descriptions of one thing drifting apart), and the s
 
 ---
 
-### C-252: On the manifest-only lineage path, `source` is unattributable — the exact field C-86 exists to expose
+### C-252 (RESOLVED): On the manifest-only lineage path, `source` is unattributable — the exact field C-86 exists to expose
 
 | Field | Value |
 |-------|-------|
 | ID | C-252 |
+| Status | **RESOLVED 2026-11-20** (#207) — `/provenance` was removed, so no route reports `source` any more. The gap itself stays: no producer stamps `source` on a manifest. Whoever adds a route that names the served run inherits it. |
 | Tier | 3 — honest-absent, not wrong: the endpoint reports `"unknown"` and `served: false` rather than guessing. But it is the normal crafd response on a cold worker, and `source` is the field whose whole purpose is making a silent upstream switch visible. |
 | Source | expert-review (2026-08-14), #60 |
 | Trigger | When a second ensemble is delivered to `crafd_bucket` and an operator needs to confirm *which* one is live from `/provenance/forecast` alone, check whether the answer still depends on whether that worker has served a forecast yet. If it does, either stamp `source` on the manifest producer-side (views-postprocessing `contract/wire/sink.py`) or resolve the ensemble from the shard header at report time. |
@@ -375,11 +376,12 @@ Cross-refs `C-254` (the sibling schema-variance defect on the same path), `C-251
 
 ---
 
-### C-253: The lineage route makes two uncached metadata round trips, the first guaranteed empty, and the second sorts client-side
+### C-253 (RESOLVED): The lineage route makes two uncached metadata round trips, the first guaranteed empty, and the second sorts client-side
 
 | Field | Value |
 |-------|-------|
 | ID | C-253 |
+| Status | **RESOLVED 2026-11-20** (#207) — the lineage route was removed, and its two round trips with it. |
 | Tier | 3 — latency and Appwrite request cost on an endpoint designed to be the *cheap* alternative to fetching the dataframe. No correctness impact. |
 | Source | expert-review (2026-08-14), #60 |
 | Trigger | When `/provenance/forecast` is added to a monitor's polling loop (the Better Stack checks in `reports/ops/betterstack_monitoring.md` currently poll `/ping` only), measure the per-call round trips first — at one poll per 3 minutes this is two full metadata queries per poll, one of which cannot match anything. |
@@ -393,11 +395,12 @@ Cheaper without changing the precedence: push `order_desc('$createdAt') + limit(
 
 ---
 
-### C-254: `run_id` appears in the lineage response only on workers that have served a forecast
+### C-254 (RESOLVED): `run_id` appears in the lineage response only on workers that have served a forecast
 
 | Field | Value |
 |-------|-------|
 | ID | C-254 |
+| Status | **RESOLVED 2026-11-20** (#207) — the lineage route and `client.provenance` were removed; nothing reads `run_id` from the API any more. |
 | Tier | 3 — a documented field that is present or absent depending on process state, not on the data. Consumers in this repo hedge with `.get()`, so it is a contract/doc mismatch rather than a live crash. |
 | Source | expert-review (2026-08-14), #60 |
 | Trigger | When a notebook, monitor or partner script is written to key off `run_id` from `/provenance/forecast` — as `client.py`'s docstring invites — confirm it survives an API restart. It will `KeyError` on the first call to a fresh worker. |
@@ -704,11 +707,12 @@ Cross-refs: **C-236** (the same `_file_cache`/`CacheManager` layers, bounded-by-
 
 ---
 
-### C-270: The documented `search` parameter on `/files/{bucket_id}` builds a query syntax the pinned SDK does not speak
+### C-270 (RESOLVED): The documented `search` parameter on `/files/{bucket_id}` builds a query syntax the pinned SDK does not speak
 
 | Field | Value |
 |-------|-------|
 | ID | C-270 |
+| Status | **RESOLVED 2026-11-20** (#207) — the `/files` routes were removed, and the `search` parameter with them. |
 | Tier | 4 |
 | Source | repo-assimilation (2026-08-18) |
 | Trigger | When a caller reports that `?search=` on the file listing 404s or ignores the term. And before documenting any new Appwrite query parameter — build it with `appwrite.query.Query`, never by string formatting. |
@@ -1678,11 +1682,12 @@ guards that currently stand in for run selection).
 
 ---
 
-### C-304: the 413 refusal names two provenance fields the endpoint does not return
+### C-304 (RESOLVED): the 413 refusal names two provenance fields the endpoint does not return
 
 | Field | Value |
 |-------|-------|
 | ID | C-304 |
+| Status | **RESOLVED 2026-11-20** (#207) — the historical 413 no longer names `/provenance` or `/files`; it says only to narrow the request. A historical table too large for one answer has no single-call route until the bulk files cover history (#203). |
 | Tier | 3 — the instruction is followable up to a point and then dead-ends; no wrong data is served, but the documented escape hatch from a refusal does not work. |
 | Source | route-inventory investigation (2026-08-26); introduced by the C-284 remedy on 2026-08-24 |
 | Trigger | Before a consumer is pointed at the historical file channel — by the 413 body, by `docs/api/README.md:80-82`, or in a partner conversation. Also when `/provenance/historical` is next edited: the fix is to emit the fields, not to soften the message. |
@@ -1940,7 +1945,7 @@ Cross-refs: **C-233**, **C-268** (the outage and revocation paths whose policy i
 | Tier | 4. A disclosure and a diagnosability issue, not a correctness one: the caller gets internal wording (exception messages, store and config text) instead of a fixed string. |
 | Source | code-review medium of the epic #154 close-out (2026-10-16) |
 | Trigger | When narrowing another fail-soft catch to "store failures only" (ADR-033 §6a). Each narrowing routes more bug and config errors into these handlers, so fix the handler first. Equally, before any new consumer is given a key. |
-| Location | `src/views_crafdapi/managers/api.py:663, 791, 891, 982, 1009, 1076, 1114, 1128, 1147` (`raise HTTPException(status_code=500, detail=str(e))`); fixed only on `/provenance/{category}` (bf81684) |
+| Location | `src/views_crafdapi/managers/api.py:663, 791, 891, 982, 1009, 1076, 1114, 1128, 1147` (`raise HTTPException(status_code=500, detail=str(e))`); it was fixed only on `/provenance/{category}` (bf81684), which #207 removed |
 
 C-264 removed the store's wording from the 401/503 responses (#159). The route-level catch-alls were not part of that. Nine of them still answer `detail=str(e)`, so a `RuntimeError("metadata collection is not configured: <store text>")`, a `KeyError` naming an internal column, or a parse error reaches the caller verbatim. The close-out fixed the one route it had made more exposed (`/provenance`, now `"Provenance lookup failed"` with the cause logged) and noted the rest in the CrafdApiManager CIC. A single fix fits: log and return a fixed detail, in one shared handler or an app-level exception handler, rather than nine edits.
 
