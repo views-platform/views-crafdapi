@@ -25,9 +25,21 @@ class TestGetPgCells:
         cells = fao_dataset._get_pg_cells("country", "BBB")
         assert sorted(cells) == [102, 103]
 
-    def test_gaul2_level(self, fao_dataset):
-        cells = fao_dataset._get_pg_cells("gaul2", 100)
-        assert cells == [100]
+    def test_gaul1_level(self, fao_dataset):
+        cells = fao_dataset._get_pg_cells("gaul1", 2)
+        assert sorted(cells) == [102, 103]
+
+    @pytest.mark.parametrize("level", ["gaul0", "gaul2"])
+    def test_levels_outside_the_specification_are_refused(self, fao_dataset, level):
+        """Every public way in names the allowed levels, never a bare KeyError."""
+        with pytest.raises(ValueError, match="Level must be one of"):
+            fao_dataset._get_pg_cells(level, 10)
+        with pytest.raises(ValueError, match="Level must be one of"):
+            fao_dataset.calculate_hdi_map(level=level, aggregate=True)
+        with pytest.raises(ValueError, match="Level must be one of"):
+            fao_dataset.calculate_hdi_map(level=level)
+        with pytest.raises(ValueError, match="Level must be one of"):
+            fao_dataset.get_subset_dataframe(level=level, aggregate=True)
 
     def test_invalid_level_raises(self, fao_dataset):
         with pytest.raises(ValueError, match="Level must be one of"):
@@ -109,26 +121,16 @@ class TestAggregateDistributions:
         result = fao_dataset._aggregate_distributions(empty_df, "country")
         assert result.empty
 
-    def test_gaul0_aggregation_shape(self, fao_dataset):
-        df = fao_dataset.get_subset_dataframe(with_metadata=False).join(fao_dataset.geo_metadata, how="left")
-        result = fao_dataset._aggregate_distributions(df, "gaul0")
-        assert result.shape[0] == 4  # 2 gaul0 regions (10, 20) × 2 months
-
     def test_gaul1_aggregation_shape(self, fao_dataset):
         df = fao_dataset.get_subset_dataframe(with_metadata=False).join(fao_dataset.geo_metadata, how="left")
         result = fao_dataset._aggregate_distributions(df, "gaul1")
         assert result.shape[0] == 4  # 2 gaul1 regions (1, 2) × 2 months
 
-    def test_gaul2_aggregation_shape(self, fao_dataset):
+    def test_gaul1_preserves_metadata_hierarchy(self, fao_dataset):
         df = fao_dataset.get_subset_dataframe(with_metadata=False).join(fao_dataset.geo_metadata, how="left")
-        result = fao_dataset._aggregate_distributions(df, "gaul2")
-        assert result.shape[0] == 8  # 4 gaul2 regions × 2 months (1:1 with cells)
-
-    def test_gaul2_preserves_metadata_hierarchy(self, fao_dataset):
-        df = fao_dataset.get_subset_dataframe(with_metadata=False).join(fao_dataset.geo_metadata, how="left")
-        result = fao_dataset._aggregate_distributions(df, "gaul2")
+        result = fao_dataset._aggregate_distributions(df, "gaul1")
         for col in ["country_iso_a3", "admin1_gaul1_name", "admin1_gaul0_name"]:
-            assert col in result.columns, f"gaul2 aggregation should preserve {col}"
+            assert col in result.columns, f"gaul1 aggregation should preserve {col}"
 
     def test_aggregated_distribution_preserves_sample_count(self, fao_dataset):
         df = fao_dataset.get_subset_dataframe(with_metadata=False).join(fao_dataset.geo_metadata, how="left")
@@ -182,9 +184,9 @@ class TestGetSubsetDataframe:
         assert "pred_test" in result.columns
         assert "pred_other" not in result.columns
 
-    def test_entity_ids_gaul0(self, fao_dataset):
+    def test_entity_ids_gaul1(self, fao_dataset):
         result = fao_dataset.get_subset_dataframe(
-            level="gaul0", entity_ids=[10], with_metadata=False
+            level="gaul1", entity_ids=[1], with_metadata=False
         )
         cell_ids = result.index.get_level_values("priogrid_id").unique()
         assert sorted(cell_ids) == [100, 101]
@@ -220,11 +222,11 @@ class TestCalculateHdiMap:
         assert any("_hdi95_lower" in col for col in result.columns)
         assert not any(c.endswith(("_min", "_max")) for c in result.columns)
 
-    def test_aggregated_hdi_map_gaul0(self, fao_dataset):
+    def test_aggregated_hdi_map_gaul1(self, fao_dataset):
         result = fao_dataset.calculate_hdi_map(
-            alpha=0.9, level="gaul0", aggregate=True, with_metadata=False
+            alpha=0.9, level="gaul1", aggregate=True, with_metadata=False
         )
-        assert result.shape[0] == 4  # 2 gaul0 regions × 2 months
+        assert result.shape[0] == 4  # 2 gaul1 regions × 2 months
         assert any("_severe_scenario" in col for col in result.columns)
         assert not any(c.endswith(("_min", "_max")) for c in result.columns)
 
@@ -376,38 +378,39 @@ class TestC146MissingGeographyCode:
     never exercised. Legacy pandas ``groupby`` silently drops NaN group keys; the
     frame-native path must match (drop the cell), not crash."""
 
-    def _df_with_one_null_gaul2(self):
+    def _df_with_one_null_gaul1(self):
         df = make_fao_df(n_cells=4, n_months=1, n_samples=6)
-        # cells (100,101,102,103) carry gaul2 codes (100,101,200,201); null cell 101's.
-        df["admin2_gaul2_code"] = [100.0, np.nan, 200.0, 201.0]
+        # one admin-1 unit per cell (100,101,102,103 -> 1,2,3,4); null cell 101's code.
+        df["admin1_gaul1_code"] = [1.0, np.nan, 3.0, 4.0]
+        df["admin1_gaul1_name"] = ["Region1", None, "Region3", "Region4"]
         # give known per-draw values so the surviving aggregates are checkable
         df["pred_test"] = [np.full(6, 1.0), np.full(6, 9.0), np.full(6, 2.0), np.full(6, 3.0)]
         return df
 
     def test_missing_level_code_does_not_crash_and_drops_the_cell(self):
-        ds = ForecastDataset(self._df_with_one_null_gaul2())
+        ds = ForecastDataset(self._df_with_one_null_gaul1())
         sub = ds.get_subset_dataframe(with_metadata=False).join(ds.geo_metadata, how="left")
-        agg = ds._aggregate_distributions(sub, "gaul2")  # must not raise KeyError: -1
+        agg = ds._aggregate_distributions(sub, "gaul1")  # must not raise KeyError: -1
 
-        units = {int(u) for u in agg.index.get_level_values("admin2_gaul2_code")}
-        assert units == {100, 200, 201}, "the NaN-coded cell must be dropped (legacy parity)"
-        # surviving single-cell gaul2 units carry their cell's samples unchanged
-        np.testing.assert_array_equal(np.asarray(agg.loc[(600, 100), "pred_test"]), np.full(6, 1.0))
-        np.testing.assert_array_equal(np.asarray(agg.loc[(600, 200), "pred_test"]), np.full(6, 2.0))
+        units = {int(u) for u in agg.index.get_level_values("admin1_gaul1_code")}
+        assert units == {1, 3, 4}, "the NaN-coded cell must be dropped (legacy parity)"
+        # surviving single-cell units carry their cell's samples unchanged
+        np.testing.assert_array_equal(np.asarray(agg.loc[(600, 1), "pred_test"]), np.full(6, 1.0))
+        np.testing.assert_array_equal(np.asarray(agg.loc[(600, 3), "pred_test"]), np.full(6, 2.0))
 
     def test_frame_native_matches_legacy_groupby_under_missing_codes(self):
         """The frame-native (is_prediction) drop must be byte-identical to the legacy
         float64 groupby(dropna) on the same NaN-bearing geography."""
-        df = self._df_with_one_null_gaul2()
+        df = self._df_with_one_null_gaul1()
         pred = ForecastDataset(df)
         sub = pred.get_subset_dataframe(with_metadata=False).join(pred.geo_metadata, how="left")
-        frame_native = pred._aggregate_distributions(sub, "gaul2")
+        frame_native = pred._aggregate_distributions(sub, "gaul1")
 
         # legacy reference: the same cells/codes through the float64 elementwise_sum groupby
         legacy = (
             sub.reset_index()
-            .dropna(subset=["admin2_gaul2_code"])
-            .groupby(["month_id", "admin2_gaul2_code"])["pred_test"]
+            .dropna(subset=["admin1_gaul1_code"])
+            .groupby(["month_id", "admin1_gaul1_code"])["pred_test"]
             .apply(lambda s: np.stack(list(s)).sum(axis=0))
         )
         for (t, code), expected in legacy.items():
@@ -441,6 +444,20 @@ class TestCalculateHdiMapHistoricalStaysFloat64:
         rng = np.random.default_rng(seed)
         big["lr_ged_sb"] = rng.gamma(2.0, 30000.0, size=len(big)).astype(np.float64)
         return big.set_index([tid, eid]).sort_index()
+
+    def test_historical_aggregate_names_its_places(self):
+        """The historical leg aggregates through its own code (`_aggregate_hdi_map_pandas`), so
+        the forecast-path metadata guards do not cover it. An admin-1 answer carries the country
+        and the region names here too."""
+        base = make_fao_df(n_cells=4, n_months=2, n_samples=1, seed=3)
+        feat = base.drop(columns=[c for c in base.columns if c.startswith("pred_")])
+        feat["lr_ged_sb"] = np.arange(len(feat), dtype=np.float64)
+        ds = ForecastDataset(feat, targets=["lr_ged_sb"])
+        assert not ds.is_prediction
+        out = ds.calculate_hdi_map(level="gaul1", aggregate=True)
+        for col in ("country_iso_a3", "admin1_gaul1_name", "admin1_gaul0_name"):
+            assert col in out.columns, f"{col} missing from {list(out.columns)}"
+        assert sorted(out["admin1_gaul1_name"].unique()) == ["Region1", "Region2"]
 
     def test_historical_aggregate_sums_in_float64_then_narrows_once(self):
         """The summation must happen in float64; only the reduction's output narrows.

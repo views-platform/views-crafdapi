@@ -120,9 +120,7 @@ def _served_output_on_real_slice(value_dir, run_id):
     views = [
         ("pg", None, pg_cells, False),
         ("country", "country", countries, True),
-        ("gaul0", "gaul0", _codes_within(ds, "gaul0", countries), True),
         ("gaul1", "gaul1", _codes_within(ds, "gaul1", pg_countries), True),
-        ("gaul2", "gaul2", _codes_within(ds, "gaul2", pg_countries), True),
     ]
     out = {"_meta": {"run_id": run_id, "month": month, "countries": countries}}
     for label, level, entity_ids, aggregate in views:

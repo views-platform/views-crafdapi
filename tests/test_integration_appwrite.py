@@ -217,10 +217,7 @@ class TestDatasetConstruction:
         from views_crafdapi.data.handlers import ForecastDataset
 
         dataset = ForecastDataset(forecast_df)
-        assert "country" in dataset.levels
-        assert "gaul0" in dataset.levels
-        assert "gaul1" in dataset.levels
-        assert "gaul2" in dataset.levels
+        assert set(dataset.levels) == {"country", "gaul1"}
 
     def test_dataset_validates_indices(self, forecast_df):
         from views_crafdapi.data.handlers import ForecastDataset

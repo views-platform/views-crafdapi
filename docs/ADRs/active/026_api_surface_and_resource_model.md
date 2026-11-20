@@ -1,6 +1,6 @@
 # ADR-026: API Surface and Resource Model
 
-**Status:** Superseded (2026-11-18) by the service specification, `docs/SERVICE_SPECIFICATION.md` (bulk files and slices). The code still serves the routes described here until #203, #206 and #207 are done.
+**Status:** Superseded (2026-11-18) by the service specification, `docs/SERVICE_SPECIFICATION.md` (bulk files and slices). The code still serves the routes described here until #203, #206 and #207 are done. 2026-11-20: the levels `gaul0` and `gaul2` were removed (#205); `level` is now one of `pg`, `country`, `gaul1`.
 
 > Earlier status: Accepted
 **Date:** 2026-06-26
@@ -43,6 +43,8 @@ The data/analysis surface follows one URL grammar:
 
 - **`data/.../subset`** returns the rows of the latest dataframe at `level`, filtered by the query parameters.
 - **`analysis/.../hdi-map`** returns computed MAP + HDI summaries at `level`.
+> **Amended 2026-11-20 (#205):** `gaul0` and `gaul2` are removed; `level ∈ { pg, country, gaul1 }`.
+
 - The **`pg`** prefix is the native PRIO-GRID grain; `country`/`gaul0`/`gaul1`/`gaul2` are aggregation levels. Aggregation is performed by the conservation-correct joint-sum (the `aggregate=true` parameter; cf. C-70, the forecast `forecast/aggregate` path).
 
 ~~Two **non-levelled** convenience endpoints return the full latest dataframe of a category: `/data/historical/latest` and `/data/forecast/latest`.~~

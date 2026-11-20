@@ -64,7 +64,7 @@ class CrafdApiClient:
         Parameters
         ----------
         level : str
-            Geographic level: "pg", "country", "gaul0", "gaul1", or "gaul2".
+            Geographic level: "pg", "country", or "gaul1".
         time_ids : list[int]
             VIEWS month IDs to fetch.
         entity_ids : list, str, or None

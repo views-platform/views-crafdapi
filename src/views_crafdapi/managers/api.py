@@ -18,6 +18,7 @@ from views_crafdapi.managers.dataset_service import (
 from views_crafdapi.managers.prediction import PredictionStoreManager
 from views_crafdapi.managers import freshness
 from views_crafdapi.data.handlers import ForecastDataset
+from views_crafdapi.forecast.geography.metadata_table import LEVELS
 from views_crafdapi.version import version_info
 from views_crafdapi.seam_contract import CONSUMER_DOCUMENT_NAME
 from views_crafdapi.managers.serialization import estimate_records_bytes
@@ -738,18 +739,10 @@ class CrafdApiManager(APIManager):
             
             return hdi_map_endpoint
 
-        # Register subset endpoints for each level
-        levels = [None, "country", "gaul0", "gaul1", "gaul2"]
-        level_routes = {
-            None: "pg",
-            "country": "country",
-            "gaul0": "gaul0",
-            "gaul1": "gaul1",
-            "gaul2": "gaul2"
-        }
-        
-        for level in levels:
-            route_prefix = level_routes[level]
+        # Subset and HDI-MAP routes for the specification's three levels: the grid cell (`pg`,
+        # no level) and the levels the dataset can aggregate to (`LEVELS`: country, admin 1).
+        for level in [None, *LEVELS]:
+            route_prefix = level or "pg"
             
             # Historical subset
             self.app.add_api_route(

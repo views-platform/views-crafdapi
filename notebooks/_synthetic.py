@@ -7,8 +7,8 @@ convention). Fixed seed => deterministic.
 
 The frame matches what `ForecastDataset` expects: a 2-level ``(month_id, priogrid_id)``
 MultiIndex, the nine geo-metadata columns, and one `(S,)`-array posterior sample column per
-``pred_*`` target. Geography nests cleanly country -> gaul0 -> gaul1 -> gaul2 so the
-aggregation demo is meaningful at every level.
+``pred_*`` target. Geography nests cleanly country -> gaul0 -> gaul1 -> gaul2 (the dataset
+requires all nine columns); the served levels are country and gaul1.
 """
 from __future__ import annotations
 

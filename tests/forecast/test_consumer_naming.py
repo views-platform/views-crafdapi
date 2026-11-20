@@ -90,9 +90,7 @@ _EXPECTED_PER_SERIES = [  # the 9 ADR-025 forecast value columns per series (act
 @pytest.mark.parametrize("path", [
     "/pg/analysis/forecast/hdi-map",
     "/country/analysis/forecast/hdi-map?aggregate=true",
-    "/gaul0/analysis/forecast/hdi-map?aggregate=true",
     "/gaul1/analysis/forecast/hdi-map?aggregate=true",
-    "/gaul2/analysis/forecast/hdi-map?aggregate=true",
 ])
 def test_forecast_response_has_the_exact_consumer_value_columns(client, path):
     resp = client.get(path, headers=HEADERS)

@@ -23,9 +23,7 @@ _GOLDEN = Path(__file__).parent / "golden" / "served_hdi_map.json"
 _VIEWS = [
     ("pg", None, False),
     ("country", "country", True),
-    ("gaul0", "gaul0", True),
     ("gaul1", "gaul1", True),
-    ("gaul2", "gaul2", True),
 ]
 
 

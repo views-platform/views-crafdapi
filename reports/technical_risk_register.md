@@ -1796,6 +1796,10 @@ already names as undetectable.
 Cross-refs: **C-292** (the file sizes this surface produces), **C-245**, **C-294**, **C-267**,
 **C-284** — the concern cluster living on this surface.
 
+**Status 2026-11-20 (#205):** the service specification now chooses the cardinality: three levels.
+`gaul0` and `gaul2` are removed, so the `country`/`gaul0` duplication above is gone. The entry stays
+open until the remaining grid is replaced by the specification's bulk files and slices (#203, #206).
+
 ---
 
 ### C-308: the delivered run is pgm-only and unreconciled, so the agreed spec cannot currently be met

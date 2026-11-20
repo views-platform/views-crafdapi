@@ -94,12 +94,12 @@ def _named_routes(text):
 
 class TestTheRouteList:
     """The service offers exactly these routes (#207, docs/SERVICE_SPECIFICATION.md). A new route
-    changes this list on purpose; it never appears by accident. #204 and #205 shrink the level
-    routes further."""
+    changes this list on purpose; it never appears by accident. The levels are the specification's
+    three: grid cell (`pg`), country and admin 1 (`gaul1`) (#205)."""
 
     _LEVEL_ROUTES = {
         f"/{level}/{kind}/{category}/{name}"
-        for level in ("pg", "country", "gaul0", "gaul1", "gaul2")
+        for level in ("pg", "country", "gaul1")
         for kind, name in (("data", "subset"), ("analysis", "hdi-map"))
         for category in ("forecast", "historical")
     }
@@ -124,6 +124,7 @@ class TestTheRouteList:
         "/", "/provenance/forecast", "/provenance/historical",
         "/files/test-bucket", "/files/test-bucket/file_001/info",
         "/files/test-bucket/file_001/download",
+        "/gaul0/data/forecast/subset", "/gaul2/analysis/historical/hdi-map",
     ])
     def test_a_removed_route_answers_404(self, app_client, path):
         client, _, _ = app_client
@@ -472,7 +473,7 @@ class TestHdiMapEndpoints:
 # Parametrized subset endpoint matrix (C-06 Sprint 5)
 # ============================================================
 
-_LEVELS = ["pg", "country", "gaul0", "gaul1", "gaul2"]
+_LEVELS = ["pg", "country", "gaul1"]
 _CATEGORIES = ["historical", "forecast"]
 
 _LEVEL_CATEGORY_PARAMS = [
@@ -494,27 +495,17 @@ class TestSubsetEndpointsMatrix:
         assert body["data"]["level"] == level
         assert body["data"]["category"] == category
 
-    def test_subset_entity_ids_gaul0(self, app_client):
+    def test_subset_entity_ids_gaul1(self, app_client):
         client, _, _ = app_client
         resp = client.get(
-            "/gaul0/data/historical/subset",
-            params={"entity_ids": "10"},
+            "/gaul1/data/historical/subset",
+            params={"entity_ids": "1"},
             headers=HEADERS,
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["data"]["parameters"]["entity_ids"] == [10]
-
-    def test_subset_entity_ids_gaul2(self, app_client):
-        client, _, _ = app_client
-        resp = client.get(
-            "/gaul2/data/historical/subset",
-            params={"entity_ids": "100"},
-            headers=HEADERS,
-        )
-        assert resp.status_code == 200
-        shape = resp.json()["data"]["shape"]
-        assert shape[0] == 2  # 1 cell × 2 months
+        assert body["data"]["parameters"]["entity_ids"] == [1]
+        assert body["data"]["shape"][0] == 4  # region 1 holds 2 cells × 2 months
 
     def test_subset_aggregate_gaul1(self, app_client):
         client, _, _ = app_client
@@ -543,10 +534,10 @@ class TestHdiMapEndpointsMatrix:
         assert body["success"] is True
         assert "hdi_map" in body["data"]
 
-    def test_hdi_map_aggregate_gaul0(self, app_client):
+    def test_hdi_map_aggregate_gaul1(self, app_client):
         client, _, _ = app_client
         resp = client.get(
-            "/gaul0/analysis/historical/hdi-map",
+            "/gaul1/analysis/historical/hdi-map",
             params={"aggregate": "true"},
             headers=HEADERS,
         )
@@ -558,11 +549,26 @@ class TestHdiMapEndpointsMatrix:
         assert any("_hdi95_lower" in col for col in columns)
         assert not any(c.endswith(("_min", "_max")) for c in columns)
 
-    def test_hdi_map_entity_ids_gaul2_forecast(self, app_client):
+    @pytest.mark.parametrize("category", ["historical", "forecast"])
+    def test_hdi_map_aggregate_gaul1_names_its_places(self, app_client, category):
+        """An admin-1 answer carries the country and the region names, on both the historical
+        and the forecast path (they aggregate through different code)."""
         client, _, _ = app_client
         resp = client.get(
-            "/gaul2/analysis/forecast/hdi-map",
-            params={"entity_ids": "200"},
+            f"/gaul1/analysis/{category}/hdi-map",
+            params={"aggregate": "true"},
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200
+        columns = resp.json()["data"]["columns"]
+        for col in ("country_iso_a3", "admin1_gaul1_name", "admin1_gaul0_name"):
+            assert col in columns, f"{category}: {col} missing from {columns}"
+
+    def test_hdi_map_entity_ids_gaul1_forecast(self, app_client):
+        client, _, _ = app_client
+        resp = client.get(
+            "/gaul1/analysis/forecast/hdi-map",
+            params={"entity_ids": "2"},
             headers=HEADERS,
         )
         assert resp.status_code == 200

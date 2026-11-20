@@ -81,7 +81,7 @@ Returns a filtered subset of the dataframe.
 - `entity_ids`: Filter by geographic entity (ISO3 or GAUL codes)
 - `with_metadata`: Include geographic metadata columns
 - `aggregate`: Aggregate distributions to specified level
-- `level`: Geographic level ("pg", "country", "gaul0", "gaul1", "gaul2")
+- `level`: Geographic level ("pg", "country", "gaul1")
 
 ##### `calculate_hdi_map`
 
@@ -205,9 +205,7 @@ Aggregates raw distributions by geographic level using element-wise summation.
 | Level | Group Column | Entity ID Type |
 |-------|--------------|----------------|
 | `country` | `country_iso_a3` | ISO Alpha-3 (e.g., "SOM") |
-| `gaul0` | `admin1_gaul0_code` | Integer |
 | `gaul1` | `admin1_gaul1_code` | Integer |
-| `gaul2` | `admin2_gaul2_code` | Integer |
 
 ##### `validate_indices`
 
