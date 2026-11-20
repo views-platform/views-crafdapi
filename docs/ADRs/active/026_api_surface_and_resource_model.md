@@ -1,6 +1,6 @@
 # ADR-026: API Surface and Resource Model
 
-**Status:** Superseded (2026-11-18) by the service specification, `docs/SERVICE_SPECIFICATION.md` (bulk files and slices). The code still serves the routes described here until #203, #206 and #207 are done. 2026-11-20: the levels `gaul0` and `gaul2` were removed (#205); `level` is now one of `pg`, `country`, `gaul1`.
+**Status:** Superseded (2026-11-18) by the service specification, `docs/SERVICE_SPECIFICATION.md` (bulk files and slices). 2026-11-20: the levels `gaul0` and `gaul2` were removed (#205). Later on 2026-11-20 the whole `/{level}/{kind}/{category}/{operation}` grammar below was replaced by one slice route, `/slice/{level}/{outcome}` with levels `grid`, `admin1`, `country` and the options `places`, `months`, `columns` (#204, #206); the bulk route `/data/forecast/bulk` remains until #203. Nothing below describes a route the service still has, except that bulk route.
 
 > Earlier status: Accepted
 **Date:** 2026-06-26
@@ -44,6 +44,7 @@ The data/analysis surface follows one URL grammar:
 - **`data/.../subset`** returns the rows of the latest dataframe at `level`, filtered by the query parameters.
 - **`analysis/.../hdi-map`** returns computed MAP + HDI summaries at `level`.
 > **Amended 2026-11-20 (#205):** `gaul0` and `gaul2` are removed; `level ∈ { pg, country, gaul1 }`.
+> **Amended again 2026-11-20 (#204, #206):** this grammar is gone. The service has one slice route, `/slice/{level}/{outcome}` (see the status note).
 
 - The **`pg`** prefix is the native PRIO-GRID grain; `country`/`gaul0`/`gaul1`/`gaul2` are aggregation levels. Aggregation is performed by the conservation-correct joint-sum (the `aggregate=true` parameter; cf. C-70, the forecast `forecast/aggregate` path).
 

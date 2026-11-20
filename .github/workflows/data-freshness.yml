@@ -64,10 +64,10 @@ env:
   # `gh` infers the repo from the git remote; this job has no checkout, by design.
   GH_REPO: ${{ github.repository }}
   HEALTH_URL: https://crafdapi.viewsforecasting.org/health
-  # Loads the live forecast and returns nothing: month 0 and cell 0 match no row, so
-  # the response is empty whichever month is current (a hardcoded in-window month goes
-  # stale itself, views-faoapi C-335). The load happens before the filter (api.py).
-  LOAD_URL: https://crafdapi.viewsforecasting.org/pg/data/forecast/subset?time_ids=0&entity_ids=0&features=pred_lr_ged_sb&with_metadata=false
+  # Loads the live forecast and returns nothing: no grid cell has id 0, so the slice is
+  # refused (422) whichever month is current (a hardcoded in-window month goes stale
+  # itself, views-faoapi C-335). The load happens before the place check (api.py).
+  LOAD_URL: https://crafdapi.viewsforecasting.org/slice/grid/sb?places=0
   # Who the alarm is for. Assignment is what makes GitHub email someone.
   MAINTAINER: Polichinel
   # The day of the month the delivery runs from (upstream's schedule, "on or after the

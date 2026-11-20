@@ -4,7 +4,7 @@ Our 899 unit tests are all mocked/in-process — none hit the deployed service, 
 scope-regressed deploy reached the maintainer only in Jupyter. This is the live check that runs right
 after a deploy. It (1) VERIFIES the service — process up, correct build, Appwrite reachable, and BOTH
 historical & forecast serve with GLOBAL coverage (a non-African country returns cells — the exact
-regional-historical regression that bit us) — and (2) WARMS the server caches: a single-country subset
+regional-historical regression that bit us) — and (2) WARMS the server caches: a one-month slice
 still forces the full server-side dataset load (`api.py` `_get_latest_dataset`), so the first real
 consumer call afterwards is fast instead of timing out.
 
@@ -21,13 +21,13 @@ import argparse
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
 import requests
 
 from views_crafdapi.client import CrafdApiClient
-from views_crafdapi.time import date_to_month_id
 
 _DEFAULT_URL = "https://crafdapi.viewsforecasting.org"
 _KEY_ENV = "APPWRITE_DATASTORE_API_KEY"
@@ -116,34 +116,35 @@ def fetch_retry_once(fetch: Callable, on_retry: Callable[[], None] = lambda: Non
         return fetch()
 
 
-def check_coverage(client: CrafdApiClient, level: str, month: int, country: str,
-                   data_type: str, features: Optional[List[str]] = None) -> Result:
-    name = f"{data_type} coverage[{country}]"
+def check_coverage(client: CrafdApiClient, month: str, country: str, column: str) -> Result:
+    """One month of admin-1 rows for state-based violence: the country asked for must be in
+    it, with a value in `column` (`sb_map` for a forecast month, `sb_actual` for a past one)."""
+    name = f"{column} coverage[{country}]"
     try:
         df = fetch_retry_once(
-            lambda: client.fetch_subset(level, [month], country, data_type=data_type, features=features),
+            lambda: client.slice("admin1", "sb", months=[month], columns=[column]),
             on_retry=lambda: print(f"  [{name}] server cache was cold — warmed, retrying once…", flush=True),
         )
     except Exception as e:
         return Result(name, False, f"error: {e}")
-    n = len(df)
-    present = country in set(df["country_iso_a3"].astype(str)) if "country_iso_a3" in df.columns else False
-    return Result(name, n > 0 and present, f"{n:,} cells, {country} present={present}")
+    in_country = df[df["country_iso3"].astype(str) == country] if "country_iso3" in df.columns else df.iloc[0:0]
+    valued = int(in_country[column].notna().sum()) if column in in_country.columns else 0
+    return Result(name, valued > 0,
+                  f"{len(df):,} admin-1 rows, {country}: {len(in_country)} rows, {valued} with a value")
 
 
-def check_warm(client: CrafdApiClient, level: str, month: int, country: str,
-               data_type: str, features: Optional[List[str]] = None, threshold_s: float = 15.0) -> Result:
+def check_warm(client: CrafdApiClient, month: str, country: str, threshold_s: float = 15.0) -> Result:
     """A second call should be fast (warm) — proves the warm-up actually took."""
     t0 = time.monotonic()
     try:
-        client.fetch_subset(level, [month], country, data_type=data_type, features=features)
+        client.slice("admin1", "sb", months=[month], columns=["sb_map"])
     except Exception as e:
         return Result("warm check", False, f"error: {e}")
     dt = time.monotonic() - t0
-    return Result("warm check", dt <= threshold_s, f"second {data_type} call {dt:.1f}s (<= {threshold_s}s)")
+    return Result("warm check", dt <= threshold_s, f"second forecast call {dt:.1f}s (<= {threshold_s}s)")
 
 
-def run(base: str, key: str, *, expect_tag: Optional[str], forecast_month: int, hist_month: int,
+def run(base: str, key: str, *, expect_tag: Optional[str], forecast_month: str, hist_month: str,
         country: str = "IDN", timeout: float = 600.0) -> List[Result]:
     results = [check_ping(base), check_version(base, expect_tag)]
     if not key:
@@ -151,10 +152,10 @@ def run(base: str, key: str, *, expect_tag: Optional[str], forecast_month: int, 
         return results
     client = CrafdApiClient(base, key, timeout=timeout)
     results.append(check_health(client))
-    # The two coverage calls are also the cold-load warm-up (forecast, then historical).
-    results.append(check_coverage(client, "country", forecast_month, country, "forecast", ["pred_lr_ged_sb"]))
-    results.append(check_coverage(client, "country", hist_month, country, "historical"))
-    results.append(check_warm(client, "country", forecast_month, country, "forecast", ["pred_lr_ged_sb"]))
+    # The first coverage call is also the cold-load warm-up (it loads forecast and history).
+    results.append(check_coverage(client, forecast_month, country, "sb_map"))
+    results.append(check_coverage(client, hist_month, country, "sb_actual"))
+    results.append(check_warm(client, forecast_month, country))
     return results
 
 
@@ -163,9 +164,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--url", default=os.environ.get("VIEWS_API_URL", _DEFAULT_URL))
     p.add_argument("--expect-tag", default=None,
                    help="assert GET /version deployed_tag == this (e.g. v1.3.9)")
-    p.add_argument("--forecast-month", type=int, default=date_to_month_id(2026, 7),
-                   help="in-window forecast month_id (default 559 = 2026-07; advances per run)")
-    p.add_argument("--hist-month", type=int, default=date_to_month_id(2024, 12))
+    p.add_argument("--forecast-month", default=datetime.now(timezone.utc).strftime("%Y-%m"),
+                   help="a month inside the served forecast, year-month (default: this month, "
+                        "which a monthly forecast covers; a month outside it fails with 422)")
+    p.add_argument("--hist-month", default="2024-12", help="a past month, year-month")
     p.add_argument("--country", default="IDN", help="a non-African ISO3 to prove global coverage")
     p.add_argument("--timeout", type=float, default=600.0,
                    help="per-request timeout (s); the first cold load can take minutes")

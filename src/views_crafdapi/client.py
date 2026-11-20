@@ -1,8 +1,8 @@
 """
 Lightweight client for the VIEWS CRAF'd Prediction API.
 
-Convenience wrappers for fetching data subsets and converting responses
-to pandas DataFrames. Intended for notebooks, scripts, and external consumers.
+Convenience wrappers for fetching slices and converting responses to pandas
+DataFrames. Intended for notebooks, scripts, and external consumers.
 """
 
 import pandas as pd
@@ -48,133 +48,48 @@ class CrafdApiClient:
             )
         return response.json()
 
-    def fetch_subset(
+    def slice(
         self,
         level: str,
-        time_ids: list[int],
-        entity_ids: list[int] | list[str] | str | None = None,
+        outcome: str,
         *,
-        data_type: str = "historical",
-        features: list[str] | None = None,
-        with_metadata: bool = True,
-        force_refresh: bool = False,
+        places: list[int] | None = None,
+        months: list[str] | None = None,
+        columns: list[str] | None = None,
     ) -> pd.DataFrame:
-        """Fetch a data subset and return it as a DataFrame.
+        """Fetch a slice of one outcome at one level as a DataFrame.
+
+        Wraps ``GET /slice/{level}/{outcome}``. Each row is one place in one month: the place's
+        id and names, ``month`` (written ``2027-01``), then the outcome's summary columns.
+        Forecast months carry the summaries; past months carry the recorded deaths in
+        ``{outcome}_actual``.
+
+        **Not every column is a count.** The ``_p_gt{c}`` columns are probabilities in [0, 1],
+        and ``_bimodality_flag`` is 0 or 1. See ``docs/api/data_dictionary.md``.
 
         Parameters
         ----------
         level : str
-            Geographic level: "pg", "country", or "gaul1".
-        time_ids : list[int]
-            VIEWS month IDs to fetch.
-        entity_ids : list, str, or None
-            Entity identifiers (PRIO-GRID ints, ISO3 strings, or GAUL codes). ``None`` (the
-            default) omits the filter, returning ALL entities for the month — the full global
-            footprint (used by the coverage notebooks).
-        data_type : str
-            "historical" or "forecast" (default: "historical").
-        features : list[str], optional
-            Which features to include (default: all).
-        with_metadata : bool
-            Include geographic context columns (default: True).
-        force_refresh : bool
-            Bypass server cache (default: False).
+            ``"grid"``, ``"admin1"`` or ``"country"``.
+        outcome : str
+            ``"sb"``, ``"ns"`` or ``"os"`` today.
+        places : list[int], optional
+            Place ids at that level: PRIO-GRID cell ids, GAUL admin-1 codes, or GAUL country
+            codes. Default: all places.
+        months : list[str], optional
+            Months written year-month, such as ``"2027-01"``. Default: all months.
+        columns : list[str], optional
+            Summary column names. Default: all. The place names and ``month`` always come back.
         """
-        if data_type not in ("historical", "forecast"):
-            raise ValueError(f"data_type must be 'historical' or 'forecast', got {data_type!r}")
-
-        params: dict = {
-            "time_ids": ",".join(map(str, time_ids)),
-            "with_metadata": with_metadata,
-            "force_refresh": force_refresh,
-        }
-        # entity_ids is optional: when omitted (None) the server returns ALL entities for the
-        # month — i.e. the full global footprint — which the coverage notebooks rely on.
-        if entity_ids is not None:
-            if isinstance(entity_ids, str):
-                params["entity_ids"] = entity_ids
-            else:
-                params["entity_ids"] = ",".join(map(str, entity_ids))
-        if features:
-            params["features"] = ",".join(features)
-
-        endpoint = f"{level}/data/{data_type}/subset"
-        response = requests.get(
-            f"{self._base_url}/{endpoint}",
-            headers=self._headers,
-            params=params,
-            timeout=self._timeout,
-        )
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"API error {response.status_code} on {endpoint}: "
-                f"{self._extract_detail(response)}"
-            )
-
-        payload = response.json()
-        data = payload["data"]
-        df = pd.DataFrame.from_dict(data["dataframe"])
-        return df
-
-    def hdi_map(
-        self,
-        level: str,
-        time_ids: list[int] | None = None,
-        entity_ids: list[int] | list[str] | str | None = None,
-        *,
-        data_type: str = "forecast",
-        features: list[str] | None = None,
-        alpha: float = 0.9,
-        aggregate: bool = False,
-        enforce_non_negative: bool = False,
-        sample_idx: list[int] | None = None,
-        with_metadata: bool = True,
-        force_refresh: bool = False,
-    ) -> pd.DataFrame:
-        """Fetch collapsed HDI + MAP estimates as a DataFrame — the headline forecast product.
-
-        Wraps ``GET /{level}/analysis/{data_type}/hdi-map`` so consumers don't hand-roll HTTP.
-        For a forecast, each row carries, per violence series, the point estimate and nested
-        credible intervals — ``sb_map`` and ``sb_hdi{50,90,95}_{lower,upper}`` (and ``ns_``/``os_``),
-        plus ``sb_severe_scenario``, ``sb_bimodality_flag`` and the ADR-034 exceedance columns
-        ``sb_p_gt{25,100,1000}``.
-
-        **Not every column is a count.** Three kinds appear (ADR-024, ADR-034 §3):
-
-        * **counts** — ``s_map``, the six ``s_hdi*`` bounds, ``s_severe_scenario``
-        * **probabilities in [0, 1]** — ``s_p_gt25/100/1000``. ``sb_p_gt25 = 0.4`` means a 40%
-          chance of exceeding 25 fatalities, **not** 0.4 fatalities
-        * **flags** — ``s_bimodality_flag`` (0/1, NaN where the posterior is missing)
-
-        See ``docs/api/data_dictionary.md``.
-
-        Parameters mirror :meth:`fetch_subset`, plus:
-        alpha : Primary HDI mass (0.9 → 90%); the response always includes the signed-off 50/90/95
-            levels regardless.
-        aggregate : Sum aligned posterior draws to ``level`` before collapsing (honest joint
-            uncertainty — the HDI of the sum, not the sum of HDIs).
-        enforce_non_negative : Clip MAP estimates at 0 (posterior draws can be negative).
-        """
-        if data_type not in ("historical", "forecast"):
-            raise ValueError(f"data_type must be 'historical' or 'forecast', got {data_type!r}")
-
-        params: dict = {
-            "alpha": alpha,
-            "aggregate": aggregate,
-            "enforce_non_negative": enforce_non_negative,
-            "with_metadata": with_metadata,
-            "force_refresh": force_refresh,
-        }
-        if time_ids is not None:
-            params["time_ids"] = ",".join(map(str, time_ids))
-        if entity_ids is not None:
-            params["entity_ids"] = (
-                entity_ids if isinstance(entity_ids, str) else ",".join(map(str, entity_ids))
-            )
-        if features:
-            params["features"] = ",".join(features)
-        if sample_idx is not None:
-            params["sample_idx"] = ",".join(map(str, sample_idx))
-
-        payload = self._get_json(f"{level}/analysis/{data_type}/hdi-map", params=params)
-        return pd.DataFrame.from_records(payload["data"]["hdi_map"])
+        if isinstance(places, str) or isinstance(months, str) or isinstance(columns, str):
+            raise TypeError("places, months and columns are lists, such as places=[161, 160]")
+        params: dict = {}
+        if places is not None:
+            # int(): ids read from a file often arrive as floats (1301.0); the API takes 1301.
+            params["places"] = ",".join(str(int(p)) for p in places)
+        if months is not None:
+            params["months"] = ",".join(months)
+        if columns is not None:
+            params["columns"] = ",".join(columns)
+        payload = self._get_json(f"slice/{level}/{outcome}", params=params)
+        return pd.DataFrame.from_records(payload["rows"], columns=payload["columns"])

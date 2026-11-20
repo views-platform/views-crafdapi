@@ -35,7 +35,7 @@
   3. Remote Appwrite download via `PredictionStoreManager` (slowest, authoritative source).
   Cache hits at any tier populate all higher tiers.
 - **Per-API-key isolation:** Manager instances, DataFrames, and dataset objects are cached per API-key-hash. Different API keys never share cached data (except the global file-ID-to-bytes cache, which is content-addressed).
-- **Endpoint routing:** Registers exactly the routes `tests/test_api_endpoints.py::TestTheRouteList` lists: `/ping`, `/version`, `/health`, `/data/forecast/bulk`, and subset and HDI-MAP routes for the three geographic levels in the specification (pg, country, gaul1) times two categories (historical, forecast). There is no endpoint index at `/`, no `/provenance`, and no `/files` route (removed for the service specification, #207). The levels admin 0 (`gaul0`) and admin 2 (`gaul2`) were removed (#205).
+- **Endpoint routing:** Registers exactly the routes `tests/test_api_endpoints.py::TestTheRouteList` lists: `/ping`, `/version`, `/health`, `/data/forecast/bulk`, and one slice route, `/slice/{level}/{outcome}`, for the specification's three levels (`grid`, `admin1`, `country`) and every outcome. The slice takes exactly the specification's options (places, months, columns; the outcome is in the path), returns summary columns and the recorded deaths, and never samples (#204, #206). The subset and HDI-MAP routes it replaced are gone. There is no endpoint index at `/`, no `/provenance`, and no `/files` route (removed for the service specification, #207). The levels admin 0 (`gaul0`) and admin 2 (`gaul2`) were removed (#205).
 - **Provenance/lineage (C-86 / ADR-023):** When an artifact is brought into service, the composed `DatasetService.get_latest_dataset` (reached through `_get_latest_dataset`) resolves and logs a `PredictionProvenance` record (file ID, declared upstream `source`/`pipeline`, hash, timestamp) and stores it on the dataframe cache. `/health` reads the served run's creation time from it for the freshness verdict. No route returns the record itself (`/provenance` was removed, #207).
 - **Value/metadata plausibility (C-72):** Before caching/serving, `DatasetService.get_latest_dataset` calls `dataset.validate_value_plausibility()` (prediction samples finite + non-negative) and `dataset.validate_metadata_plausibility()` (coordinate ranges, ISO3 shape, non-negative GAUL codes). A violation is surfaced as HTTP 500 — implausible data fails loud rather than reaching FAO. The disk-cache read re-runs both checks (C-277, #168), so a slot whose bytes no longer pass is never served: it is rebuilt from source, or answered with 503 on the last-good fallback.
 - **Error translation:** All exceptions within endpoint handlers are caught and translated to appropriate HTTP status codes (401 when the store refuses the key, 404 when no forecast exists, 422 for invalid query parameters, 500 for unhandled errors, 503 when the metadata store cannot be asked — see §6). Most data routes still echo the exception text in a 500 (`detail=str(e)`, the C-264 remainder).
@@ -80,9 +80,9 @@
 
 - **HTTP 401 (Unauthorized):** Raised only when the store refuses the key (Appwrite 401/403): by `_validate_api_key()` (which tests the key with `list_buckets(limit=1)`), by any metadata lookup or artifact download on a data route, and by `/health`. Nothing is served from cache or the last-good fallback to a refused key (C-268, #159; ADR-033 §6a). The detail is generic (`"API key not authorized"`); the store's wording goes to the log (C-264).
 - **HTTP 404 (Not Found):** Raised when no prediction files match the requested category in the Appwrite bucket, and for any path that is not a route.
-- **HTTP 422 (Unprocessable Entity):** Raised by `parse_list_param()` and `parse_string_list_param()` when query parameters cannot be parsed as comma-separated integers or strings.
+- **HTTP 422 (Unprocessable Entity):** Raised by the slice when an option is badly written (a place id that is not a whole number, a month not written `2027-01`, an empty option, an option given twice) or names a place, month or column that is not served. The detail says which.
 - **HTTP 500 (Internal Server Error):** Catch-all for unhandled exceptions within endpoint handlers. Includes file download failures, DataFrame parsing failures, `ForecastDataset` construction failures, and `PredictionStoreManager` creation failures.
-- **HTTP 503 (Service Unavailable):** "Metadata store unavailable" when the store could not be asked — any `_validate_api_key()` failure that is not a 401/403 (no response, timeout, rate limit, 5xx, unexpected exception), and a failed historical lookup (C-233, #158). A forecast route with no servable run and no last-good run within the SLA is also 503, naming the refusal reason (ADR-033 §6a). `/health` returns 503 "Service unhealthy" when its own check raises. A missing `APPWRITE_*` configuration is 500 "Server configuration error".
+- **HTTP 503 (Service Unavailable):** "Metadata store unavailable" when the store could not be asked — any `_validate_api_key()` failure that is not a 401/403 (no response, timeout, rate limit, 5xx, unexpected exception), and a failed historical lookup (C-233, #158). A forecast route with no servable run and no last-good run within the SLA is also 503, naming the refusal reason (ADR-033 §6a). The slice is 503 too when it reaches months before the forecast and the history cannot be loaded, or holds no column for the outcome, for any reason but a refused key (that stays 401): an empty recorded-deaths column would read as "nothing recorded". A slice of forecast months only does not read the history. `/health` returns 503 "Service unhealthy" when its own check raises. A missing `APPWRITE_*` configuration is 500 "Server configuration error".
 - **`/health` forecast freshness (S3/#246, C-50):** `/health` returns HTTP 200 with `status: "degraded"` and a `forecast_freshness` block when the served forecast exceeds the freshness SLA (default 45 days, env `CRAFDAPI_FORECAST_FRESHNESS_SLA_DAYS`); the HTTP status stays about *service* health: 401 when the store refuses the key, 503 only when the check itself raises. A store that answers `list_buckets` with a non-auth failure is reported as `appwrite_connected: false` in a 200 response, and does not on its own make `status` `"degraded"`.
 - **`/health` grace-fallback state (S4/#249, ADR-033 §6, D-24):** when a bounded last-good fallback is active (the newest manifested run was refused and `DatasetService` is serving the last-good run within the SLA), `/health` sets `status: "degraded"` and a `forecast_serving_state` block — even when the served forecast is itself fresh. Read from `DatasetService.forecast_serving_state()`; `None` (no forecast served yet) is omitted.
 - **`/health` names the build that wrote the served forecast (C-282, #170):** a `served_entry` block `{written_by, written_at (ISO-8601 UTC), source_kind}` from `DatasetService.served_forecast_entry()`. After a deploy the disk slot can still be the previous build's, so this answers "is the fix in effect?" without reading files on the box. Reported, not judged: an older `written_by` never changes `status`; `null` means a build from before #170 wrote the slot (adding the field did not invalidate existing slots). Omitted before the first forecast serve, and from the moment a request has to go to the store until it serves one, so a 503, 401 or 500 leaves none. Per worker and per API key, like `forecast_serving_state`.
@@ -107,8 +107,6 @@
   - FastAPI/uvicorn (external) -- invokes the registered endpoint handlers.
   - `create_app()` (module-level factory function) -- constructs the singleton instance.
 - **Module-level helpers** (not methods, but co-located):
-  - `parse_list_param(param)` -> `List[int]`: Parses comma-separated integer strings.
-  - `parse_string_list_param(param)` -> `List[str]`: Parses comma-separated strings.
   - `convert_numpy_types(obj)` -> native Python types: Recursive conversion for JSON serialization.
   - `flatten_numeric_list_columns(df)` -> DataFrame: Flattens single-element arrays to scalars.
   - `dataframe_to_dict(df)` -> `List[Dict]`: Converts DataFrame to JSON-ready records with numpy type conversion.
@@ -153,9 +151,9 @@ manager = CrafdApiManager.from_config(config, cache_dir=Path("/tmp/test_cache"))
 import requests
 
 response = requests.get(
-    "http://localhost:80/pg/data/forecast/subset",
-    headers={"X-API-Key": "my-appwrite-api-key"},
-    params={"time_ids": "500,501,502", "features": "main_mean", "with_metadata": True}
+    "http://localhost:80/slice/admin1/sb",
+    headers={"X-API-Key": "my-api-key"},
+    params={"places": "1301", "months": "2027-01,2027-02", "columns": "sb_map,sb_hdi90_upper"},
 )
 data = response.json()
 ```
@@ -207,7 +205,7 @@ manager._dataframe_cache = {}
 
 - **Dedicated test files:**
   - `tests/test_api_endpoints.py` — endpoint routing, HTTP status codes, response format for all dynamic routes; `TestTheRouteList` pins the exact route list (#207).
-  - `tests/test_api_utilities.py` — `parse_list_param()`, `parse_string_list_param()`, `convert_numpy_types()`, `dataframe_to_dict()` unit tests.
+  - `tests/test_api_utilities.py` — `convert_numpy_types()`, `dataframe_to_dict()` unit tests.
   - `tests/test_cache_bounds.py` — LRU/TTL eviction behavior, cache size limits.
   - `tests/test_disk_cache_versioning.py` — schema version embed and mismatch detection.
   - `tests/test_format_cascade.py` — format auto-detection pipeline including parquet magic-bytes guard (C-52).
@@ -216,8 +214,7 @@ manager._dataframe_cache = {}
   - `tests/test_integration_http.py` — ASGI integration tests via `httpx.AsyncClient`.
 - **Integration coverage via downstream tests:** `tests/test_datastore_manager.py` exercises `PredictionStoreManager`, which is a key dependency.
 - **Green tests (must pass):**
-  - `parse_list_param()` correctly parses valid input and raises HTTP 422 for invalid input.
-  - `parse_string_list_param()` correctly parses valid input and returns None for null/empty.
+  - The slice refuses a badly written or unknown option with HTTP 422 (`tests/test_api_endpoints.py::TestSliceRoute`).
   - `convert_numpy_types()` recursively converts numpy scalars to Python natives.
   - `dataframe_to_dict()` produces JSON-serializable list-of-dicts output.
   - Bounded caches evict entries at capacity (LRU) and after TTL expiry.

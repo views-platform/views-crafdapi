@@ -87,18 +87,14 @@ _EXPECTED_PER_SERIES = [  # the 9 ADR-025 forecast value columns per series (act
 ]
 
 
-@pytest.mark.parametrize("path", [
-    "/pg/analysis/forecast/hdi-map",
-    "/country/analysis/forecast/hdi-map?aggregate=true",
-    "/gaul1/analysis/forecast/hdi-map?aggregate=true",
-])
-def test_forecast_response_has_the_exact_consumer_value_columns(client, path):
-    resp = client.get(path, headers=HEADERS)
+@pytest.mark.parametrize("level", ["grid", "admin1", "country"])
+@pytest.mark.parametrize("outcome", schema.SERIES)
+def test_forecast_response_has_the_exact_consumer_value_columns(client, level, outcome):
+    resp = client.get(f"/slice/{level}/{outcome}", headers=HEADERS)
     assert resp.status_code == 200, resp.text
-    cols = set(resp.json()["data"]["columns"])
-    for s in schema.SERIES:
-        for tmpl in _EXPECTED_PER_SERIES:
-            assert tmpl.format(s=s) in cols, f"missing {tmpl.format(s=s)} in {sorted(cols)}"
+    cols = set(resp.json()["columns"])
+    for tmpl in _EXPECTED_PER_SERIES:
+        assert tmpl.format(s=outcome) in cols, f"missing {tmpl.format(s=outcome)} in {sorted(cols)}"
     # min/max retired; and NO internal pipeline prefix survives on ANY served column (C-α guard).
     assert not any(c.endswith("_min") or c.endswith("_max") for c in cols)
     assert not any(c.startswith(("pred_", "lr_", "ln_", "ged_")) for c in cols)

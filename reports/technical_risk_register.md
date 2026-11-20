@@ -5,8 +5,8 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-11-20                                     |
-| Total Concerns    | 97                                             |
-| Open Concerns     | 56                                             |
+| Total Concerns    | 98                                             |
+| Open Concerns     | 57                                             |
 | Resolved Concerns | 41                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
@@ -324,6 +324,7 @@ Cross-ref (review-rr 2026-10-16): **C-364**, which makes `severe_scenario` equal
 | Source | expert-review (2026-08-11) — found while documenting the served columns, epic #40 / D8 (#48) |
 | Trigger | When a consumer reports "no observations exist for these months", check the server log for the historical-fetch warning before believing it. Before CRAF'd relies on the bulk product for forecast-vs-actual skill scoring, give this an in-band signal. |
 | Location | `src/views_crafdapi/managers/api.py:522-528`, `src/views_crafdapi/forecast/serialize/bulk_parquet.py:98-107` |
+| Status | 2026-11-20 (#224): a slice reaching months before the forecast refuses with 503 when the history cannot be loaded or holds no column for the outcome (a refused key stays 401), so no slice serves a blank `*_actual`. A slice of forecast months only does not read the history, so a broken history takes only past-month slices away. **Remaining:** the bulk route still serves blanks (#203 rebuilds it on the slice's table and should take the same rule), and `/health` does not report the history, so no monitor sees it broken (the alarm moves in #214). |
 
 `/data/forecast/bulk` catches a historical-fetch failure, logs a **server-side warning only**, and calls `write_bulk_parquet(out, forecast_ds, None)`; the writer then fills all three `*_actual` columns with `pd.NA`. The download succeeds with HTTP 200 and 45 columns.
 
@@ -949,6 +950,7 @@ step that was documented but wrong), ADR-023 §"the gate is enforced at PR revie
 | Field | Value |
 |-------|-------|
 | ID | C-285 |
+| Status | 2026-11-20 (#224): the slice briefly became a plain `def` to leave the event loop. Review measured why that is unsafe here: slices then run side by side on dataset copies sharing pandas index objects, and the first concurrent use of a fresh index read a half-built lookup table (8 wrong answers in 30), and cold requests each loaded the dataset. It is `async def` again (test `test_slices_run_one_at_a_time_on_the_event_loop`). It got faster instead: one cell for one month 0.3 s, one month of the whole grid 1.3 s, JSON written by `to_json`; a slice whose work exceeds the budget is refused before it starts. Leaving the event loop needs per-request dataset copies that do not share indexes, plus a lock on the cache-miss path. |
 | Tier | 2 |
 | Source | cross-repo assessment against views-faoapi (2026-08-22) |
 | Trigger | Before adding any endpoint whose work is measured in tens of seconds, and before tuning the Better Stack `/ping` monitor's timeout or interval to stop a flapping alert — the flap may be a long legitimate request, not a sick service. Also when C-284's remedy is designed: a row bound also bounds this. |
@@ -1289,6 +1291,7 @@ redaction defect in `wandb/utils.py` — same vestigial corner), **C-284**/issue
 | Field | Value |
 |-------|-------|
 | ID | C-293 |
+| Status | 2026-11-20 (#224): the slice serves recorded deaths only for months before the first forecast month, so the sparse frontier month shows none (`outcome_table.recorded_months`; test `test_the_newest_recorded_month_is_not_served_as_recorded_deaths`). Checked on the cached real run: 2026-07 showed `sb_actual` 0 in all 202 countries before. The bulk route still serves it, until #203. |
 | Tier | 3 |
 | Source | route-by-route functionality probe against real artifacts (2026-08-23) |
 | Trigger | Before CRAF'd — or anyone — computes a forecast-vs-actual skill score from the bulk parquet. Also whenever a new forecast run shifts the window: check how many of its months overlap the historical series, and — across ALL delivered targets, not one — how many cells of the overlap month carry any event, compared with the months before it. A sum of zero on one column is not a measurement of the month. |
@@ -2124,6 +2127,20 @@ The #173 fix:
 The secret must also move to `crafdapi-probe` (ADR-038).
 
 Cross-refs: **C-362** (`/health`'s own status on an outage), **C-272** (served state is process-global), **C-287** (the monitor's key warms its own partition), cluster A, #153, #173.
+
+### C-373: Countries are summed by ISO3 but named by GAUL code, so one unmatched country code fails every country slice
+
+| Field | Value |
+|-------|-------|
+| ID | C-373 |
+| Tier | 2 |
+| Source | pr-review (2026-11-20, `/code-review` of PR #224, #204/#206) |
+| Trigger | When a delivery's geography gives a GAUL country code no ISO3, or two codes one ISO3 (disputed areas such as Abyei, the Ilemi triangle, Aksai Chin), every `/slice/country/...` request answers 500. Before the next new-geography delivery, do #225. |
+| Location | `src/views_crafdapi/forecast/serialize/outcome_table.py` (`_iso3_of_country_code`, `_forecast_rows`), `src/views_crafdapi/forecast/geography/metadata_table.py` (`LEVELS["country"] = "country_iso_a3"`) |
+
+Partners name a country by its GAUL code (partner guide). The dataset sums the country level by ISO3, so the slice translates GAUL code to ISO3, sums, and translates back. The translation works only while the two match one to one. `_iso3_of_country_code` refuses loudly when they do not, naming the codes, so nothing is served wrong. But the refusal covers every country request, not only the unmatched country. Checked 2026-11-20 on the served run (`rusty_bucket_forecasting_20260727_095355`): 202 GAUL country codes, 202 ISO3 codes, none missing, none shared. Tier 2: no silent corruption, a whole level failing on a realistic delivery change. The fix is to sum the country level by `admin1_gaul0_code` (#225).
+
+Cross-refs: **C-307** (the level vocabulary, #205), #225.
 
 ---
 

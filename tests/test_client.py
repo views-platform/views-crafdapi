@@ -1,6 +1,5 @@
 from unittest.mock import patch, MagicMock
 
-import pandas as pd
 import pytest
 
 from views_crafdapi.client import CrafdApiClient
@@ -65,128 +64,58 @@ class TestHealth:
             client.health()
 
 
-class TestFetchSubset:
-    @patch("views_crafdapi.client.requests.get")
-    def test_historical_default(self, mock_get, client):
-        mock_get.return_value = _mock_response(
-            json_data={"data": {"dataframe": {"col_a": [1, 2], "col_b": [3, 4]}}}
-        )
-        df = client.fetch_subset("country", [540], "NGA")
-        assert isinstance(df, pd.DataFrame)
-        assert len(df) == 2
-        call_url = mock_get.call_args[0][0]
-        assert "historical" in call_url
+class TestSlice:
+    _BODY = {
+        "level": "country", "outcome": "sb",
+        "columns": ["country_code", "country_name", "country_iso3", "month", "sb_map"],
+        "rows": [{"country_code": 161, "country_name": "Sudan", "country_iso3": "SDN",
+                  "month": "2027-01", "sb_map": 12.0}],
+    }
 
     @patch("views_crafdapi.client.requests.get")
-    def test_forecast_type(self, mock_get, client):
-        mock_get.return_value = _mock_response(
-            json_data={"data": {"dataframe": {"col_a": [1]}}}
-        )
-        client.fetch_subset("country", [540], "NGA", data_type="forecast")
-        call_url = mock_get.call_args[0][0]
-        assert "forecast" in call_url
-        assert "historical" not in call_url
-
-    def test_invalid_data_type(self, client):
-        with pytest.raises(ValueError, match="data_type must be"):
-            client.fetch_subset("country", [540], "NGA", data_type="invalid")
+    def test_all_options_left_out(self, mock_get, client):
+        mock_get.return_value = _mock_response(json_data=self._BODY)
+        df = client.slice("country", "sb")
+        assert mock_get.call_args[0][0] == "http://localhost:8080/slice/country/sb"
+        assert mock_get.call_args[1]["params"] == {}
+        assert list(df.columns) == self._BODY["columns"]
+        assert df.loc[0, "sb_map"] == 12.0
 
     @patch("views_crafdapi.client.requests.get")
-    def test_entity_ids_list(self, mock_get, client):
-        mock_get.return_value = _mock_response(
-            json_data={"data": {"dataframe": {"a": [1]}}}
-        )
-        client.fetch_subset("gaul1", [540], [100, 200])
-        params = mock_get.call_args[1]["params"]
-        assert params["entity_ids"] == "100,200"
+    def test_options_are_comma_separated(self, mock_get, client):
+        mock_get.return_value = _mock_response(json_data=self._BODY)
+        client.slice("country", "sb", places=[161, 160], months=["2027-01", "2027-02"],
+                     columns=["sb_map"])
+        assert mock_get.call_args[1]["params"] == {
+            "places": "161,160", "months": "2027-01,2027-02", "columns": "sb_map",
+        }
 
     @patch("views_crafdapi.client.requests.get")
-    def test_entity_ids_string(self, mock_get, client):
-        mock_get.return_value = _mock_response(
-            json_data={"data": {"dataframe": {"a": [1]}}}
-        )
-        client.fetch_subset("country", [540], "NGA")
-        params = mock_get.call_args[1]["params"]
-        assert params["entity_ids"] == "NGA"
+    def test_ids_read_as_floats_are_sent_as_whole_numbers(self, mock_get, client):
+        """GAUL codes read from a file often arrive as 1301.0; the API takes 1301."""
+        mock_get.return_value = _mock_response(json_data=self._BODY)
+        client.slice("admin1", "sb", places=[1301.0, -3727.0])
+        assert mock_get.call_args[1]["params"] == {"places": "1301,-3727"}
+
+    @pytest.mark.parametrize("option", [
+        {"places": "161,160"}, {"months": "2027-01"}, {"columns": "sb_map"},
+    ])
+    def test_a_string_where_a_list_belongs_is_refused(self, client, option):
+        """A string would be split into single characters."""
+        with pytest.raises(TypeError, match="lists"):
+            client.slice("country", "sb", **option)
 
     @patch("views_crafdapi.client.requests.get")
-    def test_entity_ids_none_omits_filter(self, mock_get, client):
-        """entity_ids=None (the default) must omit the param entirely so the server returns ALL
-        entities for the month — the global footprint the coverage notebooks rely on."""
-        mock_get.return_value = _mock_response(
-            json_data={"data": {"dataframe": {"a": [1]}}}
-        )
-        client.fetch_subset("pg", [559], None, data_type="forecast")
-        params = mock_get.call_args[1]["params"]
-        assert "entity_ids" not in params  # no filter → all cells
-        client.fetch_subset("pg", [559])  # default is None
-        assert "entity_ids" not in mock_get.call_args[1]["params"]
+    def test_an_empty_slice_keeps_its_columns(self, mock_get, client):
+        mock_get.return_value = _mock_response(json_data={**self._BODY, "rows": []})
+        df = client.slice("country", "sb")
+        assert df.empty and list(df.columns) == self._BODY["columns"]
 
     @patch("views_crafdapi.client.requests.get")
-    def test_features_param(self, mock_get, client):
-        mock_get.return_value = _mock_response(
-            json_data={"data": {"dataframe": {"a": [1]}}}
-        )
-        client.fetch_subset("country", [540], "NGA", features=["lr_ged_sb", "lr_ged_ns"])
-        params = mock_get.call_args[1]["params"]
-        assert params["features"] == "lr_ged_sb,lr_ged_ns"
-
-    @patch("views_crafdapi.client.requests.get")
-    def test_error_raises(self, mock_get, client):
-        mock_get.return_value = _mock_response(
-            status_code=404, json_data={"detail": "Not found"}
-        )
-        with pytest.raises(RuntimeError, match="404"):
-            client.fetch_subset("country", [540], "NGA")
-
-    @patch("views_crafdapi.client.requests.get")
-    def test_api_key_header(self, mock_get, client):
-        mock_get.return_value = _mock_response(
-            json_data={"data": {"dataframe": {"a": [1]}}}
-        )
-        client.fetch_subset("country", [540], "NGA")
-        headers = mock_get.call_args[1]["headers"]
-        assert headers["X-API-Key"] == "test-api-key"
-
-
-class TestHdiMap:
-    @patch("views_crafdapi.client.requests.get")
-    def test_returns_dataframe_of_records(self, mock_get, client):
-        mock_get.return_value = _mock_response(json_data={"data": {"hdi_map": [
-            {"country_iso_a3": "NGA", "sb_map": 3.0, "sb_hdi90_lower": 0.0, "sb_hdi90_upper": 9.0},
-            {"country_iso_a3": "SOM", "sb_map": 1.0, "sb_hdi90_lower": 0.0, "sb_hdi90_upper": 4.0},
-        ]}})
-        df = client.hdi_map("country", [559], "NGA")
-        assert isinstance(df, pd.DataFrame) and len(df) == 2
-        assert {"sb_map", "sb_hdi90_lower", "sb_hdi90_upper"} <= set(df.columns)
-
-    @patch("views_crafdapi.client.requests.get")
-    def test_builds_forecast_endpoint_and_params(self, mock_get, client):
-        mock_get.return_value = _mock_response(json_data={"data": {"hdi_map": []}})
-        client.hdi_map("country", [559], "NGA", aggregate=True, alpha=0.95,
-                       features=["pred_lr_ged_sb"])
-        url = mock_get.call_args[0][0]
-        params = mock_get.call_args[1]["params"]
-        assert url.endswith("country/analysis/forecast/hdi-map")
-        assert params["alpha"] == 0.95 and params["aggregate"] is True
-        assert params["entity_ids"] == "NGA" and params["features"] == "pred_lr_ged_sb"
-
-    @patch("views_crafdapi.client.requests.get")
-    def test_time_ids_and_entity_list_serialized(self, mock_get, client):
-        mock_get.return_value = _mock_response(json_data={"data": {"hdi_map": []}})
-        client.hdi_map("gaul1", [559, 560], [100, 200], data_type="forecast")
-        params = mock_get.call_args[1]["params"]
-        assert params["time_ids"] == "559,560" and params["entity_ids"] == "100,200"
-
-    def test_invalid_data_type(self, client):
-        with pytest.raises(ValueError, match="data_type must be"):
-            client.hdi_map("country", [559], "NGA", data_type="nope")
-
-    @patch("views_crafdapi.client.requests.get")
-    def test_error_raises(self, mock_get, client):
-        mock_get.return_value = _mock_response(status_code=500, json_data={"detail": "boom"})
-        with pytest.raises(RuntimeError, match="500"):
-            client.hdi_map("country", [559], "NGA")
+    def test_error_raises_with_the_detail(self, mock_get, client):
+        mock_get.return_value = _mock_response(status_code=422, json_data={"detail": "Months must be written"})
+        with pytest.raises(RuntimeError, match="422.*Months must be written"):
+            client.slice("country", "sb", months=["2027-1"])
 
 
 class TestPackageExport:
@@ -220,10 +149,8 @@ class TestTimeout:
         assert mock_get.call_args[1]["timeout"] == 10.0
 
     @patch("views_crafdapi.client.requests.get")
-    def test_fetch_passes_timeout(self, mock_get):
-        mock_get.return_value = _mock_response(
-            json_data={"data": {"dataframe": {"a": [1]}}}
-        )
+    def test_slice_passes_timeout(self, mock_get):
+        mock_get.return_value = _mock_response(json_data={"columns": ["a"], "rows": [{"a": 1}]})
         c = CrafdApiClient("http://localhost", "key", timeout=15.0)
-        c.fetch_subset("country", [540], "NGA")
+        c.slice("country", "sb")
         assert mock_get.call_args[1]["timeout"] == 15.0

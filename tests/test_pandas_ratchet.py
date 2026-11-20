@@ -44,6 +44,7 @@ _ALLOWED = frozenset({
     # forecast SERIALIZE seam (emit JSON)
     "forecast/serialize/json_contract.py",
     "forecast/serialize/bulk_parquet.py",  # S6 (#222): the ADR-025 bulk artifact (serialize seam)
+    "forecast/serialize/outcome_table.py",  # #204/#206: the served table per outcome and level (serialize seam)
     # forecast GEOGRAPHY (inherently scalar/tabular metadata table)
     "forecast/geography/level_mapping.py",
     "forecast/geography/metadata_table.py",

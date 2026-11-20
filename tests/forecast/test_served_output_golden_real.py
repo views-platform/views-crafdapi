@@ -104,7 +104,7 @@ def _codes_within(ds, level, countries):
 def _served_output_on_real_slice(value_dir, run_id):
     from views_crafdapi.data.handlers import ForecastDataset
     from views_crafdapi.forecast.serialize.json_contract import to_consumer_columns
-    from views_crafdapi.managers.api import dataframe_to_dict
+    from views_crafdapi.managers.serialization import dataframe_to_dict
 
     ds = ForecastDataset.from_value(value_dir, mmap=True)
     month = int(sorted(ds._time_values)[0])
