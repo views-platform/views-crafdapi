@@ -33,13 +33,19 @@ def app_client(tmp_path):
     # endpoint's consumer rename (schema.series_of) resolves sb/ns/os (#222/S4).
     df = make_fao_df(targets=("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os"))
     dataset = ForecastDataset(df)
+    # The history reaches three months back and overlaps the forecast in its first month
+    # (600), as the real one does: forecast 600-601 (2029-12, 2030-01), history 598-600.
+    history = ForecastDataset(_relabel_months(
+        make_fao_df(n_months=3, seed=3, targets=("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")),
+        [598, 599, 600],
+    ))
     api_key_hash = mgr._get_api_key_hash("test-api-key")
     mgr._dataframe_cache[api_key_hash] = {
         "historical": {
-            "data": dataset.dataframe,
+            "data": history.dataframe,
             "file_id": "file_001",
             "timestamp": time.time(),
-            "dataset": dataset,
+            "dataset": history,
         },
         # S1 (#264): a forecast is served from cache only as a WIRE entry whose identity matches the
         # current manifest — so the warm entry is tagged source_kind="wire" and mock_pm below returns
@@ -74,6 +80,18 @@ def app_client(tmp_path):
 
 
 HEADERS = {"X-API-Key": "test-api-key"}
+
+
+def _relabel_months(df, months):
+    """The same rows, with the month ids replaced in order."""
+    import pandas as pd
+
+    cells = df.index.get_level_values("priogrid_id")
+    old = df.index.get_level_values("month_id")
+    mapping = dict(zip(sorted(set(old)), months))
+    df = df.copy()
+    df.index = pd.MultiIndex.from_arrays([[mapping[m] for m in old], cells], names=["month_id", "priogrid_id"])
+    return df
 
 
 # ============================================================
@@ -359,10 +377,12 @@ class TestLatestDataEndpointsAreRetired:
 # ============================================================
 
 _SLICE_LEVELS = ["grid", "admin1", "country"]
-_IDENTITY = {
-    "grid": ["priogrid_id", "admin1_code", "admin1_name", "country_code", "country_name", "country_iso3"],
-    "admin1": ["admin1_code", "admin1_name", "country_code", "country_name", "country_iso3"],
-    "country": ["country_code", "country_name", "country_iso3"],
+_IDENTITY = {   # the place, then the month written two ways (#205, #206)
+    "grid": ["priogrid_id", "latitude", "longitude", "admin1_code", "admin1_name",
+             "country_code", "country_name", "country_iso3", "month", "month_id"],
+    "admin1": ["admin1_code", "admin1_name", "country_code", "country_name", "country_iso3",
+               "month", "month_id"],
+    "country": ["country_code", "country_name", "country_iso3", "month", "month_id"],
 }
 _SB_COLUMNS = [
     "sb_map", "sb_hdi50_lower", "sb_hdi50_upper", "sb_hdi90_lower", "sb_hdi90_upper",
@@ -371,9 +391,8 @@ _SB_COLUMNS = [
 ]
 
 
-def _fixture_dataset(mgr):
-    """The fixture serves one dataset as both the forecast and the recorded history."""
-    return mgr._dataframe_cache[mgr._get_api_key_hash("test-api-key")]["forecast"]["dataset"]
+def _fixture_dataset(mgr, category="forecast"):
+    return mgr._dataframe_cache[mgr._get_api_key_hash("test-api-key")][category]["dataset"]
 
 
 class TestSliceRoute:
@@ -386,37 +405,37 @@ class TestSliceRoute:
         assert resp.status_code == 200
         body = resp.json()
         assert body["level"] == level and body["outcome"] == "sb"
-        assert body["columns"] == _IDENTITY[level] + ["month"] + _SB_COLUMNS
+        assert body["columns"] == _IDENTITY[level] + _SB_COLUMNS
         n_places = {"grid": 4, "admin1": 2, "country": 2}[level]
-        assert len(body["rows"]) == n_places * 2  # two months
-        assert {r["month"] for r in body["rows"]} == {"2029-12", "2030-01"}  # month ids 600, 601
+        assert len(body["rows"]) == n_places * 4   # two recorded months, two forecast months
+        assert {(r["month"], r["month_id"]) for r in body["rows"]} == {
+            ("2029-10", 598), ("2029-11", 599), ("2029-12", 600), ("2030-01", 601)}
 
     @pytest.mark.parametrize("outcome", ["sb", "ns", "os"])
     def test_every_outcome_has_its_own_columns_and_no_other(self, app_client, outcome):
         client, _, _ = app_client
         columns = client.get(f"/slice/admin1/{outcome}", headers=HEADERS).json()["columns"]
-        values = [c for c in columns if c not in _IDENTITY["admin1"] + ["month"]]
+        values = [c for c in columns if c not in _IDENTITY["admin1"]]
         assert values == [c.replace("sb_", f"{outcome}_", 1) for c in _SB_COLUMNS]
 
     def test_the_values_are_the_summaries_of_the_summed_samples(self, app_client):
         """Admin-1 values come from the region's samples summed first, then summarised; the
         recorded deaths are the sum of the region's cells. Region 2 is cells 102 and 103."""
         client, mgr, _ = app_client
-        dataset = _fixture_dataset(mgr)
-        expected = dataset.calculate_hdi_map(
+        expected = _fixture_dataset(mgr).calculate_hdi_map(
             features=["pred_lr_ged_sb"], level="gaul1", aggregate=True, with_metadata=False
         )
         rows = client.get(
-            "/slice/admin1/sb", params={"places": "2", "months": "2030-01"}, headers=HEADERS
+            "/slice/admin1/sb", params={"places": "2", "months": "2029-11,2030-01"}, headers=HEADERS
         ).json()["rows"]
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["admin1_code"] == 2 and row["admin1_name"] == "Region2"
-        assert row["sb_map"] == pytest.approx(expected.loc[(601, 2), "pred_lr_ged_sb_map"])
-        assert row["sb_hdi90_upper"] == pytest.approx(expected.loc[(601, 2), "pred_lr_ged_sb_hdi90_upper"])
-        samples = dataset._sample_array("pred_lr_ged_sb")
-        positions = [dataset.dataframe.index.get_loc((601, cell)) for cell in (102, 103)]
-        assert row["sb_actual"] == pytest.approx(samples[positions, 0].sum())
+        past, ahead = rows
+        assert ahead["admin1_code"] == 2 and ahead["admin1_name"] == "Region2"
+        assert ahead["sb_map"] == pytest.approx(expected.loc[(601, 2), "pred_lr_ged_sb_map"])
+        assert ahead["sb_hdi90_upper"] == pytest.approx(expected.loc[(601, 2), "pred_lr_ged_sb_hdi90_upper"])
+        history = _fixture_dataset(mgr, "historical")
+        positions = [history.dataframe.index.get_loc((599, cell)) for cell in (102, 103)]
+        assert past["sb_actual"] == pytest.approx(history._sample_array("pred_lr_ged_sb")[positions, 0].sum())
+        assert past["sb_map"] is None and ahead["sb_actual"] is None
 
     def test_a_country_is_named_by_its_gaul_code(self, app_client):
         """Partners name countries by GAUL code; the dataset groups them by ISO3. Country 20 is
@@ -447,7 +466,7 @@ class TestSliceRoute:
             "/slice/country/sb", params={"columns": "sb_p_gt100,sb_map"}, headers=HEADERS
         ).json()
         # The summary columns keep their usual order, whatever order they were asked in.
-        assert body["columns"] == _IDENTITY["country"] + ["month", "sb_map", "sb_p_gt100"]
+        assert body["columns"] == _IDENTITY["country"] + ["sb_map", "sb_p_gt100"]
         assert set(body["rows"][0]) == set(body["columns"])
 
     def test_no_sample_is_ever_served(self, app_client):
@@ -491,19 +510,106 @@ class TestSliceRoute:
         with_old = client.get("/slice/grid/sb", params={option: "0"}, headers=HEADERS).json()
         assert with_old == plain
 
-    def test_the_month_both_forecast_and_recorded_carries_both(self, app_client):
-        """The newest recorded month is also the first forecast month: one row, both kinds of
-        column filled. Here every month is in both, because one dataset plays both parts."""
+    def test_a_repeated_place_or_month_is_answered_once(self, app_client):
         client, _, _ = app_client
-        rows = client.get("/slice/admin1/sb", params={"months": "2030-01"}, headers=HEADERS).json()["rows"]
-        assert all(r["sb_map"] is not None and r["sb_actual"] is not None for r in rows)
+        rows = client.get(
+            "/slice/grid/sb", params={"places": "100,100", "months": "2029-12,2029-12"}, headers=HEADERS
+        ).json()["rows"]
+        assert [(r["priogrid_id"], r["month"]) for r in rows] == [(100, "2029-12")]
 
-    def test_without_history_the_recorded_column_is_empty(self, app_client):
+    def test_an_unknown_outcome_is_refused_before_the_forecast_loads(self, app_client):
+        """On a cold server the load can take minutes; a typo should not wait for it."""
+        client, mgr, _ = app_client
+
+        def must_not_load(*args, **kwargs):
+            raise AssertionError("the forecast was loaded for an unknown outcome")
+        mgr._get_latest_dataset = must_not_load
+        resp = client.get("/slice/grid/sbb", headers=HEADERS)
+        assert resp.status_code == 404 and "sbb" in resp.json()["detail"]
+
+    def test_slices_run_one_at_a_time_on_the_event_loop(self, app_client):
+        """A plain `def` would run slices side by side in worker threads, on dataset copies
+        that share pandas index objects; concurrent first use of a fresh index gave wrong
+        answers (8 in 30, measured in review). So the route stays `async def` (C-285)."""
+        import inspect
+
+        _, mgr, _ = app_client
+        endpoint = next(r.endpoint for r in mgr.app.routes if getattr(r, "path", "") == "/slice/{level}/{outcome}")
+        assert inspect.iscoroutinefunction(endpoint)
+
+    def test_the_newest_recorded_month_is_not_served_as_recorded_deaths(self, app_client):
+        """The history's newest month is also the first forecast month (600), and only a sliver
+        of it has been reported when the history is cut, with the rest stored as 0. Served, it
+        would show 0 deaths next to the forecast (register C-293)."""
+        client, _, _ = app_client
+        rows = client.get("/slice/admin1/sb", params={"months": "2029-12"}, headers=HEADERS).json()["rows"]
+        assert rows and all(r["sb_map"] is not None and r["sb_actual"] is None for r in rows)
+
+    def test_a_forecast_only_request_does_not_need_the_history(self, app_client):
+        """Forecast months only: answered without the history, so a broken history does not
+        take these requests away."""
         client, mgr, _ = app_client
         mgr._get_latest_dataset = _forecast_only(mgr._get_latest_dataset)
-        rows = client.get("/slice/admin1/sb", headers=HEADERS).json()["rows"]
-        assert rows and all(r["sb_actual"] is None for r in rows)
-        assert all(r["sb_map"] is not None for r in rows)
+        resp = client.get("/slice/admin1/sb", params={"months": "2029-12,2030-01"}, headers=HEADERS)
+        assert resp.status_code == 200 and len(resp.json()["rows"]) == 4
+
+    def test_a_history_without_the_outcome_is_refused_not_served_blank(self, app_client):
+        client, mgr, _ = app_client
+        history = _fixture_dataset(mgr, "historical")
+        history.targets = [t for t in history.targets if not t.endswith("_os")]
+        resp = client.get("/slice/country/os", headers=HEADERS)
+        assert resp.status_code == 503 and "recorded deaths" in resp.json()["detail"]
+
+    @pytest.mark.parametrize("query", [
+        "places=100&places=103", "months=2029-12&months=2030-01", "columns=sb_map&columns=sb_actual",
+    ])
+    def test_a_repeated_option_is_refused_not_cut_to_its_last_value(self, app_client, query):
+        """`?places=100&places=103` is how some clients send a list; keeping only 103 would
+        answer with part of the table and no sign of it."""
+        client, _, _ = app_client
+        resp = client.get(f"/slice/grid/sb?{query}", headers=HEADERS)
+        assert resp.status_code == 422 and "once, comma-separated" in resp.json()["detail"]
+
+    @pytest.mark.parametrize("params", [{"places": "\u0661\u0660\u0660"}, {"months": "\u0662\u0660\u0662\u0669-12"}])
+    def test_digits_of_other_scripts_are_refused(self, app_client, params):
+        """`int()` reads Arabic-Indic digits, so one id could be written two ways and come back
+        twice. Only 0-9 is accepted."""
+        client, _, _ = app_client
+        assert client.get("/slice/grid/sb", params=params, headers=HEADERS).status_code == 422
+
+    def test_an_outcome_the_forecast_does_not_hold_is_404(self, app_client):
+        """`os` is a known outcome, but a forecast without it must say so, not answer with
+        empty summaries."""
+        client, mgr, _ = app_client
+        forecast = _fixture_dataset(mgr)
+        forecast.targets = [t for t in forecast.targets if not t.endswith("_os")]
+        resp = client.get("/slice/grid/os", params={"months": "2029-12"}, headers=HEADERS)
+        assert resp.status_code == 404 and "Outcomes: sb, ns" in resp.json()["detail"]
+
+    def test_one_place_written_two_ways_is_answered_once(self, app_client):
+        client, _, _ = app_client
+        rows = client.get(
+            "/slice/grid/sb", params={"places": "100,0100", "months": "2029-12"}, headers=HEADERS
+        ).json()["rows"]
+        assert len(rows) == 1
+
+    def test_a_negative_gaul_code_can_be_asked_for(self, app_client):
+        """GAUL gives the Azores admin-1 codes -3727 to -3730; partners must be able to ask."""
+        client, mgr, _ = app_client
+        forecast = _fixture_dataset(mgr)
+        forecast.geo_metadata.loc[forecast.geo_metadata["admin1_gaul1_code"] == 1, "admin1_gaul1_code"] = -3727
+        rows = client.get("/slice/admin1/sb", params={"places": "-3727", "months": "2029-12"}, headers=HEADERS).json()["rows"]
+        assert [r["admin1_code"] for r in rows] == [-3727]
+
+    def test_without_history_the_slice_is_refused_not_served_blank(self, app_client):
+        """Every row carries the recorded deaths. Served empty they would read as "nothing
+        recorded", so a missing history is a 503 that says so, not a quiet blank column."""
+        client, mgr, _ = app_client
+        mgr._get_latest_dataset = _forecast_only(mgr._get_latest_dataset)
+        resp = client.get("/slice/admin1/sb", headers=HEADERS)
+        assert resp.status_code == 503
+        assert "recorded deaths are unavailable" in resp.json()["detail"]
+        assert "no historical artifact" not in resp.text   # nothing about the store
 
 
 def _forecast_only(get_latest_dataset):
@@ -532,15 +638,17 @@ class TestResponseSizeBound:
         client, _, _ = app_client
         monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", "1")
         detail = client.get("/slice/grid/sb", headers=HEADERS).json()["detail"]
-        assert "fewer places or months" in detail and "bulk download" in detail
+        assert "fewer places or months" in detail
+        # No bulk advice yet: the only bulk route holds admin-1 forecast months (#203).
+        assert "bulk" not in detail
         assert _named_routes(detail) == []
 
     def test_a_narrow_selection_is_still_admitted(self, app_client, monkeypatch):
         """One budget between the two sizes: the whole grid is refused, one cell in one month
         is served. A bound on the whole table would refuse every narrow request."""
         client, _, _ = app_client
-        n_columns = len(_IDENTITY["grid"]) + 1 + len(_SB_COLUMNS)
-        full = estimate_records_bytes(4 * 2, n_columns, 0)
+        n_columns = len(_IDENTITY["grid"]) + len(_SB_COLUMNS)
+        full = estimate_records_bytes(4 * 4, n_columns, 0)   # 4 cells x 4 months
         narrow = estimate_records_bytes(1, n_columns, 0)
         monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", str((full + narrow) // 2))
         assert client.get("/slice/grid/sb", headers=HEADERS).status_code == 413
@@ -552,11 +660,39 @@ class TestResponseSizeBound:
     def test_a_column_list_counts_toward_the_size(self, app_client, monkeypatch):
         """Asking for one column instead of thirteen is a smaller answer, and is judged so."""
         client, _, _ = app_client
-        full = estimate_records_bytes(8, len(_IDENTITY["grid"]) + 1 + len(_SB_COLUMNS), 0)
-        one = estimate_records_bytes(8, len(_IDENTITY["grid"]) + 1 + 1, 0)
+        full = estimate_records_bytes(16, len(_IDENTITY["grid"]) + len(_SB_COLUMNS), 0)
+        one = estimate_records_bytes(16, len(_IDENTITY["grid"]) + 1, 0)
         monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", str((full + one) // 2))
         assert client.get("/slice/grid/sb", headers=HEADERS).status_code == 413
         assert client.get("/slice/grid/sb", params={"columns": "sb_map"}, headers=HEADERS).status_code == 200
+
+    def test_the_work_counts_not_only_the_answer(self, app_client, monkeypatch):
+        """A country is one row of answer and many cells of work, with every forecast draw.
+        Country 10 (cells 100, 101) over all four months reads 2 cells x (2 forecast months x
+        10 draws + 2 recorded months) = 44 values. The answer-size estimate is switched off
+        here, so only the work can refuse."""
+        import views_crafdapi.managers.api as api
+
+        client, _, _ = app_client
+        monkeypatch.setattr(api, "estimate_records_bytes", lambda *args: 0)
+        params = {"places": "10", "columns": "sb_map"}
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", str(44 * 8 - 1))
+        resp = client.get("/slice/country/sb", params=params, headers=HEADERS)
+        assert resp.status_code == 413 and "reads 44 values" in resp.json()["detail"]
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", str(44 * 8))
+        assert client.get("/slice/country/sb", params=params, headers=HEADERS).status_code == 200
+
+    def test_a_month_named_twice_is_counted_once(self, app_client, monkeypatch):
+        """Country 10 (2 cells) for one forecast month reads 2 x 10 draws = 20 values. Named
+        twice, the month must still count once, or the request is refused for work it will
+        not do."""
+        import views_crafdapi.managers.api as api
+
+        client, _, _ = app_client
+        monkeypatch.setattr(api, "estimate_records_bytes", lambda *args: 0)
+        monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", str(20 * 8))
+        params = {"places": "10", "months": "2029-12,2029-12"}
+        assert client.get("/slice/country/sb", params=params, headers=HEADERS).status_code == 200
 
     def test_the_default_budget_admits_the_ordinary_request(self, app_client):
         client, _, _ = app_client
@@ -641,6 +777,13 @@ def _cold_app(cache_dir, pm):
     mgr._validate_api_key = MagicMock(return_value=appwrite)
     mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: pm
     mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: appwrite
+    # These tests are about the forecast slot. The store mock holds no history, and the slice
+    # refuses to answer without one (503), so the history is a stand-in loaded from memory.
+    history = ForecastDataset(make_fao_df(targets=("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")))
+    load = mgr._get_latest_dataset
+    mgr._get_latest_dataset = lambda m, key, category, *a, **kw: (
+        history if category == "historical" else load(m, key, category, *a, **kw)
+    )
     return TestClient(mgr.app)
 
 
@@ -686,9 +829,10 @@ class TestDegradedFallbackAcrossARestart:
 
 class TestARevokedKeyIsRefusedOnItsNextRequest:
     """The key validated once and its manager is cached (`_manager_cache` has no TTL, ADR-011 §3),
-    so revocation is only ever seen as a 401 from the store's metadata calls. Every forecast
-    request looks up the manifest and every historical one the latest file, so that 401 must
-    end the request — not be served around as a lookup blip, from cache or from the fallback."""
+    so revocation is only ever seen as a 401 from the store's metadata calls. Every request
+    looks up the forecast's manifest, and one reaching past months also the history's latest
+    file, so that 401 must end the request — not be served around as a lookup blip, from cache
+    or from the fallback."""
 
     ROUTES = [
         "/slice/grid/sb",
@@ -739,17 +883,18 @@ class TestARevokedKeyIsRefusedOnItsNextRequest:
         mock_pm.get_latest_manifest.side_effect = manifest
         assert client.get("/slice/grid/sb", headers=HEADERS).status_code == 401
 
-    def test_a_slice_refuses_when_only_the_history_lookup_is_refused(self, app_client):
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_a_slice_refuses_when_only_the_history_lookup_is_refused(self, app_client, status):
         """The slice reads the history best-effort: a missing history serves an empty recorded
         column. A refused key is not a missing history, and must end the request."""
         from views_crafdapi.managers.prediction import MetadataLookupError
 
         client, _, mock_pm = app_client
-        revoked = MetadataLookupError("no", status=401)
+        revoked = MetadataLookupError("no", status=status)
         # The forecast's manifest lookup still answers; only the history's lookups are refused.
         mock_pm.get_latest_file_id.side_effect = revoked
         mock_pm.get_latest_provenance.side_effect = revoked
-        assert client.get("/slice/grid/sb", headers=HEADERS).status_code == 401
+        assert client.get("/slice/grid/sb", headers=HEADERS).status_code == 401   # the API says 401 for both
 
     @pytest.mark.parametrize("refused", ["manifest", "stored"])
     def test_each_health_freshness_lookup_refuses_on_its_own(self, app_client, refused):

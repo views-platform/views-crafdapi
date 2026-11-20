@@ -4,6 +4,7 @@ import pandas as pd
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from pathlib import Path
+import json
 import os
 import re
 import shutil
@@ -24,7 +25,8 @@ from views_crafdapi.version import version_info
 from views_crafdapi.seam_contract import CONSUMER_DOCUMENT_NAME
 from views_crafdapi.managers.serialization import estimate_records_bytes
 
-from fastapi import FastAPI, HTTPException, Depends, Query, Header
+from fastapi import FastAPI, HTTPException, Depends, Query, Header, Request
+from fastapi.responses import Response
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from contextlib import asynccontextmanager
@@ -45,21 +47,14 @@ class StalenessResult:
     threshold_hours: float
 
 
-# The estimated rendering size above which a subset or hdi-map route refuses (C-284).
+# The budget above which the slice refuses (C-284), applied to two estimates made before any
+# work: the JSON answer (rows x columns, `estimate_records_bytes`) and the work (the cell-months
+# read, with every forecast draw, at 8 bytes each). A country is one row of answer and hundreds
+# of cells of work, so the answer alone would admit requests that cost gigabytes.
 #
-# A BYTE budget, not a row count, and the reason is measured: a historical row costs ~1,625 B
-# through `dataframe_to_dict` and a forecast row ~7,731 B, because the second carries a posterior
-# draw per sample per target -- and the sample width varies per delivery, so a 32-draw run and a
-# 1000-draw run differ by another factor of thirty. No single row number is right for both
-# categories, let alone for two runs of one. `estimate_records_bytes` carries the calibration.
-#
-# 512 MiB is the figure already measured for THIS box against this same serializer, by the
-# sibling API it co-hosts: 22 GiB total, shared between the two services, against a multi-GiB
-# warm baseline. It admits ~320,000 historical rows and ~65,000 rows of a 32-draw forecast.
-# Holding both co-tenants to one number is the point -- it stops each assuming the whole machine.
-#
-# This bounds a RENDERING, not the data. Every table stays retrievable in full by the paths the
-# refusal names, which are the ones CRAF'd already uses.
+# 512 MiB is the figure measured on the server this service used to share with a sibling API,
+# against the same serializer. The refusal says to ask for fewer places or months; the bulk files (#203)
+# will be the way to the whole table.
 _DEFAULT_MAX_RESPONSE_BYTES = 512 * 1024 ** 2
 
 
@@ -98,13 +93,19 @@ def _human_bytes(n: float) -> str:
     return f"{n:.1f} GiB"
 
 
-def _too_large_detail(n_rows: int, estimated: int, budget: int) -> str:
-    """The body of the 413: what was asked, and what to do instead."""
+def _too_large_detail(what: str, estimated: int, budget: int) -> str:
+    """The body of the 413: what was too large, and what to do instead. The bulk download is not
+    offered yet: the only bulk route today holds admin-1 forecast months only (#203)."""
     return (
-        f"This slice is {n_rows:,} rows and would need about {_human_bytes(estimated)} to "
-        f"render as JSON, above the {_human_bytes(budget)} limit. Ask for fewer places or "
-        "months, or use the bulk download."
+        f"This slice {what}, about {_human_bytes(estimated)}, above the {_human_bytes(budget)} "
+        "limit. Ask for fewer places or months."
     )
+
+
+# ASCII digits only: `\d` also matches other scripts' digits, which `int()` accepts, so one id
+# could be written two ways and asked for twice.
+_PLACE = re.compile(r"-?[0-9]+")   # negative: GAUL gives the Azores admin-1 codes -3727 to -3730
+_MONTH = re.compile(r"[0-9]{4}-(0[1-9]|1[0-2])")
 
 
 def _parse_names(raw: Optional[str]) -> Optional[list[str]]:
@@ -114,29 +115,40 @@ def _parse_names(raw: Optional[str]) -> Optional[list[str]]:
     names = [part.strip() for part in raw.split(",") if part.strip()]
     if not names:
         raise ValueError("An option was given but empty; leave it out to get everything")
-    return names
+    return list(dict.fromkeys(names))
 
 
 def _parse_places(raw: Optional[str]) -> Optional[list[int]]:
-    """Place ids are whole numbers at every level (PRIO-GRID cell, GAUL admin-1, GAUL country)."""
+    """Place ids are whole numbers at every level (PRIO-GRID cell, GAUL admin-1, GAUL country).
+    Repeats are removed after reading them as numbers, so `100,0100` is one place."""
     names = _parse_names(raw)
     if names is None:
         return None
-    bad = [n for n in names if not re.fullmatch(r"\d+", n)]
+    bad = [n for n in names if not _PLACE.fullmatch(n)]
     if bad:
         raise ValueError(f"Place ids must be whole numbers, got {bad[:20]}")
-    return [int(n) for n in names]
+    return list(dict.fromkeys(int(n) for n in names))
 
 
 def _parse_months(raw: Optional[str]) -> Optional[list[int]]:
-    """Months written year-month (`2027-01`), returned as VIEWS month ids."""
+    """Months written year-month (`2027-01`), returned as VIEWS month ids. Each once: in this
+    fixed form two different strings never name one month, so `_parse_names` already removed
+    the repeats."""
     names = _parse_names(raw)
     if names is None:
         return None
-    bad = [n for n in names if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", n)]
+    bad = [n for n in names if not _MONTH.fullmatch(n)]
     if bad:
         raise ValueError(f"Months must be written year-month, such as 2027-01; got {bad[:20]}")
     return [date_to_month_id(int(n[:4]), int(n[5:])) for n in names]
+
+
+def _refuse_repeated_options(request: Request) -> None:
+    """`?places=1&places=2` would keep only the last value and answer with part of the table.
+    That is how some HTTP clients send a list, so it is refused with the way to write it."""
+    for name in ("places", "months", "columns"):
+        if len(request.query_params.getlist(name)) > 1:
+            raise ValueError(f"Give {name!r} once, comma-separated, such as {name}=a,b")
 
 
 _REQUIRED_APPWRITE_ENV_VARS = [
@@ -213,8 +225,7 @@ def _validate_appwrite_env() -> dict[str, str]:
     return env
 
 
-from views_crafdapi.managers.serialization import convert_numpy_types  # noqa: E402
-from views_crafdapi.forecast.serialize import outcome_table  # noqa: E402
+from views_crafdapi.forecast.serialize import outcome_table, schema  # noqa: E402
 from views_crafdapi.forecast.serialize.bulk_parquet import write_bulk_parquet  # noqa: E402
 
 class CrafdApiManager(APIManager):
@@ -561,8 +572,14 @@ class CrafdApiManager(APIManager):
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
 
+        # `async def`, like every route here: the work runs on the event loop, one request at a
+        # time. A plain `def` would run slices side by side in worker threads, on shallow copies
+        # of one dataset that share pandas index objects; the first concurrent use of a freshly
+        # loaded index then reads a half-built lookup table (measured: 8 wrong answers in 30).
+        # The cost is that /ping and /health wait while a slice is computed (register C-285).
         @self.app.get("/slice/{level}/{outcome}")
         async def get_slice(
+            request: Request,
             level: str,
             outcome: str,
             places: Optional[str] = Query(None, description="Place ids at this level, comma-separated"),
@@ -573,15 +590,23 @@ class CrafdApiManager(APIManager):
         ):
             """A slice of one outcome at one level: four options, as the specification says.
 
-            Rows are places and months; columns are the place's id and names, `month`, and the
-            outcome's summary columns (all, or the ones named). Never samples.
+            Rows are places and months; columns are the place's id and names, `month`,
+            `month_id`, and the outcome's summary columns (all, or the ones named). Never samples.
             """
             if level not in outcome_table.LEVELS:
                 raise HTTPException(
                     status_code=404,
                     detail=f"Unknown level {level!r}. Levels: {', '.join(outcome_table.LEVELS)}",
                 )
+            # Checked against the schema before the forecast loads, so a typo on a cold server
+            # is answered at once; after the load it is checked against what the forecast holds.
+            if outcome not in schema.SERIES:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Unknown outcome {outcome!r}. Outcomes: {', '.join(schema.SERIES)}",
+                )
             try:
+                _refuse_repeated_options(request)
                 parsed_places = _parse_places(places)
                 parsed_months = _parse_months(months)
                 asked_columns = _parse_names(columns)
@@ -606,13 +631,27 @@ class CrafdApiManager(APIManager):
                             detail=f"Unknown columns {unknown}. Columns: {', '.join(value_columns)}",
                         )
                     value_columns = [c for c in value_columns if c in set(asked_columns)]
-                try:
-                    historical_ds = self._get_latest_dataset(manager, x_api_key, "historical")
-                except HTTPException as e:
-                    if e.status_code in (401, 403):
-                        raise  # a refused key is not a missing history (C-268)
-                    historical_ds = None
-                    logger.warning("slice: no historical artifact; recorded deaths served as empty")
+
+                # The history is read only when the request reaches months before the forecast.
+                # Then it must be there and hold this outcome: served empty, the recorded deaths
+                # would read as "nothing recorded", so the slice is refused until it is back.
+                historical_ds = None
+                if outcome_table.needs_history(forecast_ds, parsed_months):
+                    try:
+                        historical_ds = self._get_latest_dataset(manager, x_api_key, "historical")
+                        has_outcome = outcome_table.target_for(historical_ds, outcome) is not None
+                    except HTTPException as e:
+                        if e.status_code == 401:
+                            # A refused key is not a missing history (C-268). The store's 403
+                            # arrives as this 401 too (`refuse_if_unauthorized`).
+                            raise
+                        logger.error("slice: history unavailable (%s): %s", e.status_code, e.detail)
+                        has_outcome = False
+                    if not has_outcome:
+                        raise HTTPException(
+                            status_code=503,
+                            detail="The recorded deaths are unavailable right now. Try again later.",
+                        )
 
                 identity = outcome_table.place_identity(forecast_ds, level)
                 if parsed_places is not None:
@@ -622,7 +661,8 @@ class CrafdApiManager(APIManager):
                             status_code=422,
                             detail=f"Unknown place ids at level {level!r}: {unknown[:20]}",
                         )
-                all_months = outcome_table.served_months(forecast_ds, historical_ds)
+                fc_months = outcome_table.forecast_months(forecast_ds)
+                all_months = sorted(set(fc_months) | set(outcome_table.recorded_months(forecast_ds, historical_ds)))
                 if parsed_months is not None:
                     unknown = [month_id_to_date(m) for m in parsed_months if m not in set(all_months)]
                     if unknown:
@@ -634,30 +674,37 @@ class CrafdApiManager(APIManager):
                             ),
                         )
 
-                # Decide before computing (C-284): the size follows from the request alone.
-                n_rows = (
-                    len(parsed_places) if parsed_places is not None else len(identity)
-                ) * (len(parsed_months) if parsed_months is not None else len(all_months))
-                n_columns = len(outcome_table.IDENTITY_COLUMNS[level]) + 1 + len(value_columns)
-                estimated = estimate_records_bytes(n_rows, n_columns, 0)
+                # Decide before computing (C-284), on two sizes that follow from the request:
+                # the answer (rows x columns), and the work (the cell-months read, with every
+                # draw of the forecast). A country is one row of answer and hundreds of cells
+                # of work, so the answer alone would admit requests that cost gigabytes.
+                asked_months = parsed_months if parsed_months is not None else all_months
+                n_rows = (len(parsed_places) if parsed_places is not None else len(identity)) * len(asked_months)
+                n_columns = len(outcome_table.IDENTITY_COLUMNS[level]) + len(value_columns)
+                n_cells = outcome_table.cells_read(forecast_ds, level, parsed_places)
+                n_forecast = sum(1 for m in asked_months if m in set(fc_months))
+                values_read = n_cells * (n_forecast * forecast_ds.sample_size + len(asked_months) - n_forecast)
                 budget = _max_response_bytes()
-                if estimated > budget:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=_too_large_detail(n_rows, estimated, budget),
-                    )
+                for what, estimated in (
+                    (f"answer is {n_rows:,} rows", estimate_records_bytes(n_rows, n_columns, 0)),
+                    (f"reads {values_read:,} values", values_read * 8),
+                ):
+                    if estimated > budget:
+                        raise HTTPException(status_code=413, detail=_too_large_detail(what, estimated, budget))
 
                 table = outcome_table.build_outcome_table(
                     forecast_ds, historical_ds, level, outcome,
-                    places=parsed_places, months=parsed_months,
+                    places=parsed_places, months=parsed_months, identity=identity,
                 )
-                table = table[outcome_table.IDENTITY_COLUMNS[level] + ["month"] + value_columns]
-                return {
-                    "level": level,
-                    "outcome": outcome,
-                    "columns": table.columns.tolist(),
-                    "rows": convert_numpy_types(table.astype(object).to_dict(orient="records")),
-                }
+                table = table[outcome_table.IDENTITY_COLUMNS[level] + value_columns]
+                # `to_json` writes NaN and missing whole numbers as null, and is far faster than
+                # building Python dicts, which matters while the event loop waits.
+                rows = table.to_json(orient="records", double_precision=15)
+                body = (
+                    f'{{"level": {json.dumps(level)}, "outcome": {json.dumps(outcome)}, '
+                    f'"columns": {json.dumps(table.columns.tolist())}, "rows": {rows}}}'
+                )
+                return Response(content=body, media_type="application/json")
             except HTTPException:
                 raise
             except Exception as e:

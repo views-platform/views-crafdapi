@@ -21,6 +21,7 @@ import argparse
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
@@ -163,8 +164,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--url", default=os.environ.get("VIEWS_API_URL", _DEFAULT_URL))
     p.add_argument("--expect-tag", default=None,
                    help="assert GET /version deployed_tag == this (e.g. v1.3.9)")
-    p.add_argument("--forecast-month", default="2026-07",
-                   help="a month inside the served forecast, year-month (advances per run)")
+    p.add_argument("--forecast-month", default=datetime.now(timezone.utc).strftime("%Y-%m"),
+                   help="a month inside the served forecast, year-month (default: this month, "
+                        "which a monthly forecast covers; a month outside it fails with 422)")
     p.add_argument("--hist-month", default="2024-12", help="a past month, year-month")
     p.add_argument("--country", default="IDN", help="a non-African ISO3 to prove global coverage")
     p.add_argument("--timeout", type=float, default=600.0,

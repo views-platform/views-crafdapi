@@ -7,49 +7,10 @@ These have no dependency on `CrafdApiManager` state — they take their inputs a
 arguments and are covered by `tests/test_api_utilities.py`.
 """
 import logging
-from typing import List, Optional
 
 import numpy as np
-from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
-
-
-def parse_list_param(param: Optional[str]) -> Optional[List[int]]:
-    """Parse a comma-separated string into a list of integers."""
-    if param is None:
-        return None
-    # Handle empty list representations
-    stripped = param.strip()
-    if stripped in ('[]', '', 'null', 'None'):
-        return None  # Treat empty as "all" rather than "none"
-    try:
-        # Split by comma and convert each item to int
-        return [int(item.strip()) for item in param.split(',') if item.strip()]
-    except (ValueError, AttributeError):
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid parameter format: {param}. Expected comma-separated integers."
-        )
-
-
-def parse_string_list_param(param: Optional[str]) -> Optional[List[str]]:
-    """Parse a comma-separated string into a list of strings."""
-    if param is None:
-        return None
-    # Handle empty list representations
-    stripped = param.strip()
-    if stripped in ('[]', '', 'null', 'None'):
-        return None  # Treat empty as "all" rather than "none"
-    try:
-        # Split by comma and strip whitespace
-        result = [item.strip() for item in param.split(',') if item.strip()]
-        return result if result else None
-    except (ValueError, AttributeError):
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid parameter format: {param}. Expected comma-separated strings."
-        )
 
 
 def convert_numpy_types(obj):

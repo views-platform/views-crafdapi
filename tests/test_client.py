@@ -91,6 +91,21 @@ class TestSlice:
         }
 
     @patch("views_crafdapi.client.requests.get")
+    def test_ids_read_as_floats_are_sent_as_whole_numbers(self, mock_get, client):
+        """GAUL codes read from a file often arrive as 1301.0; the API takes 1301."""
+        mock_get.return_value = _mock_response(json_data=self._BODY)
+        client.slice("admin1", "sb", places=[1301.0, -3727.0])
+        assert mock_get.call_args[1]["params"] == {"places": "1301,-3727"}
+
+    @pytest.mark.parametrize("option", [
+        {"places": "161,160"}, {"months": "2027-01"}, {"columns": "sb_map"},
+    ])
+    def test_a_string_where_a_list_belongs_is_refused(self, client, option):
+        """A string would be split into single characters."""
+        with pytest.raises(TypeError, match="lists"):
+            client.slice("country", "sb", **option)
+
+    @patch("views_crafdapi.client.requests.get")
     def test_an_empty_slice_keeps_its_columns(self, mock_get, client):
         mock_get.return_value = _mock_response(json_data={**self._BODY, "rows": []})
         df = client.slice("country", "sb")

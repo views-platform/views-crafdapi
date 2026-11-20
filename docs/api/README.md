@@ -94,7 +94,9 @@ recorded in the [changelog](CHANGELOG.md), and the [data dictionary](data_dictio
 lists the columns available now.
 
 For past months, the recorded number of deaths is in its own column, so you can compare the forecast
-with what actually happened. The recorded numbers are added once they have been published.
+with what actually happened. The recorded numbers are added once they have been published: the
+first forecast month never shows recorded deaths, because only a sliver of that month has been
+reported when the forecast is made.
 
 ## Bulk download (the fast way)
 
@@ -127,7 +129,8 @@ GET /slice/{level}/{outcome}?places=...&months=...&columns=...
 | `columns` | Comma-separated column names | All columns |
 
 Place names and the month are always included. Every row has a `month` column written the same
-way, `2027-01`.
+way, `2027-01`, and VIEWS' own month number, `month_id`. Grid rows also give the cell's centre,
+`latitude` and `longitude`.
 
 Example: state-based violence in Sudan and South Sudan, for two months, only the most likely value.
 
@@ -144,5 +147,5 @@ curl -H "X-API-Key: $CRAFD_KEY" \
 | `404` | That level or outcome does not exist. Check the codes above. |
 | `413` | The slice asks for too much at once. Ask for fewer places or months, or use the bulk download. |
 | `422` | An option is written wrong, for example a month not written `2027-01`. |
-| `503` | No forecast is available right now. Try again later. |
+| `503` | The forecast, or the recorded deaths, are not available right now. Try again later. |
 | `500`, `502`, `504` or no answer | A problem on our side. Try again later; contact VIEWS if it lasts. |

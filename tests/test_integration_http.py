@@ -189,9 +189,14 @@ class TestSliceLive:
     @pytest.mark.parametrize("level", ["grid", "admin1", "country"])
     def test_a_slice_through_http(self, integration_client, test_forecast_file, level):
         client, api_key = integration_client
-        resp = client.get(f"/slice/{level}/sb", headers={"X-API-Key": api_key})
+        headers = {"X-API-Key": api_key}
+        # A whole real forecast is too large for one slice (413), so ask for one month. The
+        # months served are named in the refusal of a month that cannot exist.
+        detail = client.get(f"/slice/{level}/sb", params={"months": "1900-01"}, headers=headers).json()["detail"]
+        last_month = detail.rsplit(" to ", 1)[1].strip()
+        resp = client.get(f"/slice/{level}/sb", params={"months": last_month, "columns": "sb_map"}, headers=headers)
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["level"] == level and body["outcome"] == "sb"
         assert len(body["rows"]) > 0
-        assert "sb_map" in body["columns"] and "month" in body["columns"]
+        assert body["columns"][-1] == "sb_map" and "month" in body["columns"]

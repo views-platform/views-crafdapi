@@ -89,7 +89,7 @@ Fetches and caches the latest prediction dataset.
 **Caching Behavior:**
 - Results cached by (api_key_hash, category)
 - Cache expires after 1 hour
-- `force_refresh=True` bypasses cache
+- `force_refresh=True` bypasses cache (internal only: no route offers it, #206)
 
 ##### `_register_routes`
 

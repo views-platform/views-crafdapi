@@ -81,9 +81,12 @@ class CrafdApiClient:
         columns : list[str], optional
             Summary column names. Default: all. The place names and ``month`` always come back.
         """
+        if isinstance(places, str) or isinstance(months, str) or isinstance(columns, str):
+            raise TypeError("places, months and columns are lists, such as places=[161, 160]")
         params: dict = {}
         if places is not None:
-            params["places"] = ",".join(map(str, places))
+            # int(): ids read from a file often arrive as floats (1301.0); the API takes 1301.
+            params["places"] = ",".join(str(int(p)) for p in places)
         if months is not None:
             params["months"] = ",".join(months)
         if columns is not None:

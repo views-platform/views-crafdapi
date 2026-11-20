@@ -122,11 +122,16 @@ Slice
 - GET `/slice/{level}/{outcome}?places=...&months=...&columns=...`
 - `level`: `grid`, `admin1` or `country`. `outcome`: `sb`, `ns` or `os` today.
 - `places`: place ids at that level, comma-separated (PRIO-GRID cell ids, GAUL admin-1 codes, GAUL country codes). `months`: year-month, such as `2027-01`. `columns`: summary column names. Each one left out means all.
-- Each row is one place in one month: the place's id and names, `month`, then the outcome's summary columns. Forecast months carry the summaries; past months carry the recorded deaths in `{outcome}_actual`. Never samples.
-- No other options exist (docs/SERVICE_SPECIFICATION.md).
+- Each row is one place in one month: the place's id and names (grid rows also `latitude`, `longitude`), `month`, `month_id`, then the outcome's summary columns. Forecast months carry the summaries; months before the forecast carry the recorded deaths in `{outcome}_actual` (the first forecast month never does: it is barely reported yet, register C-293). Never samples.
+- No other options exist (docs/SERVICE_SPECIFICATION.md). An option given twice (`?places=1&places=2`) is refused; write it once, comma-separated.
 
-> **Size limit.** The slice estimates its answer before building it and returns `413` above
-> 512 MiB, naming the way through: fewer places or months, or the bulk download. Override with
+> **History.** A slice reaching months before the forecast needs the recorded deaths. If they
+> cannot be loaded, it answers `503` rather than an empty `{outcome}_actual` column. A slice of
+> forecast months only does not read the history. A refused key stays `401`.
+
+> **Size limit.** Before any work the slice estimates two sizes, its answer (rows x columns) and
+> its work (the cell-months it reads, with every forecast draw), and returns `413` if either is
+> above 512 MiB, saying to ask for fewer places or months. Override with
 > `CRAFDAPI_MAX_RESPONSE_BYTES`.
 
 Response
