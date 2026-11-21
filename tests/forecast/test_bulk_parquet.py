@@ -28,10 +28,20 @@ def _historical(seed=2, **kw):
     return ForecastDataset(df, targets=list(_HT))
 
 
-def test_table_is_exactly_the_45_column_schema():
+def test_table_is_exactly_the_39_column_schema():
     table = build_bulk_table(_forecast(), _historical())
     assert list(table.columns) == schema.bulk_columns()
-    assert len(table.columns) == 45
+    assert len(table.columns) == 39
+
+
+def test_every_value_column_is_float64_even_when_empty():
+    """faoapi #487: an empty column padded with pandas' missing marker becomes an Arrow null
+    column and breaks reading several files together. Without history `*_actual` is empty."""
+    table = build_bulk_table(_forecast(), None)
+    for s in schema.SERIES:
+        assert table[f"{s}_actual"].isna().all()
+        for column in schema.series_value_columns(s):
+            assert table[column].dtype == np.float64, column
 
 
 def test_one_row_per_month_and_admin1_with_consumer_identity():
@@ -69,13 +79,13 @@ def test_actual_is_nan_when_no_historical_is_supplied():
         assert table[f"{s}_actual"].isna().all()
 
 
-def test_forecast_values_are_finite_and_nested():
+def test_forecast_values_are_finite_and_the_chances_fall_with_the_threshold():
     table = build_bulk_table(_forecast(), _historical())
     for s in schema.SERIES:
-        assert np.isfinite(table[f"{s}_map"]).all()
-        # nested 50 ⊆ 90 ⊆ 95
-        assert (table[f"{s}_hdi50_lower"] >= table[f"{s}_hdi90_lower"] - 1e-9).all()
-        assert (table[f"{s}_hdi90_lower"] >= table[f"{s}_hdi95_lower"] - 1e-9).all()
+        assert np.isfinite(table[f"{s}_mean"]).all()
+        chances = [table[schema.exceed_col(s, c)] for c in schema.EXCEEDANCE_THRESHOLDS]
+        for higher, lower in zip(chances, chances[1:]):
+            assert (lower <= higher).all()
 
 
 def test_parquet_round_trip_preserves_schema(tmp_path):
@@ -143,3 +153,32 @@ def test_bulk_endpoint_returns_the_parquet(tmp_path):
     back = pd.read_parquet(io.BytesIO(resp.content))
     assert list(back.columns) == schema.bulk_columns()
     assert back["sb_actual"].notna().any()  # historical present → actuals populated
+
+
+def test_every_value_column_is_float64_whatever_the_summaries_arrive_as(monkeypatch):
+    forecast = _forecast()
+    real = forecast.summarize
+    monkeypatch.setattr(forecast, "summarize", lambda **kw: _numbers_as_float32(real(**kw)))
+    table = build_bulk_table(forecast, _historical())
+    for s in schema.SERIES:
+        for column in schema.series_value_columns(s):
+            assert table[column].dtype == np.float64, column
+
+
+def test_a_table_breaking_a_summary_relation_is_refused(monkeypatch):
+    forecast = _forecast()
+    real = forecast.summarize
+
+    def broken(**kw):
+        out = real(**kw)
+        for var in forecast.targets:
+            out[f"{var}_mean"] = out[f"{var}_mean"] + 1.0   # no longer p_gt0 x mean_if_any
+        return out
+    monkeypatch.setattr(forecast, "summarize", broken)
+    with pytest.raises(ValueError, match="is not"):
+        build_bulk_table(forecast, _historical())
+
+
+def _numbers_as_float32(frame):
+    numbers = frame.select_dtypes("number").columns
+    return frame.astype({c: "float32" for c in numbers})

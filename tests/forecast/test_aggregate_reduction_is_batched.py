@@ -1,4 +1,4 @@
-"""C-235: the aggregate reduction must call `collapse` per (month, variable), not per row.
+"""C-235: the aggregate reduction must call `summarize_draws` (formerly `collapse`) per (month, variable), not per row.
 
 `collapse` is vectorised over `(N, S)`. The cell-level path (S6b-1, #208) exploits that: it
 reduces 2.33M rows in ~16 s with 108 calls. The aggregate path handed it a single row at a time
@@ -20,17 +20,17 @@ pytestmark = pytest.mark.layer2_data
 
 
 def _counting_collapse(monkeypatch):
-    """Wrap the real `collapse`, recording how many times it is called and with how many rows."""
-    original = fd_module.collapse
+    """Wrap the real `summarize_draws`, recording how many times it is called and with how many rows."""
+    original = fd_module.summarize_draws
     calls = {"n": 0, "rows": 0}
 
-    def counted(samples, **kwargs):
+    def counted(samples):
         arr = np.asarray(samples)
         calls["n"] += 1
         calls["rows"] += arr.shape[0] if arr.ndim > 1 else 1
-        return original(samples, **kwargs)
+        return original(samples)
 
-    monkeypatch.setattr(fd_module, "collapse", counted)
+    monkeypatch.setattr(fd_module, "summarize_draws", counted)
     return calls
 
 
@@ -42,7 +42,7 @@ def test_aggregate_collapse_is_called_per_month_and_variable_not_per_row(monkeyp
     )
 
     calls = _counting_collapse(monkeypatch)
-    out = ds.calculate_hdi_map(aggregate=True, level="gaul1", with_metadata=False)
+    out = ds.summarize(aggregate=True, level="gaul1", with_metadata=False)
 
     assert len(out) > 0, "the fixture produced no aggregated rows — the test would be vacuous"
     ceiling = months * len(targets)
@@ -66,7 +66,7 @@ def test_aggregate_collapse_batches_many_rows_per_call(monkeypatch):
     )
 
     calls = _counting_collapse(monkeypatch)
-    out = ds.calculate_hdi_map(aggregate=True, level="gaul1", with_metadata=False)
+    out = ds.summarize(aggregate=True, level="gaul1", with_metadata=False)
 
     rows_per_call = calls["rows"] / max(calls["n"], 1)
     assert rows_per_call > 1.0, (

@@ -6,7 +6,8 @@ The service specification (docs/SERVICE_SPECIFICATION.md) and the partner guide
 - one row per place and month;
 - the place's id and names first, then `month` (written `2027-01`) and VIEWS' `month_id`
   (decided 2026-11-17, #205 and #206); grid rows also carry the cell's latitude and longitude;
-- then the outcome's summary columns, and its recorded number of deaths in `{outcome}_actual`;
+- then the outcome's summary columns (`schema.SUMMARY_QUANTITIES`, decided 2026-11-17, #204),
+  its recorded number of deaths in `{outcome}_actual`, and `n_draws`;
 - forecast months carry the summary columns; months before the forecast carry the recorded deaths.
 
 The newest recorded month is also the first forecast month, and only a sliver of it has been
@@ -14,8 +15,9 @@ reported when the history is cut, with unreported cells stored as 0. Served, it 
 deaths next to the forecast. So recorded deaths are served only for months before the first
 forecast month (register C-293).
 
-Partners never get the samples. The summaries come from `ForecastDataset.calculate_hdi_map`;
-above the grid cell the samples are summed over the cells first, then summarised.
+Partners never get the samples. The summaries come from `ForecastDataset.summarize`; above the
+grid cell the draws are summed over the cells first, then summarised. Every value column is
+float64, even when empty, and the table is checked (`summary_checks`) before it is served.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import pandas as pd
 
 from views_crafdapi.forecast.serialize import schema
 from views_crafdapi.forecast.serialize.json_contract import to_consumer_columns
+from views_crafdapi.forecast.serialize.summary_checks import check_summaries
 from views_crafdapi.time import month_id_to_date
 
 # The partner's level code -> the dataset's level name (`None` is the grid cell).
@@ -66,9 +69,16 @@ def outcomes(forecast_ds) -> list[str]:
     return [schema.series_of(t) for t in forecast_ds.targets]
 
 
+def _one_outcome_names(outcome: str) -> dict[str, str]:
+    """`{outcome}_n_draws` is served as `n_draws`: a table holds one outcome, so the count of
+    draws needs no prefix. The one place that rename is written."""
+    return {schema.summary_col(outcome, "n_draws"): "n_draws"}
+
+
 def value_columns(outcome: str) -> list[str]:
-    """The summary columns for one outcome, followed by its recorded deaths."""
-    return schema.series_value_columns(outcome)
+    """The value columns for one outcome: its summaries, its recorded deaths, then `n_draws`."""
+    names = _one_outcome_names(outcome)
+    return [names.get(c, c) for c in schema.series_value_columns(outcome)]
 
 
 def target_for(dataset, outcome: str) -> Optional[str]:
@@ -183,7 +193,7 @@ def _forecast_rows(forecast_ds, level, outcome, places, months, identity) -> Opt
         iso3_of = _iso3_of_country_code(identity)
         if places is not None:
             entity_ids = [iso3_of[p] for p in places]
-    table = forecast_ds.calculate_hdi_map(
+    table = forecast_ds.summarize(
         features=[target],
         time_ids=asked,
         entity_ids=entity_ids,
@@ -191,7 +201,7 @@ def _forecast_rows(forecast_ds, level, outcome, places, months, identity) -> Opt
         aggregate=dataset_level is not None,
         with_metadata=False,
     )
-    table = to_consumer_columns(table)
+    table = to_consumer_columns(table).rename(columns=_one_outcome_names(outcome))
     if level == "country":
         code_of = {iso3: code for code, iso3 in iso3_of.items()}
         index_months = table.index.get_level_values(0)
@@ -321,6 +331,6 @@ def build_outcome_table(
     table = table.join(identity, on=PLACE_COLUMN[level])
     table["month"] = [month_id_to_date(int(m)) for m in table[_MONTH]]
     for column in value_columns(outcome):
-        if column not in table.columns:
-            table[column] = np.nan
+        table[column] = table[column].astype("float64") if column in table.columns else np.nan
+    check_summaries(table, outcome)
     return table[IDENTITY_COLUMNS[level] + value_columns(outcome)]

@@ -79,7 +79,7 @@ def test_wire_ragged_value_roundtrip_store_geo_and_hdi_identical(with_nan_geo, t
     assert out.geo_metadata.equals(ds.geo_metadata)
     for level in [None, "country", "gaul1"]:
         kw = {"aggregate": True, "level": level} if level is not None else {}
-        assert ds.calculate_hdi_map(**kw).equals(out.calculate_hdi_map(**kw)), f"hdi diverges (level={level})"
+        assert ds.summarize(**kw).equals(out.summarize(**kw)), f"hdi diverges (level={level})"
 
 # (n_cells, n_months, n_samples, seed) — even/odd S, varied grid (matches the parity corpus).
 _CORPUS = [(4, 2, 64, 1), (4, 2, 65, 2), (3, 3, 100, 3), (4, 1, 257, 4), (2, 2, 2, 5)]
@@ -129,13 +129,13 @@ def test_prediction_value_roundtrip_serves_identical_hdi_map(
 
     for with_metadata in (True, False):
         # cell-level (no aggregation)
-        a = ds.calculate_hdi_map(with_metadata=with_metadata)
-        b = out.calculate_hdi_map(with_metadata=with_metadata)
+        a = ds.summarize(with_metadata=with_metadata)
+        b = out.summarize(with_metadata=with_metadata)
         assert a.equals(b), f"cell-level hdi diverges (with_metadata={with_metadata})"
         # aggregated to each geographic level
         for level in [lv for lv in _LEVELS if lv is not None]:
-            a = ds.calculate_hdi_map(aggregate=True, level=level, with_metadata=with_metadata)
-            b = out.calculate_hdi_map(aggregate=True, level=level, with_metadata=with_metadata)
+            a = ds.summarize(aggregate=True, level=level, with_metadata=with_metadata)
+            b = out.summarize(aggregate=True, level=level, with_metadata=with_metadata)
             assert a.equals(b), f"aggregated hdi diverges (level={level}, meta={with_metadata})"
 
 

@@ -1,38 +1,45 @@
-"""S3 (#222): the single output-schema module (ADR-025 §3/§4)."""
+"""The served column names (`schema`), as decided for #204 on 2026-11-17."""
 
 import numpy as np
 import pytest
 
 from views_crafdapi.forecast.serialize import schema
-from views_crafdapi.forecast.summarize.estimator import collapse
+from views_crafdapi.forecast.summarize.draws import summarize_draws
 
 pytestmark = pytest.mark.layer2_data
 
 
-# --- masses -------------------------------------------------------------------------------
-def test_masses_are_the_adr025_trio():
-    assert schema.MASSES == (0.5, 0.9, 0.95)
+# --- the summaries -----------------------------------------------------------------------
+def test_the_summaries_are_the_decided_set_in_order():
+    assert schema.SUMMARY_QUANTITIES == (
+        "p_gt0", "p_gt25", "p_gt100", "p_gt500", "p_gt1000",
+        "mean", "mean_if_any", "median_if_any", "severe_scenario", "n_draws",
+    )
 
 
-def test_mass_pct_encodes_percent():
-    assert schema.mass_pct(0.5) == 50
-    assert schema.mass_pct(0.9) == 90
-    assert schema.mass_pct(0.95) == 95
+def test_the_reduction_returns_exactly_the_named_summaries():
+    """The reduction and the column names share one list, so they cannot drift apart."""
+    out = summarize_draws(np.random.default_rng(0).random((2, 128)) * 10)
+    assert tuple(out) == schema.SUMMARY_QUANTITIES
 
 
-def test_mass_pct_unknown_mass_fails_loud():
+def test_an_unknown_summary_has_no_column_name():
     with pytest.raises(ValueError):
-        schema.mass_pct(0.8)
+        schema.summary_col("sb", "map")
 
 
-def test_schema_masses_match_collapse_hdi_keys():
-    """The reduction and the column names share MASSES, so hdi keys never drift from names."""
-    r = collapse(np.random.default_rng(0).random((2, 128)) * 10, masses=schema.MASSES)
-    assert set(r.masses) == set(schema.MASSES)
-    for mass in schema.MASSES:
-        # the key used by collapse is exactly the one the column name is derived from
-        assert r.hdi[mass].shape == (2, 2)
-        assert schema.hdi_col("sb", mass, "lower") == f"sb_hdi{schema.mass_pct(mass)}_lower"
+@pytest.mark.parametrize("column,expected", [
+    ("pred_lr_ged_sb_p_gt1000", "sb_p_gt1000"),
+    ("pred_lr_ged_sb_p_gt100", "sb_p_gt100"),
+    ("pred_lr_ged_ns_mean_if_any", "ns_mean_if_any"),
+    ("pred_lr_ged_ns_mean", "ns_mean"),
+    ("pred_lr_ged_os_n_draws", "os_n_draws"),
+    ("admin1_gaul1_name", "admin1_gaul1_name"),
+    ("sb_actual", "sb_actual"),
+])
+def test_the_served_rename_keeps_the_whole_summary_name(column, expected):
+    assert schema.consumer_column(column) == expected
+
 
 
 # --- series mapping -----------------------------------------------------------------------
@@ -71,31 +78,19 @@ def test_identity_sources_are_real_metadata_columns():
         assert source in meta, f"{consumer} maps to {source!r}, absent from _METADATA_COLS"
 
 
-# --- the per-series value contract (ADR-025 + ADR-034 exceedance) --------------------------
-def test_series_value_columns_are_the_thirteen_in_order():
+# --- the admin-1 bulk file's columns ----------------------------------------------------
+def test_series_value_columns_are_the_eleven_in_order():
     assert schema.series_value_columns("sb") == [
-        "sb_map",
-        "sb_hdi50_lower", "sb_hdi50_upper",
-        "sb_hdi90_lower", "sb_hdi90_upper",
-        "sb_hdi95_lower", "sb_hdi95_upper",
-        "sb_severe_scenario",
-        "sb_bimodality_flag",
-        "sb_p_gt25", "sb_p_gt100", "sb_p_gt1000",
-        "sb_actual",
+        "sb_p_gt0", "sb_p_gt25", "sb_p_gt100", "sb_p_gt500", "sb_p_gt1000",
+        "sb_mean", "sb_mean_if_any", "sb_median_if_any", "sb_severe_scenario",
+        "sb_actual", "sb_n_draws",
     ]
 
 
-def test_bulk_layout_is_exactly_45_unique_columns():
+def test_bulk_layout_is_exactly_39_unique_columns():
     cols = schema.bulk_columns()
-    assert len(cols) == 45
-    assert len(set(cols)) == 45  # no duplicates
+    assert len(cols) == len(set(cols)) == 39
     assert cols[:6] == list(schema.IDENTITY_COLUMNS)
-    # 13 value columns per series, in series order
-    assert cols[6:19] == schema.series_value_columns("sb")
-    assert cols[19:32] == schema.series_value_columns("ns")
-    assert cols[32:45] == schema.series_value_columns("os")
-
-
-def test_hdi_col_rejects_bad_bound():
-    with pytest.raises(ValueError):
-        schema.hdi_col("sb", 0.9, "middle")
+    assert cols[6:17] == schema.series_value_columns("sb")
+    assert cols[17:28] == schema.series_value_columns("ns")
+    assert cols[28:39] == schema.series_value_columns("os")

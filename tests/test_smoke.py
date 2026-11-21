@@ -108,16 +108,16 @@ def test_health_unreachable_fails():
 
 
 # ── coverage ───────────────────────────────────────────────────────────────
-def _df(countries, values=None, column="sb_map"):
+def _df(countries, values=None, column="sb_mean"):
     values = values if values is not None else [1.0] * len(countries)
     return pd.DataFrame({"admin1_code": range(len(countries)), "country_iso3": countries, column: values})
 
 
 def test_coverage_present_passes():
     c = _Client(fetch=_df(["IDN", "IDN", "IDN"]))
-    r = smoke.check_coverage(c, "2026-07", "IDN", "sb_map")
+    r = smoke.check_coverage(c, "2026-07", "IDN", "sb_mean")
     assert r.ok and "IDN: 3 rows, 3 with a value" in r.detail
-    assert c.asked == ("admin1", "sb", None, ["2026-07"], ["sb_map"])
+    assert c.asked == ("admin1", "sb", None, ["2026-07"], ["sb_mean"])
 
 
 def test_coverage_empty_fails():
@@ -135,7 +135,7 @@ def test_coverage_country_absent_fails():
 def test_coverage_country_present_but_without_values_fails():
     # the rows exist but carry nothing: the country is named, not covered
     c = _Client(fetch=_df(["IDN", "IDN"], values=[None, None]))
-    r = smoke.check_coverage(c, "2026-07", "IDN", "sb_map")
+    r = smoke.check_coverage(c, "2026-07", "IDN", "sb_mean")
     assert not r.ok and "0 with a value" in r.detail
 
 
@@ -156,7 +156,7 @@ def test_fetch_retry_once_recovers():
 
 def test_check_coverage_retries_on_timeout():
     c = _Client(fetch=_df(["IDN"]), fetch_exc_then=[requests.exceptions.Timeout("cold")])
-    r = smoke.check_coverage(c, "2026-07", "IDN", "sb_map")
+    r = smoke.check_coverage(c, "2026-07", "IDN", "sb_mean")
     assert r.ok  # first call timed out, retry succeeded
 
 
@@ -185,7 +185,7 @@ def test_run_checks_the_forecast_month_for_summaries_and_the_past_month_for_reco
     monkeypatch.setattr(smoke, "CrafdApiClient", lambda base, key, timeout: Recording(health=healthy))
     results = smoke.run("http://x", "key", expect_tag=None, forecast_month="2026-07", hist_month="2024-12")
     assert all(r.ok for r in results), results
-    assert asked[:2] == [(["2026-07"], ["sb_map"]), (["2024-12"], ["sb_actual"])]
+    assert asked[:2] == [(["2026-07"], ["sb_mean"]), (["2024-12"], ["sb_actual"])]
 
 
 class TestExpectTagCannotSilentlyInspectNothing:

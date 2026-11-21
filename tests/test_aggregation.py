@@ -35,9 +35,9 @@ class TestGetPgCells:
         with pytest.raises(ValueError, match="Level must be one of"):
             fao_dataset._get_pg_cells(level, 10)
         with pytest.raises(ValueError, match="Level must be one of"):
-            fao_dataset.calculate_hdi_map(level=level, aggregate=True)
+            fao_dataset.summarize(level=level, aggregate=True)
         with pytest.raises(ValueError, match="Level must be one of"):
-            fao_dataset.calculate_hdi_map(level=level)
+            fao_dataset.summarize(level=level)
         with pytest.raises(ValueError, match="Level must be one of"):
             fao_dataset.get_subset_dataframe(level=level, aggregate=True)
 
@@ -203,70 +203,52 @@ class TestGetSubsetDataframe:
 # ============================================================
 
 
-class TestCalculateHdiMap:
+class TestSummarize:
 
-    def test_basic_hdi_map(self, fao_dataset):
-        result = fao_dataset.calculate_hdi_map(alpha=0.9, with_metadata=False)
+    def test_cell_summaries(self, fao_dataset):
+        result = fao_dataset.summarize(with_metadata=False)
         assert result.shape[0] == 8  # 4 cells × 2 months
-        assert any("_hdi90_lower" in col for col in result.columns)
-        assert any("_hdi90_upper" in col for col in result.columns)
-        assert any("_map" in col for col in result.columns)
+        for var in fao_dataset.targets:
+            for q in ("p_gt0", "mean", "median_if_any", "n_draws"):
+                assert f"{var}_{q}" in result.columns
 
-    def test_aggregated_hdi_map(self, fao_dataset):
-        result = fao_dataset.calculate_hdi_map(
-            alpha=0.9, level="country", aggregate=True, with_metadata=False
-        )
-        # 2 countries × 2 months = 4 rows
-        assert result.shape[0] == 4
+    def test_aggregated_summaries(self, fao_dataset):
+        result = fao_dataset.summarize(level="country", aggregate=True, with_metadata=False)
+        assert result.shape[0] == 4  # 2 countries × 2 months
         assert any("_severe_scenario" in col for col in result.columns)
-        assert any("_hdi95_lower" in col for col in result.columns)
-        assert not any(c.endswith(("_min", "_max")) for c in result.columns)
+        assert not any(c.endswith(("_map", "_min", "_max", "_lower", "_upper")) for c in result.columns)
 
-    def test_aggregated_hdi_map_gaul1(self, fao_dataset):
-        result = fao_dataset.calculate_hdi_map(
-            alpha=0.9, level="gaul1", aggregate=True, with_metadata=False
-        )
+    def test_aggregated_summaries_gaul1(self, fao_dataset):
+        result = fao_dataset.summarize(level="gaul1", aggregate=True, with_metadata=False)
         assert result.shape[0] == 4  # 2 gaul1 regions × 2 months
-        assert any("_severe_scenario" in col for col in result.columns)
-        assert not any(c.endswith(("_min", "_max")) for c in result.columns)
+        assert any("_mean_if_any" in col for col in result.columns)
 
-    def test_aggregated_hdi_differs_from_summed_cell_bounds(self, fao_dataset):
-        """CIC Section 10: HDI([sum of distributions]) != sum(HDI bounds)."""
-        cell_hdi = fao_dataset.calculate_hdi_map(
-            alpha=0.9, with_metadata=False
-        )
-        cell_hdi_with_meta = cell_hdi.join(
+    def test_the_summary_of_the_sum_is_not_the_sum_of_the_summaries(self, fao_dataset):
+        """CIC Section 10: the draws are summed first, then summarised. The mean is the one
+        summary that adds up (the data dictionary says partners may add it); the median does
+        not."""
+        cells = fao_dataset.summarize(with_metadata=False).join(
             fao_dataset.geo_metadata[["country_iso_a3"]], how="left"
         )
-        naive_sum = cell_hdi_with_meta.groupby(
-            [cell_hdi_with_meta.index.get_level_values("month_id"), "country_iso_a3"]
+        naive = cells.groupby(
+            [cells.index.get_level_values("month_id"), "country_iso_a3"]
         ).sum(numeric_only=True)
+        summed = fao_dataset.summarize(level="country", aggregate=True, with_metadata=False)
+        assert len(summed) == len(naive)
+        var = fao_dataset.targets[0]
+        np.testing.assert_allclose(summed[f"{var}_mean"].values, naive[f"{var}_mean"].values)
+        assert not np.allclose(summed[f"{var}_median_if_any"].values, naive[f"{var}_median_if_any"].values)
 
-        correct_hdi = fao_dataset.calculate_hdi_map(
-            alpha=0.9, level="country", aggregate=True, with_metadata=False
-        )
-
-        lower_col = [c for c in correct_hdi.columns if "_hdi90_lower" in c][0]
-        assert len(correct_hdi) == len(naive_sum), "Index alignment mismatch"
-        assert not np.allclose(
-            correct_hdi[lower_col].values,
-            naive_sum[lower_col].values,
-        ), "Aggregated HDI bounds should differ from summed cell-level bounds"
-
-    def test_aggregated_hdi_bounds_are_ordered(self, fao_dataset):
-        result = fao_dataset.calculate_hdi_map(
-            alpha=0.9, level="country", aggregate=True, with_metadata=False
-        )
-        for col_base in fao_dataset.targets:
-            lower = result[f"{col_base}_hdi90_lower"]
-            upper = result[f"{col_base}_hdi90_upper"]
-            map_val = result[f"{col_base}_map"]
-            assert (lower <= map_val + 1e-10).all(), f"{col_base}: lower > MAP"
-            assert (map_val <= upper + 1e-10).all(), f"{col_base}: MAP > upper"
+    def test_aggregated_chances_fall_as_the_threshold_rises(self, fao_dataset):
+        result = fao_dataset.summarize(level="country", aggregate=True, with_metadata=False)
+        for var in fao_dataset.targets:
+            chances = [result[f"{var}_p_gt{c}"] for c in (0, 25, 100, 500, 1000)]
+            for higher, lower in zip(chances, chances[1:]):
+                assert (lower <= higher).all()
 
     def test_aggregate_without_level_raises(self, fao_dataset):
         with pytest.raises(ValueError, match="Must specify 'level'"):
-            fao_dataset.calculate_hdi_map(aggregate=True)
+            fao_dataset.summarize(aggregate=True)
 
 
 # ============================================================
@@ -418,102 +400,27 @@ class TestC146MissingGeographyCode:
             np.testing.assert_array_equal(got, np.asarray(expected, np.float32))
 
 
-class TestCalculateHdiMapHistoricalStaysFloat64:
-    """Register C-258 — the gap that let a silent re-baselining through a green suite.
+class TestSummariesNeedDraws:
+    """Summaries are computed from draws. The history holds one recorded value per cell, so
+    asking it for summaries is refused rather than answered with summaries of nothing."""
 
-    `TestFeatureAggregationStaysFloat64` above states the invariant and guards
-    `get_subset_dataframe(aggregate=True)`. The live route
-    `/{level}/analysis/historical/hdi-map?aggregate=true` goes through `calculate_hdi_map`
-    instead, which was unguarded — so ADR-030 S7's first draft sent the historical leg through
-    the float32 views-frames leaf, moved a served value by 98.0, and the full suite passed.
+    def test_no_draws_means_zero_draws_and_empty_summaries_at_every_level(self, fao_dataset):
+        """Asking for no draws at all gives rows that count 0 draws and summarise nothing, the
+        same at cell and region level."""
+        for kwargs in ({}, {"level": "gaul1", "aggregate": True}):
+            out = fao_dataset.summarize(sample_idx=[], with_metadata=False, **kwargs)
+            var = fao_dataset.targets[0]
+            assert (out[f"{var}_n_draws"] == 0).all(), kwargs
+            assert out[f"{var}_mean"].isna().all(), kwargs
 
-    A guard pinned to one of two sibling entry points is not a guard on the invariant.
-    """
-
-    @staticmethod
-    def _many_cell_feature_df(n_repeats=500, seed=7):
-        """One country, many cells — float32 only loses ground once the summands pile up."""
-        base = make_fao_df(n_cells=4, n_months=1, n_samples=1, seed=seed)
-        tid, eid = base.index.names
-        feat = base.drop(columns=[c for c in base.columns if c.startswith("pred_")]).reset_index()
-        big = pd.concat(
-            [feat.assign(**{eid: feat[eid] + 1000 * i}) for i in range(n_repeats)],
-            ignore_index=True,
-        )
-        big["country_iso_a3"] = "AAA"
-        rng = np.random.default_rng(seed)
-        big["lr_ged_sb"] = rng.gamma(2.0, 30000.0, size=len(big)).astype(np.float64)
-        return big.set_index([tid, eid]).sort_index()
-
-    def test_historical_aggregate_names_its_places(self):
-        """The historical leg aggregates through its own code (`_aggregate_hdi_map_pandas`), so
-        the forecast-path metadata guards do not cover it. An admin-1 answer carries the country
-        and the region names here too."""
-        base = make_fao_df(n_cells=4, n_months=2, n_samples=1, seed=3)
+    def test_a_history_is_refused(self):
+        base = make_fao_df(n_cells=4, n_months=1, n_samples=1)
         feat = base.drop(columns=[c for c in base.columns if c.startswith("pred_")])
-        feat["lr_ged_sb"] = np.arange(len(feat), dtype=np.float64)
-        ds = ForecastDataset(feat, targets=["lr_ged_sb"])
-        assert not ds.is_prediction
-        out = ds.calculate_hdi_map(level="gaul1", aggregate=True)
-        for col in ("country_iso_a3", "admin1_gaul1_name", "admin1_gaul0_name"):
-            assert col in out.columns, f"{col} missing from {list(out.columns)}"
-        assert sorted(out["admin1_gaul1_name"].unique()) == ["Region1", "Region2"]
-
-    def test_historical_aggregate_sums_in_float64_then_narrows_once(self):
-        """The summation must happen in float64; only the reduction's output narrows.
-
-        Note what this does NOT assert. `calculate_hdi_map` has always emitted float32-width
-        values here — `collapse` narrows — so the served number never equalled the raw float64
-        sum, and asserting that would fail on `main` too. The invariant is about *where* the
-        narrowing happens: sum in float64 and narrow once at the end, versus accumulating in
-        float32 and compounding the error across every cell.
-
-        Measured on this fixture: legacy 115868248.0 == float32(float64 sum). S7's first draft
-        routed this leg through the float32 views-frames leaf and produced 115868152.0 — a
-        silent drift of 96.0 on a live UN-facing endpoint, with a green suite. Register C-258.
-        """
-        df = self._many_cell_feature_df()
-        ds = ForecastDataset(df, targets=["lr_ged_sb"])
-        assert not ds.is_prediction, "fixture must exercise the historical/scalar leg"
-
-        out = ds.calculate_hdi_map(aggregate=True, level="country", with_metadata=False)
-        map_col = next(c for c in out.columns if c.endswith("_map"))
-        served = float(out.iloc[0][map_col])
-
-        summed_in_float64 = float(np.float32(df["lr_ged_sb"].sum()))
-        assert served == summed_in_float64, (
-            f"C-258: the historical aggregate re-baselined. Served {served!r}; summing in "
-            f"float64 and narrowing once gives {summed_in_float64!r} (drift "
-            f"{abs(served - summed_in_float64)}). ADR-030 §1 keeps this leg on the legacy "
-            f"float64 `elementwise_sum` — the float32 frame leaf accumulates error per cell."
-        )
-
-    def test_both_aggregate_entry_points_agree_on_the_historical_leg(self):
-        """The sibling-guard gap itself: `get_subset_dataframe` was guarded, this one was not.
-
-        They must describe the same aggregate. They differ in emitted width (`collapse`
-        narrows, the raw cells do not) — pre-existing and recorded in C-258 — so this compares
-        at float32 width, which is what the endpoint serves.
-        """
-        df = self._many_cell_feature_df()
-        ds = ForecastDataset(df, targets=["lr_ged_sb"])
-
-        via_hdi_map = float(
-            ds.calculate_hdi_map(aggregate=True, level="country", with_metadata=False)
-            .iloc[0]
-            .filter(like="_map")
-            .iloc[0]
-        )
-        via_subset = float(
-            np.asarray(
-                ds.get_subset_dataframe(aggregate=True, level="country").iloc[0]["lr_ged_sb"]
-            ).sum()
-        )
-        assert via_hdi_map == float(np.float32(via_subset)), (
-            f"C-258: the two aggregate entry points disagree — {via_hdi_map!r} via "
-            f"calculate_hdi_map, {via_subset!r} via get_subset_dataframe. Only one of them "
-            f"has a float64 guard, so a divergence here is invisible to CI."
-        )
+        feat["lr_ged_sb"] = 1.0
+        history = ForecastDataset(feat, targets=["lr_ged_sb"])
+        for kwargs in ({}, {"level": "gaul1", "aggregate": True}):
+            with pytest.raises(ValueError, match="computed from draws"):
+                history.summarize(**kwargs)
 
 
 class TestAggregatePathValidatesItsInputs:
@@ -535,29 +442,29 @@ class TestAggregatePathValidatesItsInputs:
     def test_negative_sample_index_raises_instead_of_wrapping(self):
         """Wrapping served draw S-1 alone as a full posterior — a zero-width interval."""
         with pytest.raises(ValueError, match="Sample indices must be between 0 and 15"):
-            self._ds().calculate_hdi_map(aggregate=True, level="gaul1", sample_idx=-1)
+            self._ds().summarize(aggregate=True, level="gaul1", sample_idx=-1)
 
     def test_out_of_range_sample_index_raises_the_same_error_as_the_cell_path(self):
         with pytest.raises(ValueError, match="Sample indices must be between 0 and 15"):
-            self._ds().calculate_hdi_map(aggregate=True, level="gaul1", sample_idx=999)
+            self._ds().summarize(aggregate=True, level="gaul1", sample_idx=999)
 
     def test_unknown_feature_raises_value_error_not_a_bare_key_error(self):
         """A bare KeyError reaches the client as HTTP 500 with the body `"'typo'"`."""
         with pytest.raises(ValueError, match="Invalid features specified"):
-            self._ds().calculate_hdi_map(aggregate=True, level="gaul1", features=["pred_nope"])
+            self._ds().summarize(aggregate=True, level="gaul1", features=["pred_nope"])
 
     def test_empty_feature_list_selects_nothing_rather_than_everything(self):
         """`?features=` parses to `[]`; a falsy-empty check turned that into every target."""
-        out = self._ds().calculate_hdi_map(aggregate=True, level="gaul1", features=[])
+        out = self._ds().summarize(aggregate=True, level="gaul1", features=[])
         assert out.shape == (0, 0), f"features=[] aggregated {out.shape[1]} columns"
 
     def test_unknown_time_id_raises_like_the_cell_path(self):
         with pytest.raises(KeyError, match="Invalid time IDs"):
-            self._ds().calculate_hdi_map(aggregate=True, level="gaul1", time_ids=[9999])
+            self._ds().summarize(aggregate=True, level="gaul1", time_ids=[9999])
 
     def test_country_level_index_is_not_a_categorical_carrying_every_category(self):
         """A CategoricalIndex re-exports the fan-out `observed=True` exists to prevent."""
-        out = self._ds().calculate_hdi_map(aggregate=True, level="country", with_metadata=False)
+        out = self._ds().summarize(aggregate=True, level="country", with_metadata=False)
         level_values = out.index.get_level_values("country_iso_a3")
         assert not isinstance(level_values.dtype, pd.CategoricalDtype), (
             "the country index level is categorical: a downstream groupby on it emits a row "

@@ -543,11 +543,11 @@ class CrafdApiManager(APIManager):
             x_api_key: str = Header(..., description="Appwrite API Key"),
             manager: PredictionStoreManager = Depends(self._get_prediction_manager),
         ):
-            """ADR-025 admin-1 bulk artifact (#222/S6): the full forecast table — MAP + 50/90/95
-            HDIs + `severe_scenario` + historical `actual` — as one wide parquet, one row per
-            `(month_id, admin1_code)`. The same numbers as the JSON API, packaged for a single
-            load. Historical is best-effort: if no historical artifact is available, `s_actual`
-            is served as NaN rather than failing the download."""
+            """The whole forecast at admin 1 as one parquet file, one row per `(month_id,
+            admin1_code)`: per outcome the summary columns (`s_p_gt0` … `s_severe_scenario`,
+            `s_n_draws`) and the recorded deaths `s_actual`, the same numbers as a slice. If the
+            recorded deaths cannot be loaded, `s_actual` is empty rather than the download
+            failing. To be replaced by one file per outcome and level (#203)."""
             try:
                 forecast_ds = self._get_latest_dataset(manager, x_api_key, "forecast")
                 try:

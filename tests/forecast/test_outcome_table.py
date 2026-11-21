@@ -54,7 +54,7 @@ def test_place_ids_are_whole_numbers_when_the_geography_stores_floats(level, pla
     history = ForecastDataset(_relabel_months(df.copy(), [598, 599]))
     table = outcome_table.build_outcome_table(forecast, history, level, "sb")
     assert str(table[place].dtype) == "Int64" and table[place].notna().all()
-    assert table["sb_map"].notna().sum() == table["sb_actual"].notna().sum() == len(table) // 2
+    assert table["sb_mean"].notna().sum() == table["sb_actual"].notna().sum() == len(table) // 2
 
 
 @pytest.mark.parametrize("level", ["grid", "admin1"])
@@ -100,10 +100,10 @@ def test_past_months_without_a_forecast_are_served_with_their_recorded_deaths():
     table = outcome_table.build_outcome_table(forecast, history, "admin1", "sb").set_index(["month", "admin1_code"])
     assert len(table) == 6   # two regions x three months
     past, overlap, ahead = table.loc["2029-11"], table.loc["2029-12"], table.loc["2030-01"]
-    assert past["sb_actual"].notna().all() and past["sb_map"].isna().all()
+    assert past["sb_actual"].notna().all() and past["sb_mean"].isna().all()
     # The frontier month is recorded in the history but served as forecast only (C-293).
-    assert overlap["sb_actual"].isna().all() and overlap["sb_map"].notna().all()
-    assert ahead["sb_actual"].isna().all() and ahead["sb_map"].notna().all()
+    assert overlap["sb_actual"].isna().all() and overlap["sb_mean"].notna().all()
+    assert ahead["sb_actual"].isna().all() and ahead["sb_mean"].notna().all()
 
 
 def _history_with_values(values_by_cell, month=600):
@@ -195,3 +195,38 @@ def test_an_unsorted_history_is_refused_not_misread():
     history.geo_metadata = history.geo_metadata.iloc[::-1]
     with pytest.raises(ValueError, match="not sorted"):
         outcome_table.build_outcome_table(_forecast_from(600), history, "grid", "sb")
+
+
+def _float32_summaries(forecast, monkeypatch):
+    """Make the forecast's summaries arrive as float32, as a narrower reduction would."""
+    real = forecast.summarize
+    monkeypatch.setattr(forecast, "summarize", lambda **kw: _numbers_as_float32(real(**kw)))
+
+
+def test_every_value_column_is_float64_whatever_the_summaries_arrive_as(monkeypatch):
+    """faoapi #487: served numeric columns are float64, even empty ones."""
+    forecast = _forecast_from(600)
+    _float32_summaries(forecast, monkeypatch)
+    table = outcome_table.build_outcome_table(forecast, None, "admin1", "sb")
+    for column in outcome_table.value_columns("sb"):
+        assert table[column].dtype == np.float64, column
+
+
+def test_a_table_breaking_a_summary_relation_is_refused(monkeypatch):
+    """The check runs on every served table: a chance rising with the threshold stops it."""
+    forecast = _forecast_from(600)
+    real = forecast.summarize
+
+    def broken(**kw):
+        out = real(**kw)
+        out["pred_lr_ged_sb_p_gt100"] = 1.0
+        out["pred_lr_ged_sb_p_gt25"] = 0.0
+        return out
+    monkeypatch.setattr(forecast, "summarize", broken)
+    with pytest.raises(ValueError, match="sb_p_gt100 is above sb_p_gt25"):
+        outcome_table.build_outcome_table(forecast, None, "grid", "sb")
+
+
+def _numbers_as_float32(frame):
+    numbers = frame.select_dtypes("number").columns
+    return frame.astype({c: "float32" for c in numbers})

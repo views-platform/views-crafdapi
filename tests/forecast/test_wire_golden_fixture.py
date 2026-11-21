@@ -102,8 +102,8 @@ def test_faoapi_ingests_and_serves_the_real_producer_bytes():
     dataset.validate_value_plausibility()
     dataset.validate_metadata_plausibility()
 
-    served = dataset.calculate_hdi_map()
+    served = dataset.summarize()
     assert len(served) == manifest.expected_cell_count
     # Aggregation to a coarser level must also serve (exercises the geo collapse).
-    aggregated = dataset.calculate_hdi_map(aggregate=True, level="country")
+    aggregated = dataset.summarize(aggregate=True, level="country")
     assert len(aggregated) >= 1

@@ -5,8 +5,8 @@ Two layers:
   columns structurally (rebuild `{series}_{quantity}`, not a substring swap), pass identity /
   geo / historical `actual` through untouched, and fail loud only on a genuine quantity column
   whose var has no series.
-- Integration: the forecast hdi-map endpoint serves the exact ADR-025 consumer value columns at
-  every level, min/max are gone, and NO internal pipeline prefix survives on any served column.
+- Integration: the slice serves exactly the decided summary columns (#204) at every level, the
+  retired columns are gone, and NO internal pipeline prefix survives on any served column.
 """
 import time
 from unittest.mock import MagicMock
@@ -30,8 +30,8 @@ _TARGETS = ("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")
 
 # --- unit: the structured, quantity-scoped rename -------------------------------------------
 def test_consumer_column_renames_quantities_structurally():
-    assert schema.consumer_column("pred_lr_ged_sb_map") == "sb_map"
-    assert schema.consumer_column("pred_lr_ged_sb_hdi90_lower") == "sb_hdi90_lower"
+    assert schema.consumer_column("pred_lr_ged_sb_mean") == "sb_mean"
+    assert schema.consumer_column("pred_lr_ged_sb_p_gt500") == "sb_p_gt500"
     assert schema.consumer_column("pred_ln_ns_best_severe_scenario") == "ns_severe_scenario"
 
 
@@ -42,14 +42,14 @@ def test_consumer_column_passes_non_quantity_columns_through():
 
 def test_consumer_column_fails_loud_only_on_a_series_less_quantity():
     with pytest.raises(ValueError):
-        schema.consumer_column("pred_test_map")  # a real quantity col, no series token
+        schema.consumer_column("pred_test_mean")  # a real summary column, no outcome token
 
 
 def test_to_consumer_columns_renames_only_quantity_columns():
     df = pd.DataFrame(
-        {c: [0.0] for c in ("month_id", "pred_lr_ged_sb_map", "pred_lr_ged_ns_hdi95_upper")}
+        {c: [0.0] for c in ("month_id", "pred_lr_ged_sb_mean", "pred_lr_ged_ns_median_if_any")}
     )
-    assert list(to_consumer_columns(df).columns) == ["month_id", "sb_map", "ns_hdi95_upper"]
+    assert list(to_consumer_columns(df).columns) == ["month_id", "sb_mean", "ns_median_if_any"]
 
 
 # --- integration: the served forecast response carries the exact ADR-025 consumer columns ----
@@ -77,13 +77,10 @@ def client(tmp_path):
     return TestClient(mgr.app)
 
 
-_EXPECTED_PER_SERIES = [  # the 9 ADR-025 forecast value columns per series (actual is S6/bulk)
-    "{s}_map",
-    "{s}_hdi50_lower", "{s}_hdi50_upper",
-    "{s}_hdi90_lower", "{s}_hdi90_upper",
-    "{s}_hdi95_lower", "{s}_hdi95_upper",
-    "{s}_severe_scenario",
-    "{s}_bimodality_flag",
+_EXPECTED_PER_SERIES = [  # the decided summary columns per outcome (#204), then the recorded deaths
+    "{s}_p_gt0", "{s}_p_gt25", "{s}_p_gt100", "{s}_p_gt500", "{s}_p_gt1000",
+    "{s}_mean", "{s}_mean_if_any", "{s}_median_if_any", "{s}_severe_scenario",
+    "{s}_actual",
 ]
 
 
@@ -93,8 +90,9 @@ def test_forecast_response_has_the_exact_consumer_value_columns(client, level, o
     resp = client.get(f"/slice/{level}/{outcome}", headers=HEADERS)
     assert resp.status_code == 200, resp.text
     cols = set(resp.json()["columns"])
-    for tmpl in _EXPECTED_PER_SERIES:
-        assert tmpl.format(s=outcome) in cols, f"missing {tmpl.format(s=outcome)} in {sorted(cols)}"
-    # min/max retired; and NO internal pipeline prefix survives on ANY served column (C-α guard).
-    assert not any(c.endswith("_min") or c.endswith("_max") for c in cols)
+    values = [c for c in resp.json()["columns"] if c.startswith(f"{outcome}_") or c == "n_draws"]
+    assert values == [t.format(s=outcome) for t in _EXPECTED_PER_SERIES] + ["n_draws"]
+    # The retired columns are gone; NO internal pipeline prefix survives on ANY served column.
+    retired = ("_map", "_min", "_max", "_bimodality_flag", "_lower", "_upper")
+    assert not any(c.endswith(retired) for c in cols)
     assert not any(c.startswith(("pred_", "lr_", "ln_", "ged_")) for c in cols)

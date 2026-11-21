@@ -99,56 +99,28 @@ class TestElementwiseSum:
 
 
 class TestEndToEndGoldenValues:
-    """End-to-end golden values through calculate_hdi_map (includes float32 conversion)."""
+    """End-to-end values through `summarize` (includes the float32 sample store), against the
+    same summaries computed by hand with numpy on the stored draws."""
 
-    def test_calculate_hdi_map_golden_values(self):
+    def test_summarize_matches_a_hand_computation(self):
         rng = np.random.default_rng(42)
         index = pd.MultiIndex.from_tuples(
             [(500, 100001), (500, 100002)],
             names=["month_id", "priogrid_id"],
         )
-        data = {
-            "pred_fatalities": [
-                rng.normal(loc=5.0, scale=1.0, size=1000),
-                rng.exponential(2.0, size=1000),
-            ]
-        }
-        ds = _GridDataset(pd.DataFrame(data, index=index))
-        result = ds.calculate_hdi_map(alpha=0.9, enforce_non_negative=False)
-
-        # MAP re-baselined to views-frames ≥1.9.0 tower-tip (tip_mass 0.25, ADR-019 Am.3 / ADR-034).
-        # Skewed cells shift toward the mode as intended: the exponential cell 100002 drops
-        # 0.690 → 0.458; the symmetric cell 100001 barely moves; HDI bounds unchanged.
-        assert result.loc[(500, 100001), "pred_fatalities_map"] == pytest.approx(
-            5.219996452331543, abs=1e-4
-        )
-        assert result.loc[(500, 100001), "pred_fatalities_hdi90_lower"] == pytest.approx(
-            3.3801279067993164, abs=1e-4
-        )
-        assert result.loc[(500, 100001), "pred_fatalities_hdi90_upper"] == pytest.approx(
-            6.6678876876831055, abs=1e-4
-        )
-        assert result.loc[(500, 100002), "pred_fatalities_map"] == pytest.approx(
-            0.45783525705337524, abs=1e-4
-        )
-
-    def test_calculate_hdi_map_enforce_non_negative(self):
-        rng = np.random.default_rng(42)
-        index = pd.MultiIndex.from_tuples(
-            [(500, 100001)],
-            names=["month_id", "priogrid_id"],
-        )
-        data = {
-            "pred_fatalities": [
-                rng.normal(loc=-2.0, scale=0.5, size=1000),
-            ]
-        }
-        ds = _GridDataset(pd.DataFrame(data, index=index))
-        result = ds.calculate_hdi_map(alpha=0.9, enforce_non_negative=True)
-        assert result.loc[(500, 100001), "pred_fatalities_map"] >= 0.0
-        lo = result.loc[(500, 100001), "pred_fatalities_hdi90_lower"]
-        hi = result.loc[(500, 100001), "pred_fatalities_hdi90_upper"]
-        assert lo < hi
+        draws = [rng.poisson(3.0, size=1000).astype(float), rng.exponential(2.0, size=1000)]
+        ds = _GridDataset(pd.DataFrame({"pred_fatalities": draws}, index=index))
+        result = ds.summarize()
+        for cell, d in zip((100001, 100002), draws):
+            d = d.astype(np.float32).astype(np.float64)   # as stored
+            any_ = d[d > 0]
+            expected = {
+                "p_gt0": (d > 0).mean(), "p_gt25": (d > 25).mean(), "mean": d.mean(),
+                "mean_if_any": any_.mean(), "median_if_any": np.median(any_),
+                "severe_scenario": np.sort(d)[-50:].mean(), "n_draws": 1000,
+            }
+            for q, value in expected.items():
+                assert result.loc[(500, cell), f"pred_fatalities_{q}"] == pytest.approx(value, rel=1e-9), q
 
 
 class TestFloat32PrecisionIntegration:
@@ -167,8 +139,8 @@ class TestFloat32PrecisionIntegration:
         df = df.drop(columns=["pred_other"])
         return ForecastDataset(df)
 
-    def test_float32_hdi_map_matches_float64_within_tolerance(self):
-        """HDI-MAP results from float32 pipeline must be within 1e-3 of float64."""
+    def test_float32_summaries_match_float64_within_tolerance(self):
+        """Summaries from the float32 store must be within 1e-3 of float64."""
         rng = np.random.default_rng(42)
         samples_64 = [rng.normal(loc=5.0, scale=1.0, size=1000) for _ in range(2)]
 
@@ -178,11 +150,11 @@ class TestFloat32PrecisionIntegration:
         ds_64 = _GridDataset(pd.DataFrame(
             {"pred_test": [s.copy() for s in samples_64]}, index=index
         ))
-        result_64 = ds_64.calculate_hdi_map(alpha=0.9, enforce_non_negative=False)
+        result_64 = ds_64.summarize()
 
         ds_32 = self._make_fao_dataset(rng, [s.copy() for s in samples_64])
         assert ds_32._sample_array("pred_test").dtype == np.float32  # canonical store is float32
-        result_32 = ds_32.calculate_hdi_map(alpha=0.9, enforce_non_negative=False)
+        result_32 = ds_32.summarize()
 
         for col in result_64.columns:
             for idx in result_64.index:
@@ -193,25 +165,23 @@ class TestFloat32PrecisionIntegration:
                     f"float64={v64}, float32={v32}, diff={abs(v64-v32)}"
                 )
 
-    def test_float32_near_zero_hdi_bounds(self):
-        """Near-zero distributions shouldn't produce inverted HDI bounds at float32."""
+    def test_float32_near_zero_draws_keep_their_order(self):
+        """Tiny positive draws stay positive and ordered at float32: every draw counts as
+        "any deaths", and the severe case sits above the mean."""
         rng = np.random.default_rng(99)
         tiny = [rng.exponential(0.001, 1000) for _ in range(2)]
         ds = self._make_fao_dataset(rng, tiny)
-        result = ds.calculate_hdi_map(alpha=0.9, enforce_non_negative=True)
+        result = ds.summarize()
         for idx in result.index:
-            lo = result.loc[idx, "pred_test_hdi90_lower"]
-            hi = result.loc[idx, "pred_test_hdi90_upper"]
-            mp = result.loc[idx, "pred_test_map"]
-            assert lo <= hi, f"Inverted HDI bounds at {idx}: lo={lo}, hi={hi}"
-            assert mp >= 0.0, f"Negative MAP at {idx}: {mp}"
+            assert result.loc[idx, "pred_test_p_gt0"] == 1.0
+            assert result.loc[idx, "pred_test_severe_scenario"] > result.loc[idx, "pred_test_mean"] > 0
 
     def test_float32_large_values_no_overflow(self):
         """Large prediction values shouldn't overflow float32 in statistics."""
         rng = np.random.default_rng(77)
         large = [rng.normal(loc=1e4, scale=1e3, size=500) for _ in range(2)]
         ds = self._make_fao_dataset(rng, large)
-        result = ds.calculate_hdi_map(alpha=0.9, enforce_non_negative=False)
+        result = ds.summarize()
         # `dtype != object` no longer isolates numeric columns: the geo name/ISO3 columns are
         # `category` dtype (memory fix) and would slip through, so filter on numeric dtype.
         numeric_cols = [c for c in result.columns if pd.api.types.is_numeric_dtype(result[c])]

@@ -64,8 +64,8 @@ class CrafdApiClient:
         Forecast months carry the summaries; past months carry the recorded deaths in
         ``{outcome}_actual``.
 
-        **Not every column is a count.** The ``_p_gt{c}`` columns are probabilities in [0, 1],
-        and ``_bimodality_flag`` is 0 or 1. See ``docs/api/data_dictionary.md``.
+        **Not every column is a count of deaths.** The ``_p_gt{c}`` columns are chances, 0 to 1,
+        and ``n_draws`` counts the draws. See ``docs/api/data_dictionary.md``.
 
         Parameters
         ----------

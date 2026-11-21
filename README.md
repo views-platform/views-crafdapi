@@ -4,7 +4,7 @@ FastAPI service that serves partner organisations one forecast, the latest good 
 stored in Appwrite (docs/SERVICE_SPECIFICATION.md). It provides:
 - A bulk download of the forecast
 - Slices of one outcome at one level (grid cell, admin 1, country), by places, months and columns
-- Summary columns (MAP, 50/90/95% HDIs, a severe case, exceedance chances) and the recorded deaths; never samples
+- Summary columns (chances of more than 0, 25, 100, 500 and 1,000 deaths; the mean; the mean and median if any; a severe case; the number of draws) and the recorded deaths; never samples
 - Admin-1 and country values from the cells' samples summed first, then summarised
 
 This repository is part of the views-platform and focuses on exposing CRAF'd predictions via HTTP.
@@ -139,15 +139,15 @@ Response
 {
   "level": "country",
   "outcome": "sb",
-  "columns": ["country_code", "country_name", "country_iso3", "month", "sb_map"],
-  "rows": [{"country_code": 161, "country_name": "Sudan", "country_iso3": "SDN", "month": "2027-01", "sb_map": 12.0}]
+  "columns": ["country_code", "country_name", "country_iso3", "month", "month_id", "sb_p_gt25"],
+  "rows": [{"country_code": 161, "country_name": "Sudan", "country_iso3": "SDN", "month": "2027-01", "month_id": 565, "sb_p_gt25": 0.84}]
 }
 ```
 
 Example
 ```bash
 curl -H "X-API-Key: $CRAFD_KEY" \
-  "http://localhost:8080/slice/country/sb?places=161,160&months=2027-01,2027-02&columns=sb_map"
+  "http://localhost:8080/slice/country/sb?places=161,160&months=2027-01,2027-02&columns=sb_p_gt25"
 ```
 
 ## Caching

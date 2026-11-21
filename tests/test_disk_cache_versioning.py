@@ -226,7 +226,7 @@ class TestCrafdApiManagerDiskCacheIntegration:
         assert result is not None
         assert result["file_id"] == "fid_1"
         # the reconstructed dataset serves byte-identical HDI/MAP
-        assert ds.calculate_hdi_map().equals(result["dataset"].calculate_hdi_map())
+        assert ds.summarize().equals(result["dataset"].summarize())
 
 
 class TestTtlExpiryIsAMissNotADeletion:

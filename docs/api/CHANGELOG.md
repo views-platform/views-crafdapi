@@ -3,6 +3,17 @@
 Changes that affect partners: new or removed columns, outcomes or levels, and changes to the
 ensemble or the models it combines. Newest first.
 
+## 2026-11-21
+
+- **New summary columns.** Each outcome `s` now has `s_p_gt0`, `s_p_gt25`, `s_p_gt100`,
+  `s_p_gt500`, `s_p_gt1000` (the chance of more than that many deaths), `s_mean` (the expected
+  number), `s_mean_if_any` and `s_median_if_any` (the deaths if there are any),
+  `s_severe_scenario` (the average of the worst 5% of draws, empty below 20 draws) and
+  `s_actual`; every row also has `n_draws`. Removed: `s_map`, the six `s_hdi50/90/95` bounds and
+  `s_bimodality_flag`, which were 0 or empty in almost every row. Every summary is computed from
+  the usable draws only, and a row without usable draws is empty, never 0. This applies to the
+  slices and to the admin-1 bulk file (`/data/forecast/bulk`, now 39 columns).
+
 ## 2026-11-20
 
 - **One slice route replaces the subset and HDI-MAP routes.** A slice is now

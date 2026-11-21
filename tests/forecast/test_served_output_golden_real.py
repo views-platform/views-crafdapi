@@ -1,14 +1,13 @@
 """Real-artifact served-output regression tripwire (C-136 cutover gate, C-295).
 
-The synthetic golden (`test_served_output_golden.py`) pins served HDI/MAP shape on toy
-data; this pins the *real* numbers CRAF'd receives, computed by the current estimator on a
-deterministic slice of the delivered forecast run. A future change to the served numbers
-trips this test locally.
+The synthetic golden (`test_served_output_golden.py`) pins the served slice on toy data; this
+pins the *real* numbers partners receive, on a deterministic slice of the delivered forecast
+run. A future change to the served numbers trips this test locally.
 
 The run is read from the disk cache's newest valid forecast slot (`apis/un_crafd/cache/
 datasets/<partition>_forecast_value` + its `_meta.json` — what the API itself serves from),
-mmap'd. The slice goes through the same calls the hdi-map routes make: `calculate_hdi_map` with
-the route's defaults, then `to_consumer_columns`, then `dataframe_to_dict`.
+mmap'd. The slice goes through the same calls the slice route makes: `build_outcome_table`, then
+`to_json` (forecast months only, so no history is read).
 
 The repository is public and the numbers are a partner delivery, so BOTH the run and the
 generated golden live under the git-ignored `apis/` tree — this test runs locally (where the
@@ -42,9 +41,6 @@ _GOLDEN_DIR = _REPO_ROOT / "apis/un_crafd/cache/golden"
 _COUNTRIES = ["AFG", "COD", "MLI", "NGA", "SDN", "SYR", "UKR", "YEM"]
 # The pg view and the sub-national levels are restricted to these, to keep the golden compact.
 _PG_COUNTRIES = ["SYR", "YEM"]
-
-# Route defaults (`api.py` hdi-map handler).
-_ALPHA = 0.9
 
 # A run id becomes a filename; anything else is refused rather than written outside the golden dir.
 _SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -103,35 +99,31 @@ def _codes_within(ds, level, countries):
 
 def _served_output_on_real_slice(value_dir, run_id):
     from views_crafdapi.data.handlers import ForecastDataset
-    from views_crafdapi.forecast.serialize.json_contract import to_consumer_columns
-    from views_crafdapi.managers.serialization import dataframe_to_dict
+    from views_crafdapi.forecast.serialize import outcome_table
 
     ds = ForecastDataset.from_value(value_dir, mmap=True)
     month = int(sorted(ds._time_values)[0])
-    present = set(ds.geo_metadata[ds.levels["country"]].dropna())
+    geo = ds.geo_metadata
+    present = set(geo["country_iso_a3"].dropna())
     countries = [c for c in _COUNTRIES if c in present]
     pg_countries = [c for c in _PG_COUNTRIES if c in present]
     assert countries and pg_countries, f"none of {_COUNTRIES} in this run; re-pick the slice"
-    pg_cells = sorted(c for code in pg_countries for c in ds._get_pg_cells("country", code))
 
-    # (label, level, entity_ids, aggregate). The pg view is what `/pg/...` sends: no level,
-    # integer cell ids. With `level` set, `entity_ids` are level codes that the dataset expands
-    # to cells — so cell ids must never be passed at an aggregate level.
-    views = [
-        ("pg", None, pg_cells, False),
-        ("country", "country", countries, True),
-        ("gaul1", "gaul1", _codes_within(ds, "gaul1", pg_countries), True),
-    ]
+    def codes(column, isos):
+        return sorted(int(c) for c in geo.loc[geo["country_iso_a3"].isin(isos), column].dropna().unique())
+
+    pg_cells = sorted(
+        int(c) for c in geo.index.get_level_values("priogrid_id")[geo["country_iso_a3"].isin(pg_countries)].unique()
+    )
+    views = {
+        "grid": pg_cells,
+        "country": codes("admin1_gaul0_code", countries),
+        "admin1": codes("admin1_gaul1_code", pg_countries),
+    }
     out = {"_meta": {"run_id": run_id, "month": month, "countries": countries}}
-    for label, level, entity_ids, aggregate in views:
-        served = ds.calculate_hdi_map(
-            alpha=_ALPHA,
-            time_ids=[month],
-            entity_ids=entity_ids,
-            level=level,
-            aggregate=aggregate,
-        )
-        out[label] = dataframe_to_dict(to_consumer_columns(served))
+    for level, places in views.items():
+        table = outcome_table.build_outcome_table(ds, None, level, "sb", places=places, months=[month])
+        out[level] = json.loads(table.to_json(orient="records", double_precision=15))
     return out
 
 
@@ -149,7 +141,7 @@ def test_served_output_matches_real_golden():
     if _slot_meta(value_dir)[0] != meta:
         pytest.skip(f"{value_dir.name} was rewritten during the test; re-run")
 
-    golden_path = _GOLDEN_DIR / f"served_hdi_map_real_{run_id}.json"
+    golden_path = _GOLDEN_DIR / f"served_slice_real_{run_id}.json"
     if not golden_path.exists():
         golden_path.parent.mkdir(parents=True, exist_ok=True)
         golden_path.write_text(json.dumps(produced, indent=2, sort_keys=True))
@@ -157,7 +149,7 @@ def test_served_output_matches_real_golden():
 
     golden = json.loads(golden_path.read_text())
     assert produced == golden, (
-        "Served HDI/MAP on the real run changed vs the local golden. If this is a sanctioned "
+        "The served slice on the real run changed vs the local golden. If this is a sanctioned "
         "re-baseline, delete the golden, regenerate, and record the ADR-023 diff; otherwise a "
         "change has silently altered the numbers served to CRAF'd (C-136)."
     )

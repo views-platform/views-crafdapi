@@ -5,9 +5,9 @@
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
 | Last Updated      | 2026-11-20                                     |
-| Total Concerns    | 98                                             |
-| Open Concerns     | 57                                             |
-| Resolved Concerns | 41                                             |
+| Total Concerns    | 99                                             |
+| Open Concerns     | 54                                             |
+| Resolved Concerns | 45                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -197,121 +197,6 @@ See also `C-240` (governance artifacts lagging the code) and `C-243` (the other 
 | Location | `src/views_crafdapi/managers/api.py:68-93`, `deployment/bootstrap.sh` (registry-version stamp), `docs/ADRs/active/035_deploy_time_coordinate_provisioning.md` |
 
 `_validate_env_against_registry` returns immediately when `APPWRITE_REGISTRY` is empty or does not point at a file (`api.py:76-78`), so the coordinate-match assertion — the mechanism that makes the platform registry canonical at runtime — is a no-op on any box where the file is absent. The code documents this as transition-safe ("if the registry is not reachable in this environment, only the presence check above runs"), and a correctly bootstrapped box is consistent because `bootstrap.sh part2` builds `~/.env.crafdapi` from the registry once. The residual is precisely the divergence ADR-035 was written to record: a hand-built box (as ADR-035 reports faoapi's production box to be) passes the eight-variable presence check while its coordinates are never compared to anything. `bootstrap.sh` stamps `APPWRITE_REGISTRY_VERSION` into the env file so the provenance is grep-able, but nothing reads that stamp back or compares it at boot.
-
----
-
-### C-244: The served output schema is 45 columns in code and 36 in every governing document
-
-| Field | Value |
-|-------|-------|
-| ID | C-244 |
-| Tier | 3 |
-| Source | repo-assimilation (2026-08-10), surfaced by graphify community analysis |
-| Trigger | When CRAF'd supplies the real exceedance thresholds that ADR-034 §3 holds as placeholders, update `EXCEEDANCE_THRESHOLDS`, the goldens, ADR-025 §4, the data dictionary and `BulkParquetWriter.md` in the same change. (The `METHODOLOGY_VERSION` bump question is a disagreement awaiting a ruling, proposed as D-27; it is no longer this entry's trigger.) |
-| Location | `src/views_crafdapi/forecast/serialize/schema.py:34-43,127-150`, `src/views_crafdapi/forecast/serialize/json_contract.py:90-97`, `src/views_crafdapi/methodology.py:15`, `docs/ADRs/active/025_fao_output_schema_and_naming.md:37,42,44`, `docs/CICs/BulkParquetWriter.md`, `docs/CICs/forecast_package.md`, `docs/CICs/README.md:58`, `docs/ADRs/README.md:124`, `src/views_crafdapi/client.py:138-139`. *(`docs/api/data_dictionary.md` was corrected 2026-08-11 — see the addendum; its former `:69` citation no longer resolves.)* |
-
-`schema.bulk_columns()` returns **45** columns (6 identity + 3 series × 13) and `series_value_column_names()` returns **12** per series for the JSON API — both pinned by name in `tests/forecast/test_schema.py:88-96` and `tests/forecast/test_bulk_parquet.py:27-30`. Every governing document still says **36** (10 per series): ADR-025 §4 under the heading "Canonical column schema (36 columns)", `data_dictionary.md:69` ("6 identity + 3 series × 10 = 36 columns"), and `BulkParquetWriter.md:53`. The three ADR-034 exceedance columns per series — `s_p_gt25`, `s_p_gt100`, `s_p_gt1000` — appear **zero times** in the data dictionary and zero times in any CIC, so CRAF'd receives nine columns that no consumer-facing document defines. This is **not** limited to the bulk parquet: `json_contract.series_value_column_names` emits them on every `/{level}/analysis/{category}/hdi-map` response. Commit `449bc13` ("serve the exceedance columns … (#20, ADR-034)") shipped the code without touching ADR-025 or the data dictionary.
-
-Three compounding facts make this Tier 2 rather than a documentation nit. (a) **The authoritative document is the wrong one.** ADR-025 declares itself the single source of truth for served column names, and ADR-003 makes declarations authoritative over inference — so a contributor who reconciles code to governance would *remove* live columns. (b) **The values are provisional.** ADR-034 is still **Proposed** ("awaiting CRAF'd/product sign-off"), and `schema.py:41-42` records the thresholds as "Placeholders … pending CRAF'd's real numbers" — placeholder cutpoints from an unratified ADR are already in the live served contract and pinned by goldens. (c) **The methodology version was not bumped.** `METHODOLOGY_VERSION` is still `crafdapi-methodology/3`, and `methodology.py:15` still describes the v3 schema as "36 columns" — yet the repo's own precedent (the v2→v3 bump for the additive `bimodality_flag`, described there as "a schema enrichment, not a value shift") is that an additive published column warrants a bump under ADR-023. Currently mitigated only in that the code side is internally consistent and test-pinned; nothing reconciles it to the governance layer.
-
-Same family as `C-232` (served contract diverged from its documentation during a migration, undetected) but the opposite direction — there the endpoint serves *less* than documented, here *more*. See also `C-243` (governance documents lagging the code) and `C-241` (no register in which ADR-034's provisional status was being tracked).
-
-**Partially addressed 2026-08-11 (epic #40, D8 / #48).** `docs/api/data_dictionary.md` now defines all three `s_p_gt{c}` columns with their strict-`>` and NaN semantics, marks `s_actual` bulk-parquet-only, records that the thresholds are ADR-034 placeholders whose confirmation will **rename** the columns, and corrects its bulk blockquote to 45. The headline bullet no longer claims "not probabilities" while three served columns are probabilities — the one defect here with a plausible path to a wrong humanitarian read.
-
-*Evidence note, corrected:* an earlier draft of this addendum cited the golden `served_hdi_map.json` as proving `s_actual` is absent from the JSON path. **That artifact cannot support the claim** — it is built from synthetic series-less vars (`conftest.py:41`), so its 36 keys are 12 identity/geo (including a stray `index` key the real API never emits) plus 2 *fixture* series × 12, unrelated to the real 3 × 12; the real `pg` response is 47 keys. No golden contains an `sb`/`ns`/`os` key, so none exercises `to_consumer_columns` at all. The claim is nonetheless true, on the correct evidence: `json_contract.series_value_column_names` returns 12 names and `actual` is not among them.
-
-**Substantially closed 2026-08-23 (epic #40 acceptance criterion).** All stale column totals are
-reconciled to **45**, and the repo no longer carries three different numbers. Fixed:
-`schema.py:5` (said 33), `test_bulk_parquet.py:1` (33), `CICs/README.md:58` (33),
-`CICs/forecast_package.md:50` (36), `CICs/BulkParquetWriter.md:6,69` (36), ADR-025's §4 heading and
-its `bimodality_flag` line (36), and the data dictionary's cross-reference. `methodology.py:20`
-needed no change — it already reads "It said 36 columns. It is **45**".
-
-ADR-025's **Status** line now records the amendment rather than reading as unqualified `Accepted`.
-That makes it the first ADR in this repo to carry one, which is one instance of **C-291**
-(38 ADRs, none ever marked superseded or amended).
-
-**What is deliberately NOT done, and why this entry stays open:**
-
-- **`METHODOLOGY_VERSION` is still `3`.** This entry argues the v2→v3 precedent — an additive
-  published column warrants a bump under ADR-023 — applies to the nine ADR-034 exceedance columns.
-  Bumping it changes a value CRAF'd reads, so it is a product decision for the operator, not one to
-  take inside a documentation reconciliation. Unbumped and stated, rather than bumped quietly.
-- **ADR-034 is still `Proposed`** and its thresholds are still placeholders whose confirmation would
-  *rename* the columns. Nothing here changes that; the trigger above still stands.
-- **ADR-034's own served-column plan still lists a different 36** and has not been reconciled.
-
-Original assessment at registration, retained:
-- **12 stale sites remain** (≈27 individual lines): `ADR-025 §4` (`:37,42,44`), `schema.py:5,88`, `methodology.py:15`, `client.py:138-139`, `json_contract.py:84-87`, `docs/ADRs/README.md:124`, `BulkParquetWriter.md`, `forecast_package.md`, `ForecastDataset.md`, `CICs/README.md:58` (which says **33**, a *third* total), `test_bulk_parquet.py:1`, `test_consumer_naming.py:80`. The repo therefore carries three different totals — 33, 36 and 45.
-- **The "raw fatality counts" absolute survives in five higher-traffic places** the dictionary fix did not reach: `docs/api/README.md:19` (the primary HTTP-consumer document, which never mentions `p_gt` anywhere), `notebooks/README.md:14`, `notebooks/01_quickstart.ipynb:23`, `notebooks/03_offline_demo.ipynb:58`, and `forecast/serialize/bulk_parquet.py:16` — the last self-contradictory, since the same docstring lists `s_p_gt{25,100,1000}` eight lines earlier. Notebooks 01 and 03 render `hdi_map` frames that now carry those columns under that header.
-- **ADR-025 is the dangerous one and is untouched.** It declares itself canonical and ADR-003 makes declarations authoritative, so a contributor reconciling code to it would still *delete* nine live served columns. The §4a amendment with an explicit "MUST NOT remove" imperative is unwritten.
-- **ADR-034's own served-column plan (`:107-118`) is a different 36** — identity + map + HDI + exceedance, omitting `severe_scenario`, `bimodality_flag` and `actual`. A producer implementing the newest ADR would ship a table missing three per-series columns — and that does **not** surface as an error: `bulk_parquet.py:103-106` fills any absent schema column with `pd.NA` before the final projection, so the result is a normal HTTP 200 download with silently all-null columns (the same mechanism as `C-248`). *(An earlier draft claimed `bulk_parquet.py:107` would raise `KeyError`; verified unreachable.)*
-- **No recurrence guard exists.** This drift class already recurred once here (`C-27` → `C-243`), so a one-shot documentation fix will rot. A guard deriving the expected set from `schema.py` is the durable fix; `C-246` records that the JSON contract has no test at all.
-- The `METHODOLOGY_VERSION` question remains undecided: ADR-023 §1 says an additive column needs no bump, `methodology.py`'s own v2→v3 precedent says it does, and `api/README.md:169` says column changes are ADR-023-governed. Three documents, three answers. *(Previously cited here as "C-247" — an unallocated ID at the time, which is the dangling-pointer defect `C-241` exists to track. It is deliberately left unregistered rather than given a number, because it is a **disagreement**, not a concern: it belongs in the Disagreements section as `D-27` when someone rules on it.)*
-
-**review-rr 2026-10-15:** Tier recalibrated from 2 to 3. The column-count drift was reconciled to 45 on 2026-08-23. What remains is a decision (whether nine additive columns warrant a `METHODOLOGY_VERSION` bump under ADR-023, with three documents giving three answers) and ADR-034 still being Proposed. Neither is a structural fragility. The trigger was split accordingly.
-
----
-
-### C-245: `/analysis/historical/hdi-map` serves probability columns under raw-count names
-
-| Field | Value |
-|-------|-------|
-| ID | C-245 |
-| Tier | 2 |
-| Source | expert-review (2026-08-11) — found while documenting the served columns, epic #40 / D8 (#48) |
-| Trigger | Before pointing any consumer at a historical `hdi-map` route, decide whether that route should exist at all. **Do not simply extend the consumer rename to it** — observed data is `S=1`, so the reduction collapses every HDI bound onto the point value (`sb_hdi95_lower == sb_hdi95_upper == sb_map`), making a zero-width interval indistinguishable from a near-certain forecast. Retiring the route, or serving observed values only via `/data/historical/subset`, is the likelier fix. |
-| Location | `src/views_crafdapi/managers/api.py:740-741`, `src/views_crafdapi/forecast/serialize/json_contract.py:162-172`, `src/views_crafdapi/data/handlers/grid_dataset.py:1230` |
-
-**The route is broken at its documented defaults.** A real historical artifact is built with the configured `historical_targets` (non-`pred_` names, `dataset_service.py:462-469`), so `is_prediction` is False and `calculate_hdi_map` raises at `grid_dataset.py:1230` — **HTTP 500 at every level** for `aggregate=false`, which is the default. Verified end-to-end on a real-shaped historical dataset.
-
-With `aggregate=true` it does respond, and that is where the misread lives. The ADR-025 `sb`/`ns`/`os` rename is applied **only** when `category == "forecast"` (`api.py:740`) — "historical keeps its own columns" — so since ADR-034 added exceedance to the shared reduction, the route emits **`lr_ged_sb_p_gt25`**: a posterior probability in `[0,1]` wearing an internal `lr_ged_` prefix. Verified: the reduction emits `['lr_ged_sb_p_gt25', ...]` under the historical target stem.
-
-*Correction, 2026-08-11:* this entry first named the column `pred_lr_ged_sb_p_gt25`. That name came from `tests/test_api_endpoints.py:33-42`, which seeds the historical cache slot with a `pred_*` dataset — the very fixture this entry calls "a forecast wearing historical's name". No served artifact can produce both the `pred_`-prefixed name and the 500, because they arise from opposite values of `is_prediction`. The wrong name briefly propagated into `data_dictionary.md`; corrected there too.
-
-That collides head-on with the consumer documentation, which instructs analysts to **ignore** those prefixes because "`lr_ged_sb` is a raw count, *not* a log-rate" (`docs/api/data_dictionary.md`, ADR-024 §1-2). An analyst who follows the documentation reads `p_gt25 = 1.0` — *certainty of exceeding 25 fatalities* — as **1 fatality**. Tier 1: a silent, plausible misread of a UN-facing humanitarian quantity, with no error signal.
-
-Compounding: the same route with `aggregate=false` returns **HTTP 500** (`grid_dataset.py:1230`, "HDI and MAP calculation only valid for prediction dataframes"). CI misses both because `tests/test_api_endpoints.py:33-42` seeds the historical cache slot with a `pred_*` dataset, so the test fixture is a forecast wearing historical's name.
-
-See also `C-244` (the documentation half) and `C-246` (nothing tests the JSON column set).
-
-**review-rr 2026-10-15:** **C-294 merged into this entry.** Both describe the same route (`/{level}/analysis/historical/hdi-map`) and the same mechanism: historical data is `S=1` point observations, so `pg` (`aggregate=false`) raises `ValueError` and returns **HTTP 500** where a 4xx is truthful, while `country`/`gaul0`/`gaul1`/`gaul2` (`aggregate=true`) answer 200 with every HDI collapsed onto the observed value and `p_gt*` quantised to `{0, 1}`. C-294's measurement (all 33 non-zero countries at month 540, interval width max = 0, MAP equal to the observed value exactly) stays in that entry as evidence. **Tier recalibrated from 1 to 2**, at C-294's level: the served values are correct and the field names mislead, and no consumer uses this route (CRAF'd uses the bulk parquet, C-307). The two entries had tiered one mechanism differently. Expected to be retired with the grid under ADR-036.
-
----
-
-### C-246: the JSON per-series column contract has no test
-
-| Field | Value |
-|-------|-------|
-| ID | C-246 |
-| Tier | 2 |
-| Source | expert-review (2026-08-11) — found while documenting the served columns, epic #40 / D8 (#48) |
-| Trigger | When adding, removing or renaming a served JSON value column — including when CRAF'd confirms the exceedance thresholds and the `p_gt{c}` columns are renamed — add the exact-set assertion first, or the change ships green. |
-| Location | `src/views_crafdapi/forecast/serialize/json_contract.py:90-97`, `tests/forecast/test_consumer_naming.py:80-103`, `tests/forecast/test_schema.py:88-96` |
-
-`json_contract.series_value_column_names` — the 12-column JSON contract now documented to CRAF'd as a served surface — is referenced **nowhere** in `tests/`. The two tests that look like they pin it (`test_schema.py:88-96`, `test_bulk_parquet.py:27-30`) pin the **bulk** 45, a different product. The only endpoint-level naming test, `test_consumer_naming.py:80-103`, iterates a hardcoded **9-item pre-ADR-034 list** and asserts *subset* membership (`assert tmpl.format(s=s) in cols`), despite being named `..._has_the_exact_consumer_value_columns`.
-
-Consequence, stated precisely: the *values* are guarded — patching out the exceedance emission fails `test_exceedance.py::TestExceedanceReachesServedColumns` and `test_served_output_golden.py` (verified: 2 failed, 1005 passed). What is unguarded is the **name-list contract** itself: deleting the `exceed_col` line from `series_value_column_names` alone leaves the suite green, because nothing asserts what that function returns. The fix is small — derive the expectation from it and assert set equality in `test_consumer_naming.py` — and was scoped out of D8 (docs-only) deliberately.
-
-*Correction, 2026-08-11:* this entry first claimed a deletion "passes the entire suite green", which contradicted C-244's own note that the thresholds are golden-pinned. Only the narrower name-list edit is green.
-
----
-
-### C-247: `severe_scenario` collapses to a single draw when the consumer subsets samples
-
-| Field | Value |
-|-------|-------|
-| ID | C-247 |
-| Tier | 2 |
-| Source | expert-review (2026-08-11) — found while documenting the served columns, epic #40 / D8 (#48) |
-| Trigger | When a consumer reports `severe_scenario` equal to a MAP or to an obvious single draw, check their `sample_idx`. Before advertising `sample_idx` to CRAF'd, decide whether to enforce a minimum draw count. |
-| Location | `src/views_crafdapi/forecast/summarize/severe.py:47`, `src/views_crafdapi/managers/api.py:701,728`, `src/views_crafdapi/data/handlers/grid_dataset.py:1281-1284` |
-
-`expected_shortfall` computes `k = max(1, int(np.ceil(tail * s)))`, so for any `S <= 20` the "mean of the worst 5% of draws" is **the single worst draw** — precisely the raw sample maximum the statistic was designed to avoid (ADR-025 documents it as "deliberately **not** the raw sample maximum, which is high-variance and non-reproducible").
-
-`sample_idx` is a **public query parameter**, and `grid_dataset.py:1281-1284` validates only the index *range* — no minimum count, no de-duplication. So `GET /pg/analysis/forecast/hdi-map?sample_idx=0` serves one draw under a column documented as a worst-5% mean, alongside `p_gt{c}` quantized to `{0, 1}`. Verified: `sample_idx=0` → severe equals that draw; `k` first reaches 2 at `S=21`.
-
-Cross-ref (review-rr 2026-10-16): **C-364**, which makes `severe_scenario` equal a single draw on every row of the delivered run, without any subsetting.
 
 ---
 
@@ -2142,6 +2027,20 @@ Partners name a country by its GAUL code (partner guide). The dataset sums the c
 
 Cross-refs: **C-307** (the level vocabulary, #205), #225.
 
+### C-374: Region sums of draws are added in float32, exact only for whole numbers below 2**24
+
+| Field | Value |
+|-------|-------|
+| ID | C-374 |
+| Tier | 4 |
+| Source | pr-review (2026-11-21, `/code-review` of #204) |
+| Trigger | When a delivery carries draws that are not whole numbers (a rate, a log, a modelled share), or a region's total for one draw could reach 16,777,216 deaths, the region summaries (`s_mean`, `s_mean_if_any`, `s_severe_scenario`) lose low digits. Check before serving such an outcome. |
+| Location | `src/views_crafdapi/forecast/aggregate/reduction.py` (`joint_sum_to_level`, via the views-frames leaf), `src/views_crafdapi/data/handlers/forecast_dataset.py` (`summarize`, region path) |
+
+Admin-1 and country summaries are computed from each region's draws summed draw by draw. The sum runs in the views-frames leaf, which stores float32 (checked: float64 input comes back float32). float32 holds every whole number up to 2**24 exactly, so a sum of whole-number draws is exact while each partial sum stays below that. Checked 2026-11-21 on the cached delivered run: every draw of all three outcomes is a whole number, the largest single cell draw is 32,505. So today's sums are exact. #204 made this matter more: the earlier served columns were order statistics (the most likely value and intervals), which a small rounding barely moves; the new `s_mean` averages every rounding error in. Tier 4: no effect on any delivered run.
+
+Cross-refs: **C-258** (the same float32 narrowing, measured on recorded values).
+
 ---
 
 ## Disagreements
@@ -2335,6 +2234,125 @@ See also `C-241` (both are governance artifacts that lag the code).
 `TESTING.md` states "674 tests across 53 files" and a default run shape of `588 passed, 8 skipped, 53 deselected, 25 xfailed`. Measured 2026-08-10: **1,048 collected across 89 test files**, running `968 passed, 10 skipped, 48 deselected, 19 xfailed, 3 xpassed, 0 failed` in 40s. Its low-coverage table cites `managers/appwrite.py` and `prediction.py`, both of which were split into packages by epic #325 (S9/S10) and no longer exist as modules, and the 66% coverage baseline dated 2026-06-26 is now unanchored to any current measurement. The document is honest about the risk — it opens with a "Counts drift" warning and supplies verification commands — so this is disclosed staleness rather than a false claim, and no correctness or reliability property depends on it. The practical cost is that the suite's headline numbers cannot be cited as evidence without re-measuring.
 
 This recurs inherited `C-27` (TESTING.md / register count synchronisation — body not in this register; `tests/test_falsify_merge_readiness.py:17-22` records a prior round of the same drift being fixed). See also `C-232` (the shape-only `/latest` assertions are the substantive gap behind the count drift) and `C-241`.
+
+---
+
+### C-244 (RESOLVED): The served output schema is 45 columns in code and 36 in every governing document
+
+| Field | Value |
+|-------|-------|
+| ID | C-244 |
+| Status | **RESOLVED 2026-11-21** (#204) — the summary columns were replaced by the set in the data dictionary (`docs/api/data_dictionary.md`), which is now the governing document; ADR-025 and ADR-034 are marked superseded. Code and dictionary agree: 10 summary columns per outcome plus `s_actual`, 39 in the admin-1 bulk file (`schema.bulk_columns()`), pinned by `tests/forecast/test_schema.py` and `test_consumer_naming.py`. The thresholds are 0, 25, 100, 500, 1000 (no longer placeholders). |
+| Tier | 3 |
+| Source | repo-assimilation (2026-08-10), surfaced by graphify community analysis |
+| Trigger | When CRAF'd supplies the real exceedance thresholds that ADR-034 §3 holds as placeholders, update `EXCEEDANCE_THRESHOLDS`, the goldens, ADR-025 §4, the data dictionary and `BulkParquetWriter.md` in the same change. (The `METHODOLOGY_VERSION` bump question is a disagreement awaiting a ruling, proposed as D-27; it is no longer this entry's trigger.) |
+| Location | `src/views_crafdapi/forecast/serialize/schema.py:34-43,127-150`, `src/views_crafdapi/forecast/serialize/json_contract.py:90-97`, `src/views_crafdapi/methodology.py:15`, `docs/ADRs/active/025_fao_output_schema_and_naming.md:37,42,44`, `docs/CICs/BulkParquetWriter.md`, `docs/CICs/forecast_package.md`, `docs/CICs/README.md:58`, `docs/ADRs/README.md:124`, `src/views_crafdapi/client.py:138-139`. *(`docs/api/data_dictionary.md` was corrected 2026-08-11 — see the addendum; its former `:69` citation no longer resolves.)* |
+
+`schema.bulk_columns()` returns **45** columns (6 identity + 3 series × 13) and `series_value_column_names()` returns **12** per series for the JSON API — both pinned by name in `tests/forecast/test_schema.py:88-96` and `tests/forecast/test_bulk_parquet.py:27-30`. Every governing document still says **36** (10 per series): ADR-025 §4 under the heading "Canonical column schema (36 columns)", `data_dictionary.md:69` ("6 identity + 3 series × 10 = 36 columns"), and `BulkParquetWriter.md:53`. The three ADR-034 exceedance columns per series — `s_p_gt25`, `s_p_gt100`, `s_p_gt1000` — appear **zero times** in the data dictionary and zero times in any CIC, so CRAF'd receives nine columns that no consumer-facing document defines. This is **not** limited to the bulk parquet: `json_contract.series_value_column_names` emits them on every `/{level}/analysis/{category}/hdi-map` response. Commit `449bc13` ("serve the exceedance columns … (#20, ADR-034)") shipped the code without touching ADR-025 or the data dictionary.
+
+Three compounding facts make this Tier 2 rather than a documentation nit. (a) **The authoritative document is the wrong one.** ADR-025 declares itself the single source of truth for served column names, and ADR-003 makes declarations authoritative over inference — so a contributor who reconciles code to governance would *remove* live columns. (b) **The values are provisional.** ADR-034 is still **Proposed** ("awaiting CRAF'd/product sign-off"), and `schema.py:41-42` records the thresholds as "Placeholders … pending CRAF'd's real numbers" — placeholder cutpoints from an unratified ADR are already in the live served contract and pinned by goldens. (c) **The methodology version was not bumped.** `METHODOLOGY_VERSION` is still `crafdapi-methodology/3`, and `methodology.py:15` still describes the v3 schema as "36 columns" — yet the repo's own precedent (the v2→v3 bump for the additive `bimodality_flag`, described there as "a schema enrichment, not a value shift") is that an additive published column warrants a bump under ADR-023. Currently mitigated only in that the code side is internally consistent and test-pinned; nothing reconciles it to the governance layer.
+
+Same family as `C-232` (served contract diverged from its documentation during a migration, undetected) but the opposite direction — there the endpoint serves *less* than documented, here *more*. See also `C-243` (governance documents lagging the code) and `C-241` (no register in which ADR-034's provisional status was being tracked).
+
+**Partially addressed 2026-08-11 (epic #40, D8 / #48).** `docs/api/data_dictionary.md` now defines all three `s_p_gt{c}` columns with their strict-`>` and NaN semantics, marks `s_actual` bulk-parquet-only, records that the thresholds are ADR-034 placeholders whose confirmation will **rename** the columns, and corrects its bulk blockquote to 45. The headline bullet no longer claims "not probabilities" while three served columns are probabilities — the one defect here with a plausible path to a wrong humanitarian read.
+
+*Evidence note, corrected:* an earlier draft of this addendum cited the golden `served_hdi_map.json` as proving `s_actual` is absent from the JSON path. **That artifact cannot support the claim** — it is built from synthetic series-less vars (`conftest.py:41`), so its 36 keys are 12 identity/geo (including a stray `index` key the real API never emits) plus 2 *fixture* series × 12, unrelated to the real 3 × 12; the real `pg` response is 47 keys. No golden contains an `sb`/`ns`/`os` key, so none exercises `to_consumer_columns` at all. The claim is nonetheless true, on the correct evidence: `json_contract.series_value_column_names` returns 12 names and `actual` is not among them.
+
+**Substantially closed 2026-08-23 (epic #40 acceptance criterion).** All stale column totals are
+reconciled to **45**, and the repo no longer carries three different numbers. Fixed:
+`schema.py:5` (said 33), `test_bulk_parquet.py:1` (33), `CICs/README.md:58` (33),
+`CICs/forecast_package.md:50` (36), `CICs/BulkParquetWriter.md:6,69` (36), ADR-025's §4 heading and
+its `bimodality_flag` line (36), and the data dictionary's cross-reference. `methodology.py:20`
+needed no change — it already reads "It said 36 columns. It is **45**".
+
+ADR-025's **Status** line now records the amendment rather than reading as unqualified `Accepted`.
+That makes it the first ADR in this repo to carry one, which is one instance of **C-291**
+(38 ADRs, none ever marked superseded or amended).
+
+**What is deliberately NOT done, and why this entry stays open:**
+
+- **`METHODOLOGY_VERSION` is still `3`.** This entry argues the v2→v3 precedent — an additive
+  published column warrants a bump under ADR-023 — applies to the nine ADR-034 exceedance columns.
+  Bumping it changes a value CRAF'd reads, so it is a product decision for the operator, not one to
+  take inside a documentation reconciliation. Unbumped and stated, rather than bumped quietly.
+- **ADR-034 is still `Proposed`** and its thresholds are still placeholders whose confirmation would
+  *rename* the columns. Nothing here changes that; the trigger above still stands.
+- **ADR-034's own served-column plan still lists a different 36** and has not been reconciled.
+
+Original assessment at registration, retained:
+- **12 stale sites remain** (≈27 individual lines): `ADR-025 §4` (`:37,42,44`), `schema.py:5,88`, `methodology.py:15`, `client.py:138-139`, `json_contract.py:84-87`, `docs/ADRs/README.md:124`, `BulkParquetWriter.md`, `forecast_package.md`, `ForecastDataset.md`, `CICs/README.md:58` (which says **33**, a *third* total), `test_bulk_parquet.py:1`, `test_consumer_naming.py:80`. The repo therefore carries three different totals — 33, 36 and 45.
+- **The "raw fatality counts" absolute survives in five higher-traffic places** the dictionary fix did not reach: `docs/api/README.md:19` (the primary HTTP-consumer document, which never mentions `p_gt` anywhere), `notebooks/README.md:14`, `notebooks/01_quickstart.ipynb:23`, `notebooks/03_offline_demo.ipynb:58`, and `forecast/serialize/bulk_parquet.py:16` — the last self-contradictory, since the same docstring lists `s_p_gt{25,100,1000}` eight lines earlier. Notebooks 01 and 03 render `hdi_map` frames that now carry those columns under that header.
+- **ADR-025 is the dangerous one and is untouched.** It declares itself canonical and ADR-003 makes declarations authoritative, so a contributor reconciling code to it would still *delete* nine live served columns. The §4a amendment with an explicit "MUST NOT remove" imperative is unwritten.
+- **ADR-034's own served-column plan (`:107-118`) is a different 36** — identity + map + HDI + exceedance, omitting `severe_scenario`, `bimodality_flag` and `actual`. A producer implementing the newest ADR would ship a table missing three per-series columns — and that does **not** surface as an error: `bulk_parquet.py:103-106` fills any absent schema column with `pd.NA` before the final projection, so the result is a normal HTTP 200 download with silently all-null columns (the same mechanism as `C-248`). *(An earlier draft claimed `bulk_parquet.py:107` would raise `KeyError`; verified unreachable.)*
+- **No recurrence guard exists.** This drift class already recurred once here (`C-27` → `C-243`), so a one-shot documentation fix will rot. A guard deriving the expected set from `schema.py` is the durable fix; `C-246` records that the JSON contract has no test at all.
+- The `METHODOLOGY_VERSION` question remains undecided: ADR-023 §1 says an additive column needs no bump, `methodology.py`'s own v2→v3 precedent says it does, and `api/README.md:169` says column changes are ADR-023-governed. Three documents, three answers. *(Previously cited here as "C-247" — an unallocated ID at the time, which is the dangling-pointer defect `C-241` exists to track. It is deliberately left unregistered rather than given a number, because it is a **disagreement**, not a concern: it belongs in the Disagreements section as `D-27` when someone rules on it.)*
+
+**review-rr 2026-10-15:** Tier recalibrated from 2 to 3. The column-count drift was reconciled to 45 on 2026-08-23. What remains is a decision (whether nine additive columns warrant a `METHODOLOGY_VERSION` bump under ADR-023, with three documents giving three answers) and ADR-034 still being Proposed. Neither is a structural fragility. The trigger was split accordingly.
+
+---
+
+### C-245 (RESOLVED): `/analysis/historical/hdi-map` serves probability columns under raw-count names
+
+| Field | Value |
+|-------|-------|
+| ID | C-245 |
+| Status | **RESOLVED 2026-11-21** — the `/analysis/historical/hdi-map` routes were removed in #224, and #204 removed the historical summary path behind them (`_aggregate_hdi_map_pandas`); `summarize` now refuses a dataset of recorded values (`TestSummariesNeedDraws`). |
+| Tier | 2 |
+| Source | expert-review (2026-08-11) — found while documenting the served columns, epic #40 / D8 (#48) |
+| Trigger | Before pointing any consumer at a historical `hdi-map` route, decide whether that route should exist at all. **Do not simply extend the consumer rename to it** — observed data is `S=1`, so the reduction collapses every HDI bound onto the point value (`sb_hdi95_lower == sb_hdi95_upper == sb_map`), making a zero-width interval indistinguishable from a near-certain forecast. Retiring the route, or serving observed values only via `/data/historical/subset`, is the likelier fix. |
+| Location | `src/views_crafdapi/managers/api.py:740-741`, `src/views_crafdapi/forecast/serialize/json_contract.py:162-172`, `src/views_crafdapi/data/handlers/grid_dataset.py:1230` |
+
+**The route is broken at its documented defaults.** A real historical artifact is built with the configured `historical_targets` (non-`pred_` names, `dataset_service.py:462-469`), so `is_prediction` is False and `calculate_hdi_map` raises at `grid_dataset.py:1230` — **HTTP 500 at every level** for `aggregate=false`, which is the default. Verified end-to-end on a real-shaped historical dataset.
+
+With `aggregate=true` it does respond, and that is where the misread lives. The ADR-025 `sb`/`ns`/`os` rename is applied **only** when `category == "forecast"` (`api.py:740`) — "historical keeps its own columns" — so since ADR-034 added exceedance to the shared reduction, the route emits **`lr_ged_sb_p_gt25`**: a posterior probability in `[0,1]` wearing an internal `lr_ged_` prefix. Verified: the reduction emits `['lr_ged_sb_p_gt25', ...]` under the historical target stem.
+
+*Correction, 2026-08-11:* this entry first named the column `pred_lr_ged_sb_p_gt25`. That name came from `tests/test_api_endpoints.py:33-42`, which seeds the historical cache slot with a `pred_*` dataset — the very fixture this entry calls "a forecast wearing historical's name". No served artifact can produce both the `pred_`-prefixed name and the 500, because they arise from opposite values of `is_prediction`. The wrong name briefly propagated into `data_dictionary.md`; corrected there too.
+
+That collides head-on with the consumer documentation, which instructs analysts to **ignore** those prefixes because "`lr_ged_sb` is a raw count, *not* a log-rate" (`docs/api/data_dictionary.md`, ADR-024 §1-2). An analyst who follows the documentation reads `p_gt25 = 1.0` — *certainty of exceeding 25 fatalities* — as **1 fatality**. Tier 1: a silent, plausible misread of a UN-facing humanitarian quantity, with no error signal.
+
+Compounding: the same route with `aggregate=false` returns **HTTP 500** (`grid_dataset.py:1230`, "HDI and MAP calculation only valid for prediction dataframes"). CI misses both because `tests/test_api_endpoints.py:33-42` seeds the historical cache slot with a `pred_*` dataset, so the test fixture is a forecast wearing historical's name.
+
+See also `C-244` (the documentation half) and `C-246` (nothing tests the JSON column set).
+
+**review-rr 2026-10-15:** **C-294 merged into this entry.** Both describe the same route (`/{level}/analysis/historical/hdi-map`) and the same mechanism: historical data is `S=1` point observations, so `pg` (`aggregate=false`) raises `ValueError` and returns **HTTP 500** where a 4xx is truthful, while `country`/`gaul0`/`gaul1`/`gaul2` (`aggregate=true`) answer 200 with every HDI collapsed onto the observed value and `p_gt*` quantised to `{0, 1}`. C-294's measurement (all 33 non-zero countries at month 540, interval width max = 0, MAP equal to the observed value exactly) stays in that entry as evidence. **Tier recalibrated from 1 to 2**, at C-294's level: the served values are correct and the field names mislead, and no consumer uses this route (CRAF'd uses the bulk parquet, C-307). The two entries had tiered one mechanism differently. Expected to be retired with the grid under ADR-036.
+
+---
+
+### C-246 (RESOLVED): the JSON per-series column contract has no test
+
+| Field | Value |
+|-------|-------|
+| ID | C-246 |
+| Status | **RESOLVED 2026-11-21** (#204) — the served per-outcome column list is pinned exactly, in order, by `test_consumer_naming.py::test_forecast_response_has_the_exact_consumer_value_columns` at every level and outcome, and the served rows by the slice golden (`tests/forecast/golden/served_slice.json`). |
+| Tier | 2 |
+| Source | expert-review (2026-08-11) — found while documenting the served columns, epic #40 / D8 (#48) |
+| Trigger | When adding, removing or renaming a served JSON value column — including when CRAF'd confirms the exceedance thresholds and the `p_gt{c}` columns are renamed — add the exact-set assertion first, or the change ships green. |
+| Location | `src/views_crafdapi/forecast/serialize/json_contract.py:90-97`, `tests/forecast/test_consumer_naming.py:80-103`, `tests/forecast/test_schema.py:88-96` |
+
+`json_contract.series_value_column_names` — the 12-column JSON contract now documented to CRAF'd as a served surface — is referenced **nowhere** in `tests/`. The two tests that look like they pin it (`test_schema.py:88-96`, `test_bulk_parquet.py:27-30`) pin the **bulk** 45, a different product. The only endpoint-level naming test, `test_consumer_naming.py:80-103`, iterates a hardcoded **9-item pre-ADR-034 list** and asserts *subset* membership (`assert tmpl.format(s=s) in cols`), despite being named `..._has_the_exact_consumer_value_columns`.
+
+Consequence, stated precisely: the *values* are guarded — patching out the exceedance emission fails `test_exceedance.py::TestExceedanceReachesServedColumns` and `test_served_output_golden.py` (verified: 2 failed, 1005 passed). What is unguarded is the **name-list contract** itself: deleting the `exceed_col` line from `series_value_column_names` alone leaves the suite green, because nothing asserts what that function returns. The fix is small — derive the expectation from it and assert set equality in `test_consumer_naming.py` — and was scoped out of D8 (docs-only) deliberately.
+
+*Correction, 2026-08-11:* this entry first claimed a deletion "passes the entire suite green", which contradicted C-244's own note that the thresholds are golden-pinned. Only the narrower name-list edit is green.
+
+---
+
+### C-247 (RESOLVED): `severe_scenario` collapses to a single draw when the consumer subsets samples
+
+| Field | Value |
+|-------|-------|
+| ID | C-247 |
+| Status | **RESOLVED 2026-11-21** — partners can no longer subset draws (`sample_idx` removed with the old routes, #224), and `severe_scenario` is empty below 20 usable draws (#204, `test_severe_is_empty_below_twenty_draws_where_it_would_be_the_maximum`), so it can no longer be a single draw. |
+| Tier | 2 |
+| Source | expert-review (2026-08-11) — found while documenting the served columns, epic #40 / D8 (#48) |
+| Trigger | When a consumer reports `severe_scenario` equal to a MAP or to an obvious single draw, check their `sample_idx`. Before advertising `sample_idx` to CRAF'd, decide whether to enforce a minimum draw count. |
+| Location | `src/views_crafdapi/forecast/summarize/severe.py:47`, `src/views_crafdapi/managers/api.py:701,728`, `src/views_crafdapi/data/handlers/grid_dataset.py:1281-1284` |
+
+`expected_shortfall` computes `k = max(1, int(np.ceil(tail * s)))`, so for any `S <= 20` the "mean of the worst 5% of draws" is **the single worst draw** — precisely the raw sample maximum the statistic was designed to avoid (ADR-025 documents it as "deliberately **not** the raw sample maximum, which is high-variance and non-reproducible").
+
+`sample_idx` is a **public query parameter**, and `grid_dataset.py:1281-1284` validates only the index *range* — no minimum count, no de-duplication. So `GET /pg/analysis/forecast/hdi-map?sample_idx=0` serves one draw under a column documented as a worst-5% mean, alongside `p_gt{c}` quantized to `{0, 1}`. Verified: `sample_idx=0` → severe equals that draw; `k` first reaches 2 at `S=21`.
+
+Cross-ref (review-rr 2026-10-16): **C-364**, which makes `severe_scenario` equal a single draw on every row of the delivered run, without any subsetting.
 
 ---
 

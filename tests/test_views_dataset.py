@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from views_crafdapi.forecast.serialize import schema
+
 from tests.conftest import make_fao_df
 from views_crafdapi.data.handlers import _GridDataset, ForecastDataset
 
@@ -207,41 +209,27 @@ class TestDeepCopy:
 
 
 # ============================================================
-# Group E: HDI/MAP Delegation
+# Group E: summaries
 # ============================================================
 
 
-class TestHdiMap:
+class TestSummarize:
 
-    def test_calculate_hdi_map_returns_expected_columns(self):
+    def test_summarize_returns_the_served_summaries_per_target(self):
         ds = _GridDataset(_make_raw_multiindex_df(n_cells=4, n_months=2, n_samples=50))
-        result = ds.calculate_hdi_map(alpha=0.9)
-        # ADR-025 (#222/S4): MAP + three fixed HDIs (50/90/95) + severe_scenario, var-keyed
-        # (the sb/ns/os rename is a boundary step); raw min/max are dropped.
+        result = ds.summarize()
+        # Named by target here; the sb/ns/os rename happens where the answer is served.
         for var in ds.pred_vars:
-            assert f"{var}_map" in result.columns
-            assert f"{var}_severe_scenario" in result.columns
-            for pct in (50, 90, 95):
-                assert f"{var}_hdi{pct}_lower" in result.columns
-                assert f"{var}_hdi{pct}_upper" in result.columns
-            assert f"{var}_min" not in result.columns and f"{var}_max" not in result.columns
+            assert [c for c in result.columns if c.startswith(f"{var}_")] == [
+                f"{var}_{q}" for q in schema.SUMMARY_QUANTITIES
+            ]
 
-    def test_calculate_hdi_map_invalid_alpha_raises(self):
-        ds = _GridDataset(_make_raw_multiindex_df())
-        with pytest.raises(ValueError, match="between 0 and 1"):
-            ds.calculate_hdi_map(alpha=1.5)
-
-    def test_calculate_hdi_map_zero_alpha_raises(self):
-        ds = _GridDataset(_make_raw_multiindex_df())
-        with pytest.raises(ValueError):
-            ds.calculate_hdi_map(alpha=0.0)
-
-    def test_calculate_hdi_map_non_prediction_raises(self):
+    def test_summarize_non_prediction_raises(self):
         df = _make_raw_multiindex_df()
         df.columns = ["feat_a", "feat_b"]
         ds = _GridDataset(df, targets=["feat_a"])
-        with pytest.raises(ValueError, match="prediction"):
-            ds.calculate_hdi_map()
+        with pytest.raises(ValueError, match="computed from draws"):
+            ds.summarize()
 
 
 # ============================================================

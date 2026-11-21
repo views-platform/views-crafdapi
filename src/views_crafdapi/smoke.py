@@ -118,7 +118,7 @@ def fetch_retry_once(fetch: Callable, on_retry: Callable[[], None] = lambda: Non
 
 def check_coverage(client: CrafdApiClient, month: str, country: str, column: str) -> Result:
     """One month of admin-1 rows for state-based violence: the country asked for must be in
-    it, with a value in `column` (`sb_map` for a forecast month, `sb_actual` for a past one)."""
+    it, with a value in `column` (`sb_mean` for a forecast month, `sb_actual` for a past one)."""
     name = f"{column} coverage[{country}]"
     try:
         df = fetch_retry_once(
@@ -137,7 +137,7 @@ def check_warm(client: CrafdApiClient, month: str, country: str, threshold_s: fl
     """A second call should be fast (warm) — proves the warm-up actually took."""
     t0 = time.monotonic()
     try:
-        client.slice("admin1", "sb", months=[month], columns=["sb_map"])
+        client.slice("admin1", "sb", months=[month], columns=["sb_mean"])
     except Exception as e:
         return Result("warm check", False, f"error: {e}")
     dt = time.monotonic() - t0
@@ -153,7 +153,7 @@ def run(base: str, key: str, *, expect_tag: Optional[str], forecast_month: str, 
     client = CrafdApiClient(base, key, timeout=timeout)
     results.append(check_health(client))
     # The first coverage call is also the cold-load warm-up (it loads forecast and history).
-    results.append(check_coverage(client, forecast_month, country, "sb_map"))
+    results.append(check_coverage(client, forecast_month, country, "sb_mean"))
     results.append(check_coverage(client, hist_month, country, "sb_actual"))
     results.append(check_warm(client, forecast_month, country))
     return results

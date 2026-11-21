@@ -132,11 +132,12 @@ Place names and the month are always included. Every row has a `month` column wr
 way, `2027-01`, and VIEWS' own month number, `month_id`. Grid rows also give the cell's centre,
 `latitude` and `longitude`.
 
-Example: state-based violence in Sudan and South Sudan, for two months, only the most likely value.
+Example: state-based violence in Sudan and South Sudan, for two months, only the chance of more
+than 25 deaths.
 
 ```bash
 curl -H "X-API-Key: $CRAFD_KEY" \
-  "https://crafdapi.viewsforecasting.org/slice/country/sb?places=161,160&months=2027-01,2027-02&columns=sb_map"
+  "https://crafdapi.viewsforecasting.org/slice/country/sb?places=161,160&months=2027-01,2027-02&columns=sb_p_gt25"
 ```
 
 ## If something goes wrong
