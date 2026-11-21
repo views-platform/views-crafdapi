@@ -114,6 +114,14 @@ curl -H "X-API-Key: $CRAFD_KEY" -o sb_admin1.parquet \
   https://crafdapi.viewsforecasting.org/bulk/admin1/sb
 ```
 
+A file holds the same table as a slice with no options: every place and every month. Months before
+the forecast are recorded months: they have the recorded deaths, and their summary columns are empty.
+Forecast months have the summary columns, and their recorded-deaths column is empty. To keep only
+one kind, filter on whichever column is filled, or on `month_id`.
+
+The first download after a new forecast arrives builds the file and can take about a minute for the
+grid level; later downloads are sent straight away.
+
 ## Slices (a smaller piece)
 
 For a few places or months, ask for a slice. You get JSON back.
@@ -146,7 +154,7 @@ curl -H "X-API-Key: $CRAFD_KEY" \
 |---|---|
 | `401` | The key is missing, wrong, or no longer valid. Contact VIEWS. |
 | `404` | That level or outcome does not exist. Check the codes above. |
-| `413` | The slice asks for too much at once. Ask for fewer places or months, or use the bulk download. |
+| `413` | The slice asks for too much at once. Ask for fewer places or months, or use the bulk download for the same level and outcome. |
 | `422` | An option is written wrong, for example a month not written `2027-01`. |
 | `503` | The forecast, or the recorded deaths, are not available right now. Try again later. |
 | `500`, `502`, `504` or no answer | A problem on our side. Try again later; contact VIEWS if it lasts. |

@@ -19,7 +19,7 @@ Bump this string when a re-baselining change reaches `main` (see ADR-023). Histo
 
   * It said "served schema is 36 columns". It is **45** — ADR-034 §3 later added three
     exceedance columns per series (`s_p_gt25/100/1000`), live since `449bc13`.
-    `forecast/serialize/schema.py::bulk_columns()` is the authority (register C-244).
+    `forecast/serialize/schema.py::bulk_columns()` was the authority then (register C-244; removed in #203).
   * It cited `reports/adr025_output_schema/rebaseline_diff.md` for the before/after evidence.
     **That file has never existed** — `git log --all` over that path returns nothing, and
     `reports/` is not ignored, so it was not written rather than lost. ADR-023 requires a

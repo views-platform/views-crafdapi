@@ -36,9 +36,8 @@ Contract Required?").** This module owns no state and enforces no invariant of i
 mandatory categories cover components that enforce invariants **on the system**; an observer
 that only reports is not one. The governing precedent is ``smoke.py``, the operator tool this
 mirrors structurally (importable module + thin ``scripts/`` wrapper + exit-code contract),
-which likewise has no CIC. Contrast ``docs/CICs/BulkParquetWriter.md``, which does have one for
-a function-only module — because it *produces a governed artifact* (the ADR-025 schema), which
-this does not. Revisit if preflight ever gains rules of its own rather than borrowing them.
+which likewise has no CIC. A module that *produces a governed artifact* (a served schema) would
+need one; this does not. Revisit if preflight ever gains rules of its own rather than borrowing them.
 """
 
 from __future__ import annotations

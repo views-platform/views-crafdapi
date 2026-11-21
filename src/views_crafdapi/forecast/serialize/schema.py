@@ -64,8 +64,8 @@ def series_of(var_name: str) -> str:
     return found[0]
 
 
-# The admin-1 bulk file's identity columns: served name ← the geography's column. Country is
-# GAUL admin-0, not UN M49. (The slice's identity columns are in `outcome_table`.)
+# The place's id and names: served name <- the geography's column (#205). Country is GAUL admin 0,
+# not UN M49. Which of them a level serves is in `outcome_table.PLACE_COLUMNS`.
 IDENTITY_SOURCE: dict[str, str] = {
     "admin1_code": "admin1_gaul1_code",
     "admin1_name": "admin1_gaul1_name",
@@ -73,15 +73,6 @@ IDENTITY_SOURCE: dict[str, str] = {
     "country_name": "admin1_gaul0_name",
     "country_iso3": "country_iso_a3",
 }
-
-IDENTITY_COLUMNS: tuple[str, ...] = (
-    "month_id",
-    "admin1_code",
-    "admin1_name",
-    "country_code",
-    "country_name",
-    "country_iso3",
-)
 
 
 def summary_col(series: str, quantity: str) -> str:
@@ -101,18 +92,10 @@ def actual_col(series: str) -> str:
 
 
 def series_value_columns(series: str) -> list[str]:
-    """The value columns for one outcome in the admin-1 bulk file: the summaries, the recorded
-    deaths, then ``{series}_n_draws``."""
+    """The value columns for one outcome: the summaries, the recorded deaths, then
+    ``{series}_n_draws`` (served as ``n_draws``, `outcome_table.value_columns`)."""
     summaries = [summary_col(series, q) for q in SUMMARY_QUANTITIES if q != "n_draws"]
     return summaries + [actual_col(series), summary_col(series, "n_draws")]
-
-
-def bulk_columns() -> list[str]:
-    """The admin-1 bulk file: 6 identity columns + 3 outcomes x 11 = 39 columns."""
-    cols = list(IDENTITY_COLUMNS)
-    for series in SERIES:
-        cols += series_value_columns(series)
-    return cols
 
 
 # --- The served rename -----------------------------------------------------------------------

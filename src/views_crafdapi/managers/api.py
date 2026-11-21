@@ -7,8 +7,6 @@ from pathlib import Path
 import json
 import os
 import re
-import shutil
-import tempfile
 import time
 from views_crafdapi.managers.appwrite import AppWriteFileManager, AppwriteConfig
 from views_crafdapi.managers.disk_cache import CrafdDiskCacheManager
@@ -53,8 +51,8 @@ class StalenessResult:
 # of cells of work, so the answer alone would admit requests that cost gigabytes.
 #
 # 512 MiB is the figure measured on the server this service used to share with a sibling API,
-# against the same serializer. The refusal says to ask for fewer places or months; the bulk files (#203)
-# will be the way to the whole table.
+# against the same serializer. The refusal says to ask for fewer places or months, or to download the
+# bulk file, which holds the whole table.
 _DEFAULT_MAX_RESPONSE_BYTES = 512 * 1024 ** 2
 
 
@@ -93,13 +91,37 @@ def _human_bytes(n: float) -> str:
     return f"{n:.1f} GiB"
 
 
-def _too_large_detail(what: str, estimated: int, budget: int) -> str:
-    """The body of the 413: what was too large, and what to do instead. The bulk download is not
-    offered yet: the only bulk route today holds admin-1 forecast months only (#203)."""
+def _too_large_detail(what: str, estimated: int, budget: int, level: str, outcome: str) -> str:
+    """The body of the 413: what was too large, and what to do instead."""
     return (
         f"This slice {what}, about {_human_bytes(estimated)}, above the {_human_bytes(budget)} "
-        "limit. Ask for fewer places or months."
+        f"limit. Ask for fewer places or months, or download the whole table: /bulk/{level}/{outcome}"
     )
+
+
+def _refuse_unknown_level_or_outcome(level: str, outcome: str) -> None:
+    """404 for a level or outcome code that does not exist. Checked against the schema before the
+    forecast loads, so a typo on a cold server is answered at once."""
+    if level not in outcome_table.LEVELS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown level {level!r}. Levels: {', '.join(outcome_table.LEVELS)}",
+        )
+    if outcome not in schema.SERIES:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown outcome {outcome!r}. Outcomes: {', '.join(schema.SERIES)}",
+        )
+
+
+def _refuse_outcome_not_forecast(forecast_ds, outcome: str) -> None:
+    """404 for an outcome code the served forecast does not hold."""
+    served = outcome_table.outcomes(forecast_ds)
+    if outcome not in served:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown outcome {outcome!r}. Outcomes: {', '.join(served)}",
+        )
 
 
 # ASCII digits only: `\d` also matches other scripts' digits, which `int()` accepts, so one id
@@ -226,7 +248,8 @@ def _validate_appwrite_env() -> dict[str, str]:
 
 
 from views_crafdapi.forecast.serialize import outcome_table, schema  # noqa: E402
-from views_crafdapi.forecast.serialize.bulk_parquet import write_bulk_parquet  # noqa: E402
+from views_crafdapi.forecast.serialize.bulk_file import write_bulk_file  # noqa: E402
+from views_crafdapi.managers.bulk_files import BulkFiles  # noqa: E402
 
 class CrafdApiManager(APIManager):
     """
@@ -254,6 +277,7 @@ class CrafdApiManager(APIManager):
         self._init_caches()
 
         self._disk_cache = CrafdDiskCacheManager(self._model_path.cache / "datasets")
+        self._bulk_files = BulkFiles(self._model_path.cache / "bulk")
 
         self._prediction_bucket_id = validated_env["APPWRITE_CRAFD_BUCKET_ID"]
 
@@ -334,6 +358,7 @@ class CrafdApiManager(APIManager):
             import tempfile
             cache_dir = Path(tempfile.mkdtemp()) / "datasets"
         instance._disk_cache = CrafdDiskCacheManager(cache_dir)
+        instance._bulk_files = BulkFiles(cache_dir.parent / "bulk")
         instance._prediction_bucket_id = config.get("prediction_bucket_id", "test-bucket")
 
         instance._dataset_service = DatasetService(
@@ -503,6 +528,26 @@ class CrafdApiManager(APIManager):
         """Delegate the data-fetch pipeline to the composed DatasetService (epic #144 / S2)."""
         return self._dataset_service.get_latest_dataset(manager, x_api_key, category, force_refresh)
 
+    def _history_holding(self, manager, x_api_key: str, outcome: str, route: str):
+        """The history, which must be loadable and hold `outcome`; otherwise a 503. Served empty,
+        the recorded deaths would read as "nothing recorded", so the answer is refused until the
+        history is back. A refused key stays a 401: it is not a missing history (C-268), and the
+        store's 403 arrives as this 401 too (`refuse_if_unauthorized`)."""
+        try:
+            historical_ds = self._get_latest_dataset(manager, x_api_key, "historical")
+            has_outcome = outcome_table.target_for(historical_ds, outcome) is not None
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+            logger.error("%s: history unavailable (%s): %s", route, e.status_code, e.detail)
+            has_outcome = False
+        if not has_outcome:
+            raise HTTPException(
+                status_code=503,
+                detail="The recorded deaths are unavailable right now. Try again later.",
+            )
+        return historical_ds
+
     def _register_routes(self):
         """Register all API routes."""
         
@@ -538,34 +583,35 @@ class CrafdApiManager(APIManager):
         # through it). Every route uses `_get_latest_dataset`, which returns the dataset the request
         # selected; `_get_latest_dataframe` is that dataset's frame (C-356, #156).
 
-        @self.app.get("/data/forecast/bulk")
-        async def get_forecast_bulk_parquet(
+        @self.app.get("/bulk/{level}/{outcome}")
+        async def get_bulk(
+            level: str,
+            outcome: str,
             x_api_key: str = Header(..., description="Appwrite API Key"),
             manager: PredictionStoreManager = Depends(self._get_prediction_manager),
         ):
-            """The whole forecast at admin 1 as one parquet file, one row per `(month_id,
-            admin1_code)`: per outcome the summary columns (`s_p_gt0` … `s_severe_scenario`,
-            `s_n_draws`) and the recorded deaths `s_actual`, the same numbers as a slice. If the
-            recorded deaths cannot be loaded, `s_actual` is empty rather than the download
-            failing. To be replaced by one file per outcome and level (#203)."""
+            """The whole table of one outcome at one level, as one Parquet file (#203).
+
+            Exactly what a slice with no options returns: every place and every month, the
+            recorded months with the recorded deaths, the forecast months with the summary
+            columns. Built on the first request after a new forecast or history, then served as
+            is, to every key (`BulkFiles`). Without the recorded deaths the file is refused (503),
+            as the slice is.
+            """
+            _refuse_unknown_level_or_outcome(level, outcome)
             try:
                 forecast_ds = self._get_latest_dataset(manager, x_api_key, "forecast")
-                try:
-                    historical_ds = self._get_latest_dataset(
-                        manager, x_api_key, "historical"
-                    )
-                except HTTPException:
-                    historical_ds = None
-                    logger.warning("bulk parquet: no historical artifact — s_actual served as NaN")
-                tmpdir = tempfile.mkdtemp()
-                out = Path(tmpdir) / "crafd_forecast_bulk.parquet"
-                write_bulk_parquet(out, forecast_ds, historical_ds)
-                # Clean the per-request temp dir once the file has been streamed (no disk leak).
+                _refuse_outcome_not_forecast(forecast_ds, outcome)
+                historical_ds = self._history_holding(manager, x_api_key, outcome, "bulk")
+                path, kept = self._bulk_files.get(
+                    forecast_ds, historical_ds, level, outcome,
+                    build=lambda p: write_bulk_file(p, forecast_ds, historical_ds, level, outcome),
+                )
                 return FileResponse(
-                    out,
-                    media_type="application/octet-stream",
-                    filename="crafd_forecast_bulk.parquet",
-                    background=BackgroundTask(shutil.rmtree, tmpdir, ignore_errors=True),
+                    path,
+                    media_type="application/vnd.apache.parquet",
+                    filename=f"{outcome}_{level}.parquet",
+                    background=None if kept else BackgroundTask(path.unlink, missing_ok=True),
                 )
             except HTTPException:
                 raise
@@ -593,18 +639,7 @@ class CrafdApiManager(APIManager):
             Rows are places and months; columns are the place's id and names, `month`,
             `month_id`, and the outcome's summary columns (all, or the ones named). Never samples.
             """
-            if level not in outcome_table.LEVELS:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Unknown level {level!r}. Levels: {', '.join(outcome_table.LEVELS)}",
-                )
-            # Checked against the schema before the forecast loads, so a typo on a cold server
-            # is answered at once; after the load it is checked against what the forecast holds.
-            if outcome not in schema.SERIES:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Unknown outcome {outcome!r}. Outcomes: {', '.join(schema.SERIES)}",
-                )
+            _refuse_unknown_level_or_outcome(level, outcome)
             try:
                 _refuse_repeated_options(request)
                 parsed_places = _parse_places(places)
@@ -614,14 +649,7 @@ class CrafdApiManager(APIManager):
                 raise HTTPException(status_code=422, detail=str(e))
             try:
                 forecast_ds = self._get_latest_dataset(manager, x_api_key, "forecast")
-                if outcome not in outcome_table.outcomes(forecast_ds):
-                    raise HTTPException(
-                        status_code=404,
-                        detail=(
-                            f"Unknown outcome {outcome!r}. Outcomes: "
-                            f"{', '.join(outcome_table.outcomes(forecast_ds))}"
-                        ),
-                    )
+                _refuse_outcome_not_forecast(forecast_ds, outcome)
                 value_columns = outcome_table.value_columns(outcome)
                 if asked_columns is not None:
                     unknown = [c for c in asked_columns if c not in value_columns]
@@ -637,21 +665,7 @@ class CrafdApiManager(APIManager):
                 # would read as "nothing recorded", so the slice is refused until it is back.
                 historical_ds = None
                 if outcome_table.needs_history(forecast_ds, parsed_months):
-                    try:
-                        historical_ds = self._get_latest_dataset(manager, x_api_key, "historical")
-                        has_outcome = outcome_table.target_for(historical_ds, outcome) is not None
-                    except HTTPException as e:
-                        if e.status_code == 401:
-                            # A refused key is not a missing history (C-268). The store's 403
-                            # arrives as this 401 too (`refuse_if_unauthorized`).
-                            raise
-                        logger.error("slice: history unavailable (%s): %s", e.status_code, e.detail)
-                        has_outcome = False
-                    if not has_outcome:
-                        raise HTTPException(
-                            status_code=503,
-                            detail="The recorded deaths are unavailable right now. Try again later.",
-                        )
+                    historical_ds = self._history_holding(manager, x_api_key, outcome, "slice")
 
                 identity = outcome_table.place_identity(forecast_ds, level)
                 if parsed_places is not None:
@@ -690,7 +704,10 @@ class CrafdApiManager(APIManager):
                     (f"reads {values_read:,} values", values_read * 8),
                 ):
                     if estimated > budget:
-                        raise HTTPException(status_code=413, detail=_too_large_detail(what, estimated, budget))
+                        raise HTTPException(
+                            status_code=413,
+                            detail=_too_large_detail(what, estimated, budget, level, outcome),
+                        )
 
                 table = outcome_table.build_outcome_table(
                     forecast_ds, historical_ds, level, outcome,

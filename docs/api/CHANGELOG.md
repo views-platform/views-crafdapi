@@ -5,6 +5,12 @@ ensemble or the models it combines. Newest first.
 
 ## 2026-11-21
 
+- **Nine bulk files replace the one admin-1 bulk file.** `GET /bulk/{level}/{outcome}` returns
+  one Parquet file per level (`grid`, `admin1`, `country`) and outcome (`sb`, `ns`, `os`). Each
+  file holds the same table as a slice with no options: every place, the recorded months and the
+  forecast months. `/data/forecast/bulk` now answers `404`. A slice too large to send (`413`) now
+  names the bulk file to download instead. Without the recorded deaths a bulk file is refused
+  (`503`), as a slice is; it used to be sent with an empty recorded-deaths column.
 - **New summary columns.** Each outcome `s` now has `s_p_gt0`, `s_p_gt25`, `s_p_gt100`,
   `s_p_gt500`, `s_p_gt1000` (the chance of more than that many deaths), `s_mean` (the expected
   number), `s_mean_if_any` and `s_median_if_any` (the deaths if there are any),

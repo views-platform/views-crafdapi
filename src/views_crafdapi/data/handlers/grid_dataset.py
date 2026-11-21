@@ -729,7 +729,7 @@ class _GridDataset:
         feat = getattr(self, "_feature_store", None)
         if feat is not None and var in feat:
             # Feature/historical (S4e): the store is float64; return float32 to preserve the
-            # exact contract of the legacy `_stack_cells` path (bulk_parquet / to_frames read here).
+            # exact contract of the legacy `_stack_cells` path (to_frames reads here).
             return feat[var].astype(np.float32)
         return self._stack_cells(self.dataframe[var])
 

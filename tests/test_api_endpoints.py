@@ -1,9 +1,11 @@
 """Endpoint smoke tests via FastAPI TestClient (C-06)."""
 
+import io
 import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -39,6 +41,8 @@ def app_client(tmp_path):
         make_fao_df(n_months=3, seed=3, targets=("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")),
         [598, 599, 600],
     ))
+    # The store's file ids, as loading stamps them; the bulk files are named by them (#203).
+    dataset.source_file_id, history.source_file_id = "file_002", "file_001"
     api_key_hash = mgr._get_api_key_hash("test-api-key")
     mgr._dataframe_cache[api_key_hash] = {
         "historical": {
@@ -117,7 +121,7 @@ class TestTheRouteList:
 
     _EXPECTED = {
         ("GET", path)
-        for path in {"/ping", "/version", "/health", "/data/forecast/bulk", "/slice/{level}/{outcome}"}
+        for path in {"/ping", "/version", "/health", "/bulk/{level}/{outcome}", "/slice/{level}/{outcome}"}
     }
 
     def test_exactly_these_routes_are_offered(self, app_client):
@@ -143,7 +147,7 @@ class TestTheRouteList:
             for path, spec in paths.items()
         }
         assert options == {
-            "/ping": [], "/version": [], "/health": [], "/data/forecast/bulk": [],
+            "/ping": [], "/version": [], "/health": [], "/bulk/{level}/{outcome}": [],
             "/slice/{level}/{outcome}": ["columns", "months", "places"],
         }
 
@@ -155,6 +159,8 @@ class TestTheRouteList:
         # The sample and per-request summary routes the slice replaced (#204, #206).
         "/pg/data/forecast/subset", "/pg/data/historical/subset",
         "/country/analysis/forecast/hdi-map", "/gaul1/analysis/historical/hdi-map",
+        # The admin-1, all-outcomes bulk file the nine bulk files replaced (#203).
+        "/data/forecast/bulk",
     ])
     def test_a_removed_route_answers_404(self, app_client, path):
         client, _, _ = app_client
@@ -614,6 +620,106 @@ class TestSliceRoute:
         assert "no historical artifact" not in resp.text   # nothing about the store
 
 
+class TestBulkRoute:
+    """The partner guide's bulk download: `GET /bulk/{level}/{outcome}`, one Parquet file (#203)."""
+
+    @pytest.mark.parametrize("level", _SLICE_LEVELS)
+    @pytest.mark.parametrize("outcome", ["sb", "ns", "os"])
+    def test_the_file_is_the_slice_with_no_options(self, app_client, level, outcome):
+        """Same columns, rows and values as `GET /slice/{level}/{outcome}`: one table, two ways
+        to get it, so they cannot disagree."""
+        client, _, _ = app_client
+        resp = client.get(f"/bulk/{level}/{outcome}", headers=HEADERS)
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"] == "application/vnd.apache.parquet"
+        assert f'filename="{outcome}_{level}.parquet"' in resp.headers["content-disposition"]
+        bulk = pd.read_parquet(io.BytesIO(resp.content))
+        body = client.get(f"/slice/{level}/{outcome}", headers=HEADERS).json()
+        sliced = pd.DataFrame(body["rows"], columns=body["columns"])
+        assert list(bulk.columns) == body["columns"]
+        assert len(bulk) == len(sliced) > 0
+        pd.testing.assert_frame_equal(
+            bulk.astype(object).where(bulk.notna(), None).reset_index(drop=True),
+            sliced.astype(object).where(sliced.notna(), None),
+            check_dtype=False,
+        )
+
+    def test_recorded_and_forecast_rows_are_told_apart_by_which_columns_are_filled(self, app_client):
+        """A recorded month has the recorded deaths and no summaries; a forecast month has the
+        summaries and no recorded deaths. Never both, never neither."""
+        client, mgr, _ = app_client
+        bulk = pd.read_parquet(io.BytesIO(client.get("/bulk/grid/sb", headers=HEADERS).content))
+        first_forecast = min(_fixture_dataset(mgr)._time_values)
+        recorded = bulk["month_id"] < first_forecast
+        assert recorded.any() and (~recorded).any()
+        assert bulk.loc[recorded, "sb_actual"].notna().all()
+        assert bulk.loc[recorded, "sb_mean"].isna().all() and bulk.loc[recorded, "n_draws"].isna().all()
+        assert bulk.loc[~recorded, "sb_mean"].notna().all() and bulk.loc[~recorded, "sb_actual"].isna().all()
+
+    @pytest.mark.parametrize("path", ["/bulk/gaul2/sb", "/bulk/admin1/xx"])
+    def test_an_unknown_level_or_outcome_is_404(self, app_client, path):
+        client, _, _ = app_client
+        assert client.get(path, headers=HEADERS).status_code == 404
+
+    def test_an_outcome_the_forecast_does_not_hold_is_404(self, app_client):
+        """`ns` is a known outcome code, but this forecast holds only `sb`."""
+        client, mgr, _ = app_client
+        slot = mgr._dataframe_cache[mgr._get_api_key_hash("test-api-key")]["forecast"]
+        only_sb = ForecastDataset(make_fao_df(targets=("pred_lr_ged_sb",)))
+        only_sb.source_file_id = "file_002"
+        slot["dataset"], slot["data"] = only_sb, only_sb.dataframe
+        resp = client.get("/bulk/admin1/ns", headers=HEADERS)
+        assert resp.status_code == 404 and "Outcomes: sb" in resp.json()["detail"]
+
+    def test_a_refused_key_on_the_history_lookup_is_401(self, app_client):
+        from views_crafdapi.managers.prediction import MetadataLookupError
+
+        client, _, mock_pm = app_client
+        mock_pm.get_latest_file_id.side_effect = MetadataLookupError("no", status=401)
+        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("no", status=401)
+        assert client.get("/bulk/admin1/sb", headers=HEADERS).status_code == 401
+
+    def test_without_history_the_file_is_refused_not_served_blank(self, app_client):
+        client, mgr, _ = app_client
+        mgr._get_latest_dataset = _forecast_only(mgr._get_latest_dataset)
+        resp = client.get("/bulk/admin1/sb", headers=HEADERS)
+        assert resp.status_code == 503
+        assert "recorded deaths are unavailable" in resp.json()["detail"]
+
+    def test_the_file_is_built_once_and_rebuilt_for_a_new_forecast(self, app_client, monkeypatch):
+        """Built on the first request, then served as is; a new delivery is a new file. Another
+        key, or a fresh load of the same delivery, gets the file already built."""
+        from views_crafdapi.managers import api
+
+        client, mgr, _ = app_client
+        builds = []
+        real = api.write_bulk_file
+        monkeypatch.setattr(api, "write_bulk_file", lambda *a, **k: builds.append(a[3:]) or real(*a, **k))
+        first = client.get("/bulk/admin1/sb", headers=HEADERS).content
+        assert client.get("/bulk/admin1/sb", headers=HEADERS).content == first
+        slot = mgr._dataframe_cache[mgr._get_api_key_hash("test-api-key")]["forecast"]
+        reloaded = ForecastDataset(make_fao_df(targets=("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")))
+        reloaded.source_file_id = "file_002"   # the same delivery, loaded again (another key)
+        slot["dataset"] = reloaded
+        assert client.get("/bulk/admin1/sb", headers=HEADERS).content == first
+        assert builds == [("admin1", "sb")]
+
+        new = ForecastDataset(make_fao_df(seed=7, targets=("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")))
+        new.source_file_id = "file_003"
+        slot["dataset"], slot["data"] = new, new.dataframe
+        second = client.get("/bulk/admin1/sb", headers=HEADERS).content
+        assert builds == [("admin1", "sb")] * 2
+        assert second != first
+
+    def test_without_a_store_id_the_file_is_built_for_the_request_and_removed(self, app_client):
+        """A dataset whose delivery is not known is never matched to a kept file."""
+        client, mgr, _ = app_client
+        del _fixture_dataset(mgr).source_file_id
+        resp = client.get("/bulk/admin1/sb", headers=HEADERS)
+        assert resp.status_code == 200 and len(pd.read_parquet(io.BytesIO(resp.content))) > 0
+        assert list(mgr._bulk_files._directory.glob("*.parquet*")) == []
+
+
 def _forecast_only(get_latest_dataset):
     """Wrap `_get_latest_dataset` so the historical artifact is missing."""
     def wrapped(manager, key, category, *args, **kwargs):
@@ -641,9 +747,9 @@ class TestResponseSizeBound:
         monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", "1")
         detail = client.get("/slice/grid/sb", headers=HEADERS).json()["detail"]
         assert "fewer places or months" in detail
-        # No bulk advice yet: the only bulk route holds admin-1 forecast months (#203).
-        assert "bulk" not in detail
-        assert _named_routes(detail) == []
+        # The route it names is the bulk file of the same level and outcome, and it answers.
+        assert _named_routes(detail) == ["/bulk/grid/sb"]
+        assert client.get("/bulk/grid/sb", headers=HEADERS).status_code == 200
 
     def test_a_narrow_selection_is_still_admitted(self, app_client, monkeypatch):
         """One budget between the two sizes: the whole grid is refused, one cell in one month
@@ -795,7 +901,7 @@ class TestDegradedFallbackAcrossARestart:
     #156 every data route answered 500 instead, because the route re-read a warm cache slot the
     fallback never fills."""
 
-    ROUTES = ["/slice/grid/sb", "/data/forecast/bulk"]
+    ROUTES = ["/slice/grid/sb", "/bulk/admin1/sb"]
 
     @pytest.fixture
     def restarted(self, tmp_path):
@@ -803,7 +909,7 @@ class TestDegradedFallbackAcrossARestart:
         from tests.test_dataset_service_fallback import _good_then_bad_manager, _iso
 
         pm, state = _good_then_bad_manager(make_wire_run(), created_at=_iso(5))
-        pm.get_latest_provenance.return_value = None   # no historical: bulk serves s_actual as NaN
+        pm.get_latest_provenance.return_value = None   # the history is the stand-in in `_cold_app`
         cache = tmp_path / "cache"
         first = _cold_app(cache, pm)
         assert first.get(self.ROUTES[0], headers=HEADERS).status_code == 200  # good run on disk
@@ -839,7 +945,7 @@ class TestARevokedKeyIsRefusedOnItsNextRequest:
     ROUTES = [
         "/slice/grid/sb",
         "/slice/country/sb?places=10",
-        "/data/forecast/bulk",
+        "/bulk/admin1/sb",
     ]
 
     @pytest.mark.parametrize("route", ROUTES)
@@ -887,8 +993,8 @@ class TestARevokedKeyIsRefusedOnItsNextRequest:
 
     @pytest.mark.parametrize("status", [401, 403])
     def test_a_slice_refuses_when_only_the_history_lookup_is_refused(self, app_client, status):
-        """The slice reads the history best-effort: a missing history serves an empty recorded
-        column. A refused key is not a missing history, and must end the request."""
+        """A missing history answers 503; a refused key is not a missing history, and must end
+        the request with a 401."""
         from views_crafdapi.managers.prediction import MetadataLookupError
 
         client, _, mock_pm = app_client
