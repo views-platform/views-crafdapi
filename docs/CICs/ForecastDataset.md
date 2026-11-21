@@ -24,17 +24,17 @@
 - **Construction:** validates the 9 GAUL metadata columns (`_METADATA_COLS`), a 2-level `(month_id, priogrid_id)` MultiIndex, builds the dense grid (delegates `forecast.ingestion.dense_grid`), and splits geography into `self.geo_metadata` (a separate scalar table, ADR-013).
 - **Reconstruction:** `from_value(dir)` applies the same metadata-column rule to the value-dir's `geo.parquet` and raises `ValueError` naming any missing column (C-261, #167). Every reconstructed `geo_metadata` carries all 9 columns, so serving never drops one silently.
 - **Plausibility:** `validate_value_plausibility()` and `validate_metadata_plausibility()` delegate to `forecast.ingestion.plausibility` (C-72).
-- **Estimation (ADR-025, epic #222):** `calculate_hdi_map(...)` returns a DataFrame with the
-  per-variable columns `{var}_map`, `{var}_hdi{50,90,95}_{lower,upper}` (three nested HDIs at the
-  fixed `schema.MASSES` = 50/90/95), and `{var}_severe_scenario` (worst-5% mean) — computed via
-  `forecast.summarize.estimator.collapse` → `CollapseResult` and laid out by
-  `forecast.serialize.json_contract.series_value_dataframe`. Raw `min`/`max` are **not** served
-  (replaced by `severe_scenario`). The `alpha` parameter is retained for signature compatibility
-  but is a **no-op** — the interval set is fixed config, not caller-selectable. Columns are
-  **var-keyed** here; the consumer `sb/ns/os` rename is a boundary transform
-  (`json_contract.to_consumer_columns`) applied at the API layer (S4), not in the reduction. Two
-  paths: cell-level (`aggregate=False`) and admin-level (`aggregate=True`, joint-sampling sum then
-  collapse — the `HDI(Σ) ≠ Σ HDI` invariant, C-70).
+- **Summaries (#204, decided 2026-11-17):** `summarize(...)` returns, per target, the columns
+  `{var}_p_gt0`, `{var}_p_gt25`, `{var}_p_gt100`, `{var}_p_gt500`, `{var}_p_gt1000`, `{var}_mean`,
+  `{var}_mean_if_any`, `{var}_median_if_any`, `{var}_severe_scenario` and `{var}_n_draws`, computed
+  by `forecast.summarize.draws.summarize_draws` on the usable (finite) draws and laid out by
+  `forecast.serialize.json_contract.series_value_dataframe`. `severe_scenario` is empty below 20
+  usable draws; the `if_any` columns are empty when no draw is above 0. Columns are named by the
+  target; the outcome-code rename is applied where the answer is served. Two paths: cell level
+  (`aggregate=False`) and region level (`aggregate=True`: the cells' draws are summed draw by draw,
+  then summarised, C-70). A dataset of recorded values (the history) is refused: summaries need
+  draws. (Before #204 this method was `calculate_hdi_map` and served the most likely value, three
+  credible intervals and a two-peak flag.)
 - **Subsetting:** `get_subset_dataframe(...)` / `get_subset_tensor(...)` filter by time/entity/feature/sample.
 - **Frames:** `to_frames()` builds views-frames `PredictionFrame`/`TargetFrame` per target (#88).
 - **Cloning:** `copy()` returns an independent copy via the optimised `__deepcopy__` (shares the underlying numpy sample buffers — ≈1,700× faster than a true deepcopy at global scale; safe as long as cell contents are not mutated in place). This is the public clone API the serving layer uses (C-137).
@@ -49,8 +49,8 @@
 
 ## 5. Outputs and Side Effects
 
-- `calculate_hdi_map(...)` → DataFrame indexed `(time, entity)` or `(time, geo_unit)` with the
-  ADR-025 per-variable columns (`{var}_map` + three HDIs 50/90/95 + `{var}_severe_scenario`; no min/max).
+- `summarize(...)` → DataFrame indexed `(time, entity)` or `(time, geo_unit)` with the summary
+  columns per target listed in §4.
 - `.dataframe` exposes the internal grid (a plain attribute for now; removal deferred — register D-12).
 - Side effect: lazy tensor caches; `copy()`/`__deepcopy__` reset the split-tensor cache.
 

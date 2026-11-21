@@ -16,12 +16,11 @@ from views_crafdapi.forecast.geography.metadata_table import (
 from views_crafdapi.forecast.ingestion.plausibility import (
     assert_geo_metadata_plausible,
 )
-from views_crafdapi.forecast.serialize import schema
 from views_crafdapi.forecast.serialize.json_contract import (
     series_value_column_names,
     series_value_data,
 )
-from views_crafdapi.forecast.summarize.estimator import collapse
+from views_crafdapi.forecast.summarize.draws import summarize_draws
 from views_frames import SpatialLevel
 from views_frames.io import npz as frame_npz
 
@@ -29,7 +28,7 @@ from pathlib import Path
 
 
 from views_crafdapi.data.value_format import _VALUE_SCHEMA_VERSION
-from views_crafdapi.data.handlers.grid_dataset import _GridDataset
+from views_crafdapi.data.handlers.grid_dataset import NEEDS_DRAWS, _GridDataset
 
 logger = logging.getLogger(__name__)
 
@@ -490,196 +489,36 @@ class ForecastDataset(_GridDataset):
             if c not in groupby_cols and (c in array_targets or c in scalar_agg_dict)
         ]
         return result[ordered_cols]
-    def _aggregate_hdi_map_pandas(
+    def summarize(
         self,
-        alpha: float,
-        features,
-        sample_idx,
-        time_ids,
-        entity_ids,
-        enforce_non_negative: bool,
-        level: str,
-    ) -> pd.DataFrame:
-        """The pre-S7 aggregate reduction, kept verbatim for the historical/scalar leg.
-
-        ADR-030 §1 puts the historical/scalar path outside the frame migration and requires it
-        to stay **float64 byte-identical**: `_aggregate_distributions` routes non-prediction
-        targets to the legacy `elementwise_sum` precisely because "the frame path's float32
-        stack would re-baseline it". The S7 path reads `_sample_array`, which hands back
-        `float32` for feature datasets, so it must not be used here.
-
-        This is not hypothetical. S7's first draft called the array path unconditionally and
-        the full suite stayed green, because the guard that states this invariant
-        (`TestFeatureAggregationStaysFloat64`) is pinned to `get_subset_dataframe(aggregate=
-        True)` — the sibling method — while the historical hdi-map route of that time (removed
-        in #204/#206) reached `calculate_hdi_map`. On 2000 cells it moved a served value by 98.0. Register **C-258**.
-        """
-        
-        # Step 1: Get raw distributions at cell level
-        raw_df = super().get_subset_dataframe(
-            time_ids=time_ids,
-            features=features,
-            sample_idx=sample_idx,
-            entity_ids=entity_ids,
-        )
-        
-        # Add metadata for grouping
-        raw_df = raw_df.join(self.geo_metadata, how="left")
-        
-        # Step 2: Aggregate distributions element-wise (preserves time dimension)
-        aggregated_df = self._aggregate_distributions(raw_df, level=level)
-        
-        # Step 3: Compute HDI and MAP on aggregated distributions
-        target_level_col = self.levels[level]
-        time_col = self._time_id
-        selected_vars = features if features else self.targets
-        if not isinstance(selected_vars, list):
-            selected_vars = [selected_vars]
-        
-        # Which metadata columns this level carries (forecast.geography.metadata_table) — the
-        # same list `_aggregate_distributions` keeps, so every one is in `aggregated_df`.
-        metadata_cols_to_include = LEVEL_METADATA_COLUMNS.get(level, [])
-        
-        results = []
-        for var_name in selected_vars:
-            if var_name not in aggregated_df.columns:
-                continue
-
-            # Same ADR-025 reduction as the cell path (#222/S4): MAP + fixed 50/90/95 HDIs +
-            # severe_scenario, via the shared `schema`/`json_contract` builder — so the aggregate
-            # and cell schemas can never diverge. Var-keyed; sb/ns/os rename is a boundary step.
-            value_cols = series_value_column_names(var_name)
-
-            # C-235: reduce the whole variable in ONE `collapse` call, exactly as the cell path
-            # does (`grid_dataset.py`, S6b-1/#208). `collapse` is vectorised over `(N, S)`; the
-            # previous form called it once per `(month, unit)` — 262,656 times for the delivered
-            # run against the cell path's 108 — so `/data/forecast/bulk` took ~500 s and 504'd at
-            # the proxy (#79). Same reduction, same inputs, same order: only the batch width
-            # changes, which is why the goldens must stay byte-identical.
-            column = aggregated_df[var_name]
-            widths = {
-                len(v) for v in column
-                if isinstance(v, np.ndarray) and v.ndim == 1 and len(v) > 0
-            }
-            # A ragged column cannot be stacked. It should not occur (the joint-sum emits one
-            # `(S,)` array per group), but stacking silently on a ragged column would produce an
-            # object array and a wrong reduction, so fall back per row and say so.
-            batchable = len(widths) == 1
-            if not batchable and widths:
-                logger.warning(
-                    "aggregate reduction for %s has ragged sample widths %s — reducing per row "
-                    "(C-235 batching skipped)", var_name, sorted(widths),
-                )
-
-            rows = list(aggregated_df.index)
-            usable = [
-                isinstance(v, np.ndarray) and v.ndim == 1 and len(v) > 0 for v in column
-            ]
-            data = None
-            if batchable and any(usable):
-                block = np.stack([v for v, ok in zip(column, usable) if ok])  # (n_usable, S)
-                cr = collapse(
-                    block,
-                    masses=schema.MASSES,
-                    enforce_non_negative=enforce_non_negative,
-                    thresholds=schema.EXCEEDANCE_THRESHOLDS,
-                )
-                data = series_value_data(
-                    var_name,
-                    cr.map,
-                    cr.severe,
-                    cr.bimodality,
-                    {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
-                    exceedance=cr.exceedance,
-                )
-
-            var_results = []
-            reduced_at = 0  # position within the batched block, advanced only for usable rows
-            for position, idx in enumerate(rows):
-                time_id, geo_unit = idx
-                result_row = {time_col: time_id, target_level_col: geo_unit}
-                if usable[position] and data is not None:
-                    result_row.update(
-                        {name: float(col[reduced_at]) for name, col in data.items()}
-                    )
-                    reduced_at += 1
-                elif usable[position]:
-                    # Ragged fallback: one row, one call — the pre-C-235 behaviour, kept so a
-                    # malformed column degrades in speed rather than in correctness.
-                    cr = collapse(
-                        column.iloc[position],
-                        masses=schema.MASSES,
-                        enforce_non_negative=enforce_non_negative,
-                        thresholds=schema.EXCEEDANCE_THRESHOLDS,
-                    )
-                    row_data = series_value_data(
-                        var_name, cr.map, cr.severe, cr.bimodality,
-                        {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
-                        exceedance=cr.exceedance,
-                    )
-                    result_row.update({name: float(col[0]) for name, col in row_data.items()})
-                else:
-                    result_row.update({name: np.nan for name in value_cols})
-
-                for meta_col in metadata_cols_to_include:
-                    result_row[meta_col] = aggregated_df.iloc[position][meta_col]
-
-                var_results.append(result_row)
-
-            var_df = pd.DataFrame(var_results).set_index([time_col, target_level_col])
-            results.append(var_df)
-        
-        if not results:
-            return pd.DataFrame()
-        
-        # Concatenate results and deduplicate metadata columns
-        final_result = pd.concat(results, axis=1)
-        # Remove duplicate columns (metadata cols may appear multiple times)
-        final_result = final_result.loc[:, ~final_result.columns.duplicated()]
-        return final_result
-
-    def calculate_hdi_map(
-        self,
-        alpha: float = 0.9,
         features: Optional[Union[str, List[str]]] = None,
         sample_idx: Optional[Union[int, List[int]]] = None,
         time_ids: Optional[Union[int, List[int]]] = None,
         entity_ids: Optional[Union[str, List[str]]] = None,
-        enforce_non_negative: bool = False,
         with_metadata: bool = True,
         level: Optional[str] = None,
         aggregate: bool = False,
     ) -> pd.DataFrame:
-        """
-        Calculate HDI and MAP estimates, with optional geographic aggregation.
-        
-        When `aggregate=True`, this method performs aggregation:
-        1. Retrieves raw sample distributions for each PRIO-GRID cell
-        2. Sums distributions element-wise across cells within each geographic unit
-        3. Computes HDI and MAP on the aggregated distributions
-        
-        This ensures proper uncertainty quantification at aggregated levels.
-        HDI([sum of samples]) ≠ sum of HDI bounds.
-        
+        """The served summaries of the forecast's draws (#204), per cell or summed to a level.
+
+        With `aggregate=True` the draws of each unit's cells are summed first, draw by draw, then
+        summarised: the summary of the sum, not the sum of the summaries.
+
         Args:
-            alpha: Credibility level for HDI (default 0.9 = 90% interval)
-            features: Target features to analyze (None for all)
-            sample_idx: Sample indices to include (None for all)
-            time_ids: Time periods to include (None for all)
-            entity_ids: Entity codes (ISO3 for country, GAUL codes for admin levels)
-            enforce_non_negative: Clip MAP estimates to >= 0
-            with_metadata: Include geographic metadata columns in output
-            level: Geographic level ('country' or 'gaul1')
-            aggregate: If True, aggregate to the specified level
-            
-        Returns:
-            DataFrame with MultiIndex (time_id, geo_unit) and columns for each target variable:
-            - {var}_lower: Lower bound of the HDI
-            - {var}_upper: Upper bound of the HDI  
-            - {var}_map: Maximum A Posteriori estimate
-            - {var}_min: Minimum sample value (when aggregate=True)
-            - {var}_max: Maximum sample value (when aggregate=True)
+            features: targets to summarise (None for all)
+            sample_idx: draws to use (None for all)
+            time_ids: months (None for all)
+            entity_ids: cells, or units of `level` (ISO3 for country, GAUL codes for admin 1)
+            with_metadata: join the geography columns (cell level only)
+            level: 'country' or 'gaul1'
+            aggregate: sum to `level` before summarising
+
+        Returns a frame indexed (time, unit) with, per target, `{var}_p_gt0` … `{var}_n_draws`
+        (`forecast.summarize.draws`). Summaries need draws: a dataset of recorded values
+        (the history) is refused.
         """
+        if not self.is_prediction:
+            raise ValueError(NEEDS_DRAWS)   # before the region path, which skips the base check
         self._check_level(level)
         # Resolve entity_ids to PRIO-GRID cells if a level is specified
         if level is not None and entity_ids is not None:
@@ -691,14 +530,12 @@ class ForecastDataset(_GridDataset):
             entity_ids = pg_cells
         
         if not aggregate:
-            # Standard path: compute HDI at cell level
-            result = super().calculate_hdi_map(
-                alpha=alpha,
+            # Cell level: summarise each cell's own draws.
+            result = super().summarize(
                 features=features,
                 sample_idx=sample_idx,
                 time_ids=time_ids,
                 entity_ids=entity_ids,
-                enforce_non_negative=enforce_non_negative,
             )
             if with_metadata:
                 result = result.join(self.geo_metadata, how="left")
@@ -709,18 +546,6 @@ class ForecastDataset(_GridDataset):
         # are read straight from the contiguous `(N, S)` store and never enter a DataFrame.
         if level is None:
             raise ValueError("Must specify 'level' when aggregate=True")
-
-        # The historical/scalar leg keeps the legacy float64 pandas path (ADR-030 §1, C-258).
-        if not self.is_prediction:
-            return self._aggregate_hdi_map_pandas(
-                alpha=alpha,
-                features=features,
-                sample_idx=sample_idx,
-                time_ids=time_ids,
-                entity_ids=entity_ids,
-                enforce_non_negative=enforce_non_negative,
-                level=level,
-            )
 
         target_level_col = self.levels[level]
         time_col = self._time_id
@@ -818,6 +643,7 @@ class ForecastDataset(_GridDataset):
             )
 
         row_of_key = {key: i for i, key in enumerate(out_index)}
+        # Every row of `out_index` is filled below: it groups the same coded cells the loop sums.
         stats = {
             var: {
                 name: np.full(len(out_index), np.nan, dtype=np.float64)
@@ -827,7 +653,10 @@ class ForecastDataset(_GridDataset):
         }
 
         # Step 2: per month, per target — take that month's rows as a contiguous `(N, S)` block,
-        # joint-sum it to the level, and `collapse` the result in ONE call. Streaming per month
+        # joint-sum it to the level, and summarise the result in ONE call. The joint sum runs in
+        # the views-frames leaf, which is float32: exact for whole-number draws while a unit's
+        # per-draw total stays below 2**24 (16,777,216 deaths), which delivered runs do
+        # (whole-number draws, largest cell draw 32,505; register C-374). Streaming per month
         # holds one month of cells resident instead of the whole request (the cell path's
         # pattern, S6b-1 / #208). Groups are `(time, unit)` and a month is one time value, so no
         # group spans two months: the draws summed, their order, and the reduction are all
@@ -855,24 +684,8 @@ class ForecastDataset(_GridDataset):
                 if not keys:
                     continue
 
-                # Same ADR-025 reduction as the cell path (#222/S4): MAP + fixed 50/90/95 HDIs +
-                # severe_scenario, through the shared `schema`/`json_contract` builder — so the
-                # aggregate and cell schemas can never diverge. One `collapse` call per (month,
-                # target), matching the cell path's call count (C-235).
-                cr = collapse(
-                    block,
-                    masses=schema.MASSES,
-                    enforce_non_negative=enforce_non_negative,
-                    thresholds=schema.EXCEEDANCE_THRESHOLDS,
-                )
-                data = series_value_data(
-                    var_name,
-                    cr.map,
-                    cr.severe,
-                    cr.bimodality,
-                    {m: (cr.lower(m), cr.upper(m)) for m in schema.MASSES},
-                    exceedance=cr.exceedance,
-                )
+                # The same summaries as the cell path, one call per (month, target).
+                data = series_value_data(var_name, summarize_draws(block))
                 rows = np.fromiter(
                     (row_of_key[(t, label_of(u))] for t, u in keys),
                     dtype=np.intp,

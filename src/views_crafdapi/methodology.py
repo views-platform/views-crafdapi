@@ -26,7 +26,12 @@ Bump this string when a re-baselining change reaches `main` (see ADR-023). Histo
     recorded diff for every re-baseline; for v3 that requirement was not met. Stated here
     rather than quietly dropping the citation, because a missing governance artifact and a
     broken link look identical once the link is deleted.
+- v4 — the summary columns decided 2026-11-17 (#204): `p_gt0/25/100/500/1000`, `mean`,
+  `mean_if_any`, `median_if_any`, `severe_scenario` (empty below 20 usable draws), `n_draws`;
+  `map`, the HDIs and `bimodality_flag` removed; every summary on the usable (finite) draws only.
+  The kept columns are value-for-value identical on the delivered run (grid level). Record:
+  `reports/2026-11-21_summary_columns_rebaseline.md`.
 """
 
-METHODOLOGY_VERSION = "crafdapi-methodology/3"
+METHODOLOGY_VERSION = "crafdapi-methodology/4"
 """Monotonic identifier for the published-forecast methodology (ADR-023)."""

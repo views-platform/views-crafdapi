@@ -9,6 +9,12 @@
 
 > **NOTE (Phase 4a of views-faoapi#87, views-faoapi#112):** the chain's leaf was renamed `FAO_PGMDataset → ForecastDataset` (see `ForecastDataset.md`; register C-276), and the extracted single-responsibility modules are contracted in `forecast_package.md`.  
 
+> **AMENDMENT (#204, 2026-11-21):** `calculate_hdi_map()` is now `summarize()`. It returns, per
+> target, the summary columns of `forecast.summarize.draws.summarize_draws` (`{var}_p_gt0` …
+> `{var}_n_draws`, see the `ForecastDataset` contract), not the most likely value and intervals.
+> Its `alpha` and `enforce_non_negative` options are gone. Where this contract and its older
+> amendments below describe HDI/MAP columns, they are historical.
+
 > **AMENDMENT (M1, 2026 — register C-81):** MAP/HDI is now computed by the **views-frames tower
 > estimator** (`views_frames_summarize.tower_point` / `hdi_tower`) via the vectorized
 > `_ViewsDataset._tower_collapse`, **not** `PosteriorDistributionAnalyzer` (retained only as a

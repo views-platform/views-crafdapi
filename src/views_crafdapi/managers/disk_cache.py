@@ -201,7 +201,7 @@ class CrafdDiskCacheManager:
 
                 # S6b-1 (#208): mmap the sample store so a disk-served run pages on demand rather
                 # than loading the whole (N,S) block resident — combined with per-month serving
-                # (calculate_hdi_map streams months), this keeps the serve-side working set to ~one
+                # (summarize streams months), this keeps the serve-side working set to ~one
                 # month. Read-only; every serving read copies (astype/fancy-index) before any math.
                 # (POSIX: an in-flight serve's memmap survives a concurrent cache-invalidation
                 # rmtree — the unlinked inode stays live until the mapping is GC'd. Host is Linux.)

@@ -385,9 +385,9 @@ _IDENTITY = {   # the place, then the month written two ways (#205, #206)
     "country": ["country_code", "country_name", "country_iso3", "month", "month_id"],
 }
 _SB_COLUMNS = [
-    "sb_map", "sb_hdi50_lower", "sb_hdi50_upper", "sb_hdi90_lower", "sb_hdi90_upper",
-    "sb_hdi95_lower", "sb_hdi95_upper", "sb_severe_scenario", "sb_bimodality_flag",
-    "sb_p_gt25", "sb_p_gt100", "sb_p_gt1000", "sb_actual",
+    "sb_p_gt0", "sb_p_gt25", "sb_p_gt100", "sb_p_gt500", "sb_p_gt1000",
+    "sb_mean", "sb_mean_if_any", "sb_median_if_any", "sb_severe_scenario",
+    "sb_actual", "n_draws",
 ]
 
 
@@ -422,7 +422,7 @@ class TestSliceRoute:
         """Admin-1 values come from the region's samples summed first, then summarised; the
         recorded deaths are the sum of the region's cells. Region 2 is cells 102 and 103."""
         client, mgr, _ = app_client
-        expected = _fixture_dataset(mgr).calculate_hdi_map(
+        expected = _fixture_dataset(mgr).summarize(
             features=["pred_lr_ged_sb"], level="gaul1", aggregate=True, with_metadata=False
         )
         rows = client.get(
@@ -430,28 +430,30 @@ class TestSliceRoute:
         ).json()["rows"]
         past, ahead = rows
         assert ahead["admin1_code"] == 2 and ahead["admin1_name"] == "Region2"
-        assert ahead["sb_map"] == pytest.approx(expected.loc[(601, 2), "pred_lr_ged_sb_map"])
-        assert ahead["sb_hdi90_upper"] == pytest.approx(expected.loc[(601, 2), "pred_lr_ged_sb_hdi90_upper"])
+        assert ahead["sb_mean"] == pytest.approx(expected.loc[(601, 2), "pred_lr_ged_sb_mean"])
+        assert ahead["sb_p_gt0"] == pytest.approx(expected.loc[(601, 2), "pred_lr_ged_sb_p_gt0"])
+        assert ahead["n_draws"] == expected.loc[(601, 2), "pred_lr_ged_sb_n_draws"] == 10
         history = _fixture_dataset(mgr, "historical")
         positions = [history.dataframe.index.get_loc((599, cell)) for cell in (102, 103)]
         assert past["sb_actual"] == pytest.approx(history._sample_array("pred_lr_ged_sb")[positions, 0].sum())
-        assert past["sb_map"] is None and ahead["sb_actual"] is None
+        assert past["sb_mean"] is None and past["n_draws"] is None and ahead["sb_actual"] is None
 
     def test_a_country_is_named_by_its_gaul_code(self, app_client):
         """Partners name countries by GAUL code; the dataset groups them by ISO3. Country 20 is
         BBB (cells 102, 103), so its values equal the BBB aggregate, not AAA's."""
         client, mgr, _ = app_client
-        expected = _fixture_dataset(mgr).calculate_hdi_map(
+        expected = _fixture_dataset(mgr).summarize(
             features=["pred_lr_ged_sb"], level="country", aggregate=True, with_metadata=False
         )
         rows = client.get(
             "/slice/country/sb", params={"places": "20", "months": "2029-12"}, headers=HEADERS
         ).json()["rows"]
         assert [(r["country_code"], r["country_iso3"]) for r in rows] == [(20, "BBB")]
-        assert rows[0]["sb_map"] == pytest.approx(expected.loc[(600, "BBB"), "pred_lr_ged_sb_map"])
-        assert rows[0]["sb_severe_scenario"] == pytest.approx(
-            expected.loc[(600, "BBB"), "pred_lr_ged_sb_severe_scenario"]
+        assert rows[0]["sb_mean"] == pytest.approx(expected.loc[(600, "BBB"), "pred_lr_ged_sb_mean"])
+        assert rows[0]["sb_median_if_any"] == pytest.approx(
+            expected.loc[(600, "BBB"), "pred_lr_ged_sb_median_if_any"]
         )
+        assert rows[0]["sb_severe_scenario"] is None   # 10 draws: below the 20 a severe case needs
 
     def test_places_and_months_narrow_the_rows(self, app_client):
         client, _, _ = app_client
@@ -463,10 +465,10 @@ class TestSliceRoute:
     def test_a_column_list_returns_only_those_columns_and_always_the_names(self, app_client):
         client, _, _ = app_client
         body = client.get(
-            "/slice/country/sb", params={"columns": "sb_p_gt100,sb_map"}, headers=HEADERS
+            "/slice/country/sb", params={"columns": "sb_p_gt100,sb_mean"}, headers=HEADERS
         ).json()
         # The summary columns keep their usual order, whatever order they were asked in.
-        assert body["columns"] == _IDENTITY["country"] + ["sb_map", "sb_p_gt100"]
+        assert body["columns"] == _IDENTITY["country"] + ["sb_p_gt100", "sb_mean"]
         assert set(body["rows"][0]) == set(body["columns"])
 
     def test_no_sample_is_ever_served(self, app_client):
@@ -489,7 +491,7 @@ class TestSliceRoute:
         # refused as written, not carried over.
         {"months": "2029-13"}, {"months": "2030-00"},
         {"places": "AAA"}, {"places": "1.5"}, {"places": "-1"},
-        {"places": "999"}, {"months": "2031-01"}, {"columns": "sb_mean"}, {"columns": "ns_map"},
+        {"places": "999"}, {"months": "2031-01"}, {"columns": "sb_map"}, {"columns": "ns_map"},
     ])
     def test_a_badly_written_or_unknown_option_is_422(self, app_client, params):
         """A typo is refused with a reason, never answered with an empty table."""
@@ -543,7 +545,7 @@ class TestSliceRoute:
         would show 0 deaths next to the forecast (register C-293)."""
         client, _, _ = app_client
         rows = client.get("/slice/admin1/sb", params={"months": "2029-12"}, headers=HEADERS).json()["rows"]
-        assert rows and all(r["sb_map"] is not None and r["sb_actual"] is None for r in rows)
+        assert rows and all(r["sb_mean"] is not None and r["sb_actual"] is None for r in rows)
 
     def test_a_forecast_only_request_does_not_need_the_history(self, app_client):
         """Forecast months only: answered without the history, so a broken history does not
@@ -561,7 +563,7 @@ class TestSliceRoute:
         assert resp.status_code == 503 and "recorded deaths" in resp.json()["detail"]
 
     @pytest.mark.parametrize("query", [
-        "places=100&places=103", "months=2029-12&months=2030-01", "columns=sb_map&columns=sb_actual",
+        "places=100&places=103", "months=2029-12&months=2030-01", "columns=sb_mean&columns=sb_actual",
     ])
     def test_a_repeated_option_is_refused_not_cut_to_its_last_value(self, app_client, query):
         """`?places=100&places=103` is how some clients send a list; keeping only 103 would
@@ -664,7 +666,7 @@ class TestResponseSizeBound:
         one = estimate_records_bytes(16, len(_IDENTITY["grid"]) + 1, 0)
         monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", str((full + one) // 2))
         assert client.get("/slice/grid/sb", headers=HEADERS).status_code == 413
-        assert client.get("/slice/grid/sb", params={"columns": "sb_map"}, headers=HEADERS).status_code == 200
+        assert client.get("/slice/grid/sb", params={"columns": "sb_mean"}, headers=HEADERS).status_code == 200
 
     def test_the_work_counts_not_only_the_answer(self, app_client, monkeypatch):
         """A country is one row of answer and many cells of work, with every forecast draw.
@@ -675,7 +677,7 @@ class TestResponseSizeBound:
 
         client, _, _ = app_client
         monkeypatch.setattr(api, "estimate_records_bytes", lambda *args: 0)
-        params = {"places": "10", "columns": "sb_map"}
+        params = {"places": "10", "columns": "sb_mean"}
         monkeypatch.setenv("CRAFDAPI_MAX_RESPONSE_BYTES", str(44 * 8 - 1))
         resp = client.get("/slice/country/sb", params=params, headers=HEADERS)
         assert resp.status_code == 413 and "reads 44 values" in resp.json()["detail"]

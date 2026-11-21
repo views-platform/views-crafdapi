@@ -1,55 +1,56 @@
-"""Phase 4a (#112) characterization net: pin the exact served HDI/MAP output across all
-levels so the facade refactor is provably byte-identical (C-139).
+"""The served slice, pinned: any change to what a partner receives fails this test.
 
-The golden is generated on first run and committed; thereafter any change to the served
-numbers/shape fails this test. (The deliberate frame-native re-baseline is Phase 4b, gated
-under ADR-023 — it will regenerate this golden with a recorded diff.)
+The golden holds the slice's JSON rows (`outcome_table.build_outcome_table`, written with the
+same `to_json` call as the route) for one outcome at each level, from a fixed synthetic forecast
+and history. A deliberate change to the served numbers regenerates it, with the change recorded
+(ADR-023). Regenerate by deleting the golden file and running this test twice.
 """
 
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
 from views_crafdapi.data.handlers import ForecastDataset
-from views_crafdapi.managers.serialization import dataframe_to_dict
+from views_crafdapi.forecast.serialize import outcome_table
 
 pytestmark = pytest.mark.layer2_data
 
-_GOLDEN = Path(__file__).parent / "golden" / "served_hdi_map.json"
-
-# (label, level, aggregate) across the served surface.
-_VIEWS = [
-    ("pg", None, False),
-    ("country", "country", True),
-    ("gaul1", "gaul1", True),
-]
+_GOLDEN = Path(__file__).parent / "golden" / "served_slice.json"
+_TARGETS = ("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")
 
 
-def _canonical_served_output():
-    ds = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=32, seed=4242))
-    out = {}
-    for label, level, aggregate in _VIEWS:
-        df = ds.calculate_hdi_map(alpha=0.9, level=level, aggregate=aggregate)
-        # Capture index + columns exactly as served (reset_index so the geo unit is included).
-        out[label] = dataframe_to_dict(df.reset_index())
-    return out
+def _months(df, months):
+    cells = df.index.get_level_values("priogrid_id")
+    old = df.index.get_level_values("month_id")
+    mapping = dict(zip(sorted(set(old)), months))
+    df = df.copy()
+    df.index = pd.MultiIndex.from_arrays([[mapping[m] for m in old], cells], names=["month_id", "priogrid_id"])
+    return df
 
 
-def test_served_output_matches_golden():
-    produced = _canonical_served_output()
-    # Round-trip through JSON so the comparison is on the actually-serialized form.
-    produced = json.loads(json.dumps(produced, sort_keys=True, default=str))
+def _served_rows():
+    forecast = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=32, seed=4242, targets=_TARGETS))
+    history = ForecastDataset(_months(make_fao_df(n_cells=4, n_months=2, seed=7, targets=_TARGETS), [598, 599]))
+    return {
+        level: json.loads(
+            outcome_table.build_outcome_table(forecast, history, level, "sb").to_json(
+                orient="records", double_precision=15
+            )
+        )
+        for level in outcome_table.LEVELS
+    }
 
+
+def test_served_slice_matches_golden():
+    produced = _served_rows()
     if not _GOLDEN.exists():
         _GOLDEN.parent.mkdir(parents=True, exist_ok=True)
         _GOLDEN.write_text(json.dumps(produced, indent=2, sort_keys=True))
-        pytest.skip("golden generated — re-run to assert against it")
-
-    golden = json.loads(_GOLDEN.read_text())
-    assert produced == golden, (
-        "Served HDI/MAP output changed vs the golden snapshot. If this is the deliberate "
-        "Phase-4b frame-native re-baseline, regenerate the golden and record the ADR-023 diff; "
-        "otherwise the facade refactor is NOT byte-identical (C-139)."
+        pytest.skip("golden generated: re-run to assert against it")
+    assert produced == json.loads(_GOLDEN.read_text()), (
+        "The served slice changed against the golden. If the change is deliberate, regenerate "
+        "the golden and record it (ADR-023); otherwise a refactor changed what partners get."
     )

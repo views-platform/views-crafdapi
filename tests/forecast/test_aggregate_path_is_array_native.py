@@ -59,7 +59,7 @@ def test_aggregate_path_never_explodes_samples_into_object_cells(monkeypatch):
     ds = _dataset()
     calls = _record_calls(monkeypatch, _GridDataset, "get_subset_dataframe")
 
-    out = ds.calculate_hdi_map(aggregate=True, level="gaul1", with_metadata=False)
+    out = ds.summarize(aggregate=True, level="gaul1", with_metadata=False)
 
     assert len(out) > 0, "the fixture produced no aggregated rows — the test would be vacuous"
     assert calls == [], (
@@ -79,7 +79,7 @@ def test_aggregate_path_never_stacks_cells_back_into_an_array(monkeypatch):
     ds = _dataset()
     calls = _record_calls(monkeypatch, _GridDataset, "_stack_cells")
 
-    ds.calculate_hdi_map(aggregate=True, level="gaul1", with_metadata=False)
+    ds.summarize(aggregate=True, level="gaul1", with_metadata=False)
 
     assert calls == [], (
         f"ADR-030 S7: the aggregate path called _stack_cells {len(calls)} time(s). Stacking "

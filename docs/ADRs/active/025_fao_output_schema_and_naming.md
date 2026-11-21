@@ -1,6 +1,6 @@
 # ADR-025: FAO Output Schema and Column Naming
 
-**Status:** Superseded (2026-11-18) by the data dictionary, `docs/api/data_dictionary.md`, and the service specification. The new column set is built in #204. Kept as the record of what was decided.
+**Status:** Superseded (2026-11-18) by the data dictionary, `docs/api/data_dictionary.md`, and the service specification. The new column set was built in #204 (2026-11-21): no served column comes from §4 any more except `s_severe_scenario` and `s_actual`. Kept as the record of what was decided.
 
 > Earlier status: Accepted — **§4 amended 2026-08-15** (ADR-034 §3 / register C-244): the served schema is **45** columns, not the 36 decided here; `schema.bulk_columns()` is the authority. The original §4 is retained as the record of what was decided.
 **Date:** 2026-06-26

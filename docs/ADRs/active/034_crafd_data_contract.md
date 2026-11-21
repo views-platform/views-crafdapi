@@ -1,6 +1,6 @@
 # ADR-034 — The CRAF'd data contract (targets, geography, summary statistics, bucket)
 
-**Status:** Superseded (2026-11-18) by the service specification and the data dictionary (three levels, FAO GAUL 2024 codes, the new summary columns). Kept as the record of what was decided.
+**Status:** Superseded (2026-11-18) by the service specification and the data dictionary (three levels, FAO GAUL 2024 codes, the new summary columns). Built in #204 (2026-11-21): the exceedance thresholds are now 0, 25, 100, 500 and 1,000, not the placeholders 25, 100 and 1,000. Kept as the record of what was decided.
 
 > Earlier status: Proposed (2026-08-02) — awaiting CRAF'd/product sign-off on the target list.
 **Deciders:** operator (Simon) + CRAF'd/product. Drafted with the design authority.

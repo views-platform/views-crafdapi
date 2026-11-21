@@ -3,7 +3,7 @@
 **Status:** Active
 **Owner:** Project maintainers
 **Last reviewed:** 2026-07-24
-**Related ADRs:** ADR-025 (FAO output schema — the admin-1 bulk artifact; **45 columns** as served, §4 amended — register C-244), ADR-024 (raw counts), ADR-006 (this contract), views-postprocessing ADR-013 (the wire run this consumes)
+**Related ADRs:** ADR-025 (FAO output schema — the admin-1 bulk artifact; **39 columns** since #204 replaced its summary columns), ADR-024 (raw counts), ADR-006 (this contract), views-postprocessing ADR-013 (the wire run this consumes)
 **Source:** epic #222 / S6 (#228)
 
 ---
@@ -13,14 +13,14 @@
 Produce the **ADR-025 admin-1 bulk artifact**: one wide parquet carrying the full forecast table
 in a single file, so FAO can load everything at once instead of paging the JSON API. It is the
 **same served numbers** as the API, aggregated to GAUL admin-1 grain — one row per
-`(month_id, admin1_code)`, `schema.bulk_columns()` (6 identity + per series `sb/ns/os` the 9
-ADR-025 columns; 33 base + per-series bimodality_flag = **36**). `build_bulk_table(forecast_ds, historical_ds)` assembles the table;
+`(month_id, admin1_code)`, `schema.bulk_columns()` (6 identity + per outcome `sb/ns/os` the 11
+value columns of `schema.series_value_columns` = **39**, since #204). `build_bulk_table(forecast_ds, historical_ds)` assembles the table;
 `write_bulk_parquet(path, forecast_ds, historical_ds)` persists it. Served by
 `GET /data/forecast/bulk`.
 
 ## 2. Non-Goals
 
-- Does **not** compute the statistics — it composes `ForecastDataset.calculate_hdi_map`
+- Does **not** compute the statistics — it composes `ForecastDataset.summarize`
   (aggregate, gaul1) for the forecast quantities and sums historical observed counts for `actual`.
 - Does **not** own the column names — those come from `serialize/schema.py` (single source).
 - Does **not** load or cache datasets, authenticate, or manage the HTTP surface (the endpoint in
@@ -50,7 +50,7 @@ ADR-025 columns; 33 base + per-series bimodality_flag = **36**). `build_bulk_tab
 
 ## 5. Outputs and Side Effects
 
-- `build_bulk_table` → a `pandas.DataFrame` (**45 columns**: 6 identity + 3 series × 13; ADR-034 §3 added `s_p_gt25/100/1000` per series. `schema.bulk_columns()` is authoritative — register C-244). `write_bulk_parquet` → writes a parquet
+- `build_bulk_table` → a `pandas.DataFrame` (**39 columns** since #204: 6 identity + 3 outcomes × 11; `schema.bulk_columns()` is authoritative). Every value column is float64, even when empty, and the table passes `summary_checks.check_summaries` before it is returned. `write_bulk_parquet` → writes a parquet
   file, returns its `Path`. No caching, no network.
 
 ## 6. Failure Modes and Loudness
@@ -62,10 +62,10 @@ ADR-025 columns; 33 base + per-series bimodality_flag = **36**). `build_bulk_tab
 ## 7. Boundaries and Interactions
 
 - **Composed by** `CrafdApiManager` (`GET /data/forecast/bulk`).
-- **Depends on** `ForecastDataset.calculate_hdi_map`, `serialize.schema`, `serialize.json_contract`.
+- **Depends on** `ForecastDataset.summarize`, `serialize.schema`, `serialize.json_contract`, `serialize.summary_checks`.
 
 ## 8. Test Alignment
 
-- `tests/forecast/test_bulk_parquet.py` — 45-column schema (incl. bimodality_flag and the three ADR-034 exceedance columns per series), one row per `(month_id, admin1_code)`,
-  consumer identity, `actual` == admin-1 sum, `NaN` without history, nested HDIs, parquet
+- `tests/forecast/test_bulk_parquet.py` — 39-column schema, float64 even when empty, one row per `(month_id, admin1_code)`,
+  consumer identity, `actual` == admin-1 sum, `NaN` without history, chances falling with the threshold, parquet
   round-trip, both fail-loud guards, and the `GET /data/forecast/bulk` endpoint.

@@ -1,12 +1,12 @@
-"""Lay estimator output (numpy) onto the served `{var}_*` column contract.
+"""Lay the summaries (numpy) onto the served `{var}_*` columns, and rename them for serving.
 
-Extracted from `_ViewsDataset._create_hdi_dataframe` / `_create_map_dataframe` (Phase 4a of
-#87 / #112). Produces `{var}_hdi_lower` / `{var}_hdi_upper` (HDI) and `{var}_map` (point /
-extrema — the caller renames `_map` to `_min` / `_max` for the sample-extrema columns). Pure
+`series_value_*` build the summary columns per target (`schema.SUMMARY_QUANTITIES`, #204);
+`to_consumer_columns` renames them to the outcome code. `map_dataframe` / `hdi_dataframe` serve
+only the older `_GridDataset.calculate_map` / `calculate_hdi`, which no route uses. Pure
 functions: the caller supplies the `(time, entity)` axis labels and the index level names.
 """
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -80,82 +80,36 @@ def hdi_dataframe(
     return result
 
 
-# --- ADR-025 per-series value columns (epic #222 / S4) ---------------------------------------
-# The JSON serving path emits, per consumer series (sb/ns/os): `s_map`, the three nested HDIs
-# `s_hdi{50,90,95}_{lower,upper}`, and `s_severe_scenario` — built from `schema` so the names
-# live in exactly one place. `s_actual` (the historical join) is NOT emitted here; it is the
-# bulk parquet's column (S6). All columns are raw counts (ADR-024).
+# --- The summary columns per target (#204) ----------------------------------------------------
+# Named by the internal target here (`{var}_mean`, …); `to_consumer_columns` renames them to the
+# outcome code where the answer is served. Names come from `schema`.
 
 
-def series_value_column_names(series: str) -> List[str]:
-    """The value columns the JSON serializer emits for one series (ADR-025 + ADR-034 exceedance)."""
-    names = [schema.map_col(series)]
-    for mass in schema.MASSES:
-        names += [schema.hdi_col(series, mass, "lower"), schema.hdi_col(series, mass, "upper")]
-    names += [schema.severe_col(series), schema.bimodality_col(series)]
-    names += [schema.exceed_col(series, c) for c in schema.EXCEEDANCE_THRESHOLDS]
-    return names
+def series_value_column_names(var: str) -> List[str]:
+    """The summary columns for one target, in served order."""
+    return [f"{var}_{q}" for q in schema.SUMMARY_QUANTITIES]
 
 
-def series_value_data(
-    series: str,
-    map_: np.ndarray,
-    severe: np.ndarray,
-    bimodality: np.ndarray,
-    hdi: Dict[float, Tuple[np.ndarray, np.ndarray]],
-    exceedance: Optional[Dict[int, np.ndarray]] = None,
-) -> Dict[str, np.ndarray]:
-    """Ordered ``{column_name: array}`` for one series from its reduced stats.
-
-    ``map_``/``severe``/``bimodality`` are per-row arrays; ``hdi`` maps each mass →
-    ``(lower, upper)``; ``exceedance`` maps each threshold → ``P(Y>c)`` per row (ADR-034).
-    Column names come from `schema`. Order matches `series_value_column_names`. When
-    ``exceedance`` is ``None`` (or missing a threshold), that column is emitted as NaN so the
-    served column set is always complete — the serving paths pass real values.
-    """
-    data: Dict[str, np.ndarray] = {schema.map_col(series): np.asarray(map_)}
-    for mass in schema.MASSES:
-        lower, upper = hdi[mass]
-        data[schema.hdi_col(series, mass, "lower")] = np.asarray(lower)
-        data[schema.hdi_col(series, mass, "upper")] = np.asarray(upper)
-    data[schema.severe_col(series)] = np.asarray(severe)
-    data[schema.bimodality_col(series)] = np.asarray(bimodality)
-    exceedance = exceedance or {}
-    nan_like = np.full(np.asarray(map_).shape, np.nan, dtype=np.float64)
-    for c in schema.EXCEEDANCE_THRESHOLDS:
-        col = exceedance[c] if c in exceedance else nan_like
-        data[schema.exceed_col(series, c)] = np.asarray(col)
-    return data
+def series_value_data(var: str, summary: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    """``{column: array}`` for one target from ``summarize_draws``' output, in served order."""
+    return {f"{var}_{q}": np.asarray(summary[q]) for q in schema.SUMMARY_QUANTITIES}
 
 
 def series_value_dataframe(
-    series: str,
-    map_: np.ndarray,
-    severe: np.ndarray,
-    bimodality: np.ndarray,
-    hdi: Dict[float, Tuple[np.ndarray, np.ndarray]],
+    var: str,
+    summary: Dict[str, np.ndarray],
     time_id: str,
     entity_id: str,
     default_time: pd.Index,
     default_entity: pd.Index,
     time_ids: Optional[Union[int, List[int]]] = None,
     entity_ids: Optional[Union[int, List[int]]] = None,
-    exceedance: Optional[Dict[int, np.ndarray]] = None,
 ) -> pd.DataFrame:
-    """Lay per-series value stats (each a ``(time, entity)`` matrix) onto a flat MultiIndex.
-
-    Mirrors `hdi_dataframe`'s axis handling: matrices are C-order flattened against
-    ``from_product([time, entity])`` (time-major), so the flatten aligns with the index.
-    ``exceedance`` maps each threshold → a ``(time, entity)`` ``P(Y>c)`` matrix (ADR-034).
-    """
+    """Lay one target's summaries (each a ``(time, entity)`` matrix) onto a flat MultiIndex,
+    time-major, matching ``from_product([time, entity])``."""
     time_steps, entities = _resolve_axes(time_ids, entity_ids, default_time, default_entity)
     index = pd.MultiIndex.from_product([time_steps, entities], names=[time_id, entity_id])
-    data = {
-        name: np.asarray(col).flatten()
-        for name, col in series_value_data(
-            series, map_, severe, bimodality, hdi, exceedance
-        ).items()
-    }
+    data = {name: np.asarray(col).flatten() for name, col in series_value_data(var, summary).items()}
     return pd.DataFrame(data, index=index)
 
 

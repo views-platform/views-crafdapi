@@ -81,7 +81,7 @@ outcomes, each with its own set of columns. Every such change is recorded in the
 | `s_mean` | The expected number of deaths: the average over all draws, including those with no deaths. | deaths |
 | `s_mean_if_any`, `s_median_if_any` | How many deaths there would be if there are any: the average and the middle value over the draws with at least one death. | deaths |
 | `s_severe_scenario` | The average of the worst 5% of the draws: what a bad month could realistically look like. Empty when there are fewer than 20 usable draws, because the worst 5% would then be a single draw. | deaths |
-| `s_actual` | The recorded number of deaths, for past months. Empty for months that have not happened yet. | deaths |
+| `s_actual` | The recorded number of deaths, for months before the forecast. Empty for the forecast's months. | deaths |
 
 And one column for the whole row:
 
@@ -109,9 +109,9 @@ battle-related deaths, which is per year, not per month.
 - **The thresholds may change.** If they do, the column names change with them, and the change is
   recorded in the [changelog](CHANGELOG.md). So read the names from the data, rather than typing
   them into your code.
-- **The newest past month may show 0 deaths before the records are in.** Recorded deaths arrive
-  about a month late. Until they do, the newest past month can show `0`. Don't read that as "no
-  deaths".
+- **The first forecast month shows no recorded deaths.** Recorded deaths arrive about a month
+  late, so when a forecast is made, its first month is only partly recorded. Rather than show a
+  misleading `0`, `s_actual` is empty for every forecast month, that one included.
 
 ## Adding up places or months yourself
 

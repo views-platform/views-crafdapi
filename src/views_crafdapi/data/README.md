@@ -4,7 +4,7 @@ This module contains data handling and statistical analysis classes for the CRAF
 
 - Dataset abstractions for loading and manipulating prediction data
 - Geographic aggregation across multiple administrative levels
-- Posterior distribution analysis (HDI and MAP calculations)
+- Summaries of the forecast draws (chances, means, severe case)
 - Statistically correct element-wise distribution summation
 
 ## Module Structure
@@ -27,7 +27,7 @@ Contains the dataset hierarchy for handling CRAF'd prediction data with geograph
 ```
 _GridDataset  (generic (time, entity)-grid sample dataset; the frame-native compute core)
     │
-    └── ForecastDataset  (FAO facade: geo-metadata + aggregation + served HDI/MAP)
+    └── ForecastDataset  (facade: geo-metadata + aggregation + served summaries)
                           alias: ForecastDataset
 ```
 
@@ -83,31 +83,25 @@ Returns a filtered subset of the dataframe.
 - `aggregate`: Aggregate distributions to specified level
 - `level`: Geographic level ("pg", "country", "gaul1")
 
-##### `calculate_hdi_map`
+##### `summarize`
 
 ```python
-def calculate_hdi_map(
+def summarize(
     self,
-    alpha: float = 0.9,
-    time_ids: Optional[List[int]] = None,
     features: Optional[List[str]] = None,
     sample_idx: Optional[List[int]] = None,
+    time_ids: Optional[List[int]] = None,
     entity_ids: Optional[List[Union[str, int]]] = None,
-    enforce_non_negative: bool = False,
     with_metadata: bool = True,
+    level: Optional[str] = None,
     aggregate: bool = False,
-    level: str = "pg"
 ) -> pd.DataFrame
 ```
 
-Computes Highest Density Intervals and Maximum A Posteriori estimates.
-
-**Returns DataFrame with columns:**
-- `{var}_lower`: Lower bound of HDI
-- `{var}_upper`: Upper bound of HDI
-- `{var}_map`: Maximum A Posteriori estimate
-- `{var}_min`: Minimum sample value
-- `{var}_max`: Maximum sample value
+The served summaries of each target's draws (#204). Columns per target: `{var}_p_gt0`,
+`{var}_p_gt25`, `{var}_p_gt100`, `{var}_p_gt500`, `{var}_p_gt1000`, `{var}_mean`,
+`{var}_mean_if_any`, `{var}_median_if_any`, `{var}_severe_scenario`, `{var}_n_draws`. With
+`aggregate=True` the cells' draws are summed first, then summarised.
 
 ---
 
@@ -300,21 +294,14 @@ subset = dataset.get_subset_dataframe(
 )
 ```
 
-### Aggregated HDI Calculation
+### Summaries for a country
 
 ```python
-# Compute aggregated HDI for Somalia
-hdi_df = dataset.calculate_hdi_map(
-    alpha=0.95,
-    entity_ids=["SOM"],
-    level="country",
-    aggregate=True,
-    enforce_non_negative=True
-)
+# The draws of Somalia's cells are summed first, then summarised
+df = dataset.summarize(entity_ids=["SOM"], level="country", aggregate=True)
 
-# Result columns:
-# pred_ln_sb_best_lower, pred_ln_sb_best_upper, pred_ln_sb_best_map,
-# pred_ln_sb_best_min, pred_ln_sb_best_max, ...
+# Result columns: pred_ln_sb_best_p_gt0, ..., pred_ln_sb_best_severe_scenario,
+# pred_ln_sb_best_n_draws, ...
 ```
 
 ## Data Requirements

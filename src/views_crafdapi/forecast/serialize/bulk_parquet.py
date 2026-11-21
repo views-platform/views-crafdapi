@@ -1,20 +1,18 @@
-"""The ADR-025 admin-1 bulk artifact: one wide parquet, everything in one file.
+"""The admin-1 bulk file: one wide parquet, every outcome in one file.
 
-FAO loads this in one step instead of paging the JSON API. It is the **same** served numbers
-as the API, packaged wide at admin-1 (GAUL level-1) grain: one row per `(month_id, admin1_code)`,
-6 identity columns + per series `s ∈ {sb, ns, os}` the 13 value columns — the ADR-025 base
-+ per-series `bimodality_flag` + the three ADR-034 `p_gt{c}` exceedance columns = **45 total**.
+One row per `(month_id, admin1_code)`: 6 identity columns, then per outcome `s` in sb/ns/os
+the 11 value columns of `schema.series_value_columns` = 39 columns. It is replaced by one file
+per outcome and level in #203.
 
-- Forecast columns (`s_map`, `s_hdi{50,90,95}_{lower,upper}`, `s_severe_scenario`,
-  `s_p_gt{25,100,1000}`) come from the
-  forecast dataset's admin-1 aggregate reduction (the same `calculate_hdi_map` the API uses).
-- `s_actual` is the **historical observed** count, summed to admin-1 and joined on
-  `(month_id, admin1_code)`; `NaN` where there is no observed value (the forecast horizon).
-- Identity columns are the consumer-facing GAUL names (admin-0 country, not M49), from the
-  9-column metadata via `schema.IDENTITY_SOURCE`.
+- The summaries (`s_p_gt0` … `s_severe_scenario`, `s_n_draws`) come from the forecast's admin-1
+  summaries (`ForecastDataset.summarize`, draws summed per region first), as the slice's do.
+- `s_actual` is the recorded count, summed to admin 1 and joined on `(month_id, admin1_code)`;
+  empty where nothing is recorded (the forecast months).
+- Identity columns are the served GAUL names (admin-0 country, not M49), via
+  `schema.IDENTITY_SOURCE`.
 
-Most values are raw fatality counts (ADR-024), but **not all**: the three ADR-034 §3 exceedance columns per series (`s_p_gt25/100/1000`) are probabilities in [0, 1], and `s_bimodality_flag` is a 0/1 flag. Written via pyarrow (pandas not required by the
-engine, ADR-030 spirit — a thin DataFrame→parquet is acceptable here in `serialize/`).
+Counts of deaths, except the `s_p_gt{c}` chances (0 to 1) and `s_n_draws` (a count of draws).
+Every value column is float64, even when empty. Written via pyarrow.
 """
 
 from __future__ import annotations
@@ -26,6 +24,7 @@ import pandas as pd
 
 from views_crafdapi.forecast.serialize import schema
 from views_crafdapi.forecast.serialize.json_contract import to_consumer_columns
+from views_crafdapi.forecast.serialize.summary_checks import check_summaries
 
 # The admin-1 identity source columns in the 9-column GAUL metadata contract.
 _GAUL1_CODE = "admin1_gaul1_code"
@@ -80,7 +79,7 @@ def build_bulk_table(forecast_ds, historical_ds=None) -> pd.DataFrame:
     when ``historical_ds`` is absent or has no observed value for that unit-month.
     """
     # Forecast value columns at admin-1 (gaul1), consumer-renamed (sb/ns/os).
-    fc = forecast_ds.calculate_hdi_map(aggregate=True, level="gaul1", with_metadata=False)
+    fc = forecast_ds.summarize(aggregate=True, level="gaul1", with_metadata=False)
     fc = to_consumer_columns(fc)  # {var}_* → {series}_* (fail-loud on non-conforming targets)
     # Fail loud if two forecast targets map to the same series (e.g. a `_best` + `_prob` pair):
     # a silent column collision would mislabel one series' values (wire run-0 has clean targets).
@@ -102,8 +101,13 @@ def build_bulk_table(forecast_ds, historical_ds=None) -> pd.DataFrame:
     # Any schema column not produced (e.g. s_actual with no history) is NaN.
     for col in schema.bulk_columns():
         if col not in table.columns:
-            table[col] = pd.NA
-    return table[schema.bulk_columns()]
+            table[col] = float("nan")
+    table = table[schema.bulk_columns()]
+    for series in schema.SERIES:
+        for column in schema.series_value_columns(series):
+            table[column] = table[column].astype("float64")
+        check_summaries(table, series)
+    return table
 
 
 def write_bulk_parquet(

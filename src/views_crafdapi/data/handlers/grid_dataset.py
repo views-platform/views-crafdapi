@@ -15,12 +15,17 @@ from views_crafdapi.forecast.serialize.json_contract import (
     map_dataframe,
     series_value_dataframe,
 )
-from views_crafdapi.forecast.summarize.estimator import collapse, tower_collapse
+from views_crafdapi.forecast.summarize.draws import summarize_draws
+from views_crafdapi.forecast.summarize.estimator import tower_collapse
 
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
+
+# The one refusal for summarising a dataset without draws, shared by `ForecastDataset`.
+NEEDS_DRAWS = "summaries are computed from draws; this dataset holds recorded values"
 
 class _GridDataset:
     """Generic `(time, entity)`-grid sample dataset — the frame-native compute core.
@@ -34,7 +39,7 @@ class _GridDataset:
     uses to round-trip a metadata-free subset.
 
     `ForecastDataset` composes the `forecast/*` modules ON TOP of this base, adding the FAO
-    geo-metadata table, aggregation, and the served `calculate_hdi_map`. The object-dtype
+    geo-metadata table, aggregation, and the served `summarize`. The object-dtype
     spine that motivated epic #154 is gone (S4); this two-level structure (generic base +
     FAO facade) is the rationalized end-state — full single-class merge was rejected as
     complecting two responsibilities and relocating a fail-loud (register D-21). The
@@ -1167,74 +1172,35 @@ class _GridDataset:
             entity_ids,
         )
 
-    def _create_series_value_dataframe(
-        self, prefix, map_, severe, bimodality, hdi, time_ids=None, entity_ids=None,
-        exceedance=None,
-    ) -> pd.DataFrame:
-        """Format one variable's reduced stats into the quantity columns (#222/S4 + ADR-034).
-
-        ``prefix`` is the internal var name (`{var}_map`, `{var}_hdi90_lower`, …); the consumer
-        `sb/ns/os` rename is a separate boundary transform (`json_contract.to_consumer_columns`),
-        NOT applied here — the reduction runs on arbitrary vars (incl. synthetic fixtures).
-        ``exceedance`` maps each threshold → a ``(time, entity)`` ``P(Y>c)`` matrix (ADR-034).
-        Delegates to `json_contract.series_value_dataframe` with this dataset's `(time, entity)`
-        axes.
-        """
+    def _create_series_value_dataframe(self, var, summary, time_ids=None, entity_ids=None) -> pd.DataFrame:
+        """Lay one target's summary matrices onto this dataset's `(time, entity)` axes
+        (`json_contract.series_value_dataframe`). Columns are named by the target, not renamed."""
         return series_value_dataframe(
-            prefix,
-            map_,
-            severe,
-            bimodality,
-            hdi,
+            var,
+            summary,
             self._time_id,
             self._entity_id,
             self.dataframe.index.get_level_values(self._time_id).unique(),
             self.dataframe.index.get_level_values(self._entity_id).unique(),
             time_ids,
             entity_ids,
-            exceedance=exceedance,
         )
 
-    def calculate_hdi_map(
+    def summarize(
         self,
-        alpha: float = 0.9,
         features: Optional[Union[str, List[str]]] = None,
         sample_idx: Optional[Union[int, List[int]]] = None,
         time_ids: Optional[Union[int, List[int]]] = None,
         entity_ids: Optional[Union[int, List[int]]] = None,
-        enforce_non_negative: bool = False,
     ) -> pd.DataFrame:
-        """
-        Calculate Highest Density Intervals (HDIs), Maximum A Posteriori (MAP) estimates,
-        and min/max values for prediction distributions.
+        """The served summaries of each target's draws, per grid cell and month (#204).
 
-        Parameters:
-        alpha (float): Credibility level for HDI (e.g., 0.9 for 90% HDI).
-                    Must be between 0 and 1.
-        features: Feature names to calculate HDI and MAP for (None for all)
-        sample_idx: Sample indices to include (None for all)
-        time_ids: Time IDs to include (None for all)
-        entity_ids: Entity IDs to include (None for all)
-        enforce_non_negative (bool): If True, forces MAP estimates to be non-negative
-
-        Returns:
-        pd.DataFrame: DataFrame with multi-index (time, entity) and columns
-                    for each variable:
-                    - {var}_lower: Lower bound of the HDI
-                    - {var}_upper: Upper bound of the HDI
-                    - {var}_map: Maximum A Posteriori estimate
-                    - {var}_min: Minimum sample value
-                    - {var}_max: Maximum sample value
-
-        Raises:
-        ValueError: If called on non-prediction data or invalid alpha.
+        Returns a frame indexed (time, entity) with, per target, the columns
+        `json_contract.series_value_column_names(var)`: `{var}_p_gt0` … `{var}_n_draws`
+        (`forecast.summarize.draws`). Raises ValueError on non-prediction data.
         """
         if not self.is_prediction:
-            raise ValueError(
-                "HDI and MAP calculation only valid for prediction dataframes"
-            )
-        if not 0 < alpha < 1:
-            raise ValueError(f"Alpha must be between 0 and 1, got {alpha}")
+            raise ValueError(NEEDS_DRAWS)
 
         # Row-count, not `.empty`: post-S4d a prediction `.dataframe` carries the index
         # but zero columns (sample cells live in `_sample_store`), and a 0-column frame
@@ -1285,68 +1251,33 @@ class _GridDataset:
                 raise ValueError(f"Sample indices must be between 0 and {max_sample}")
             sample_indices = sample_idx_l
 
-        # ADR-025 reduction (#222/S4): per var, each month's rows collapse to MAP + the three
-        # FIXED HDIs (schema.MASSES = 50/90/95) + severe_scenario. `alpha` no longer selects the
-        # interval — the levels are fixed config, not consumer-settable; it is accepted-but-unused.
-        # Raw sample min/max are dropped (replaced by severe_scenario). Columns are var-keyed here
-        # (`{var}_map`, …); the consumer sb/ns/os rename is a boundary transform applied on the
-        # served response, not in the reduction (it runs on arbitrary vars, incl. fixtures).
-        masses = schema.MASSES
-        thresholds = schema.EXCEEDANCE_THRESHOLDS
-        acc = {
-            v: {"map": [], "severe": [], "bimodality": [],
-                "lower": {m: [] for m in masses}, "upper": {m: [] for m in masses},
-                "exceedance": {c: [] for c in thresholds}}
-            for v in selected_vars
-        }
+        # Per target, each month's rows are summarised in one call (`summarize_draws`), streamed
+        # a month at a time so one month of cells is resident, not the whole grid. Columns are
+        # named by the target here; the rename to the outcome code happens where it is served.
+        acc = {v: {q: [] for q in schema.SUMMARY_QUANTITIES} for v in selected_vars}
         for month_id in ordered_months:
             for var_name in selected_vars:
                 block = self._prediction_month_block(
                     month_id, var_name, entity_indices, sample_indices
                 )  # (n_entity, n_samples) float64
-                cr = collapse(
-                    block, masses=masses, enforce_non_negative=enforce_non_negative,
-                    thresholds=thresholds,
-                )
-                # collapse already NaN-fills all-NaN rows — no explicit mask needed.
-                acc[var_name]["map"].append(cr.map)
-                acc[var_name]["severe"].append(cr.severe)
-                acc[var_name]["bimodality"].append(cr.bimodality)
-                for m in masses:
-                    acc[var_name]["lower"][m].append(cr.lower(m))
-                    acc[var_name]["upper"][m].append(cr.upper(m))
-                for c in thresholds:
-                    acc[var_name]["exceedance"][c].append(cr.exceedance[c])
+                for q, values in summarize_draws(block).items():
+                    acc[var_name][q].append(values)
 
-        # An empty month selection (e.g. `time_ids=[]`) yields empty `(0, n_entity)` stats — the
-        # old whole-grid path returned an empty DataFrame here, not a 500; `np.stack([])` would
-        # raise, so build the empty blocks explicitly.
+        # An empty month selection (e.g. `time_ids=[]`) yields empty `(0, n_entity)` stats, not a
+        # 500; `np.stack([])` would raise, so build the empty blocks explicitly.
         n_entity_sub = len(entity_indices) if entity_indices is not None else len(self._entity_values)
 
         def _stack(rows):
             return (np.stack(rows, axis=0) if ordered_months
                     else np.empty((0, n_entity_sub), dtype=np.float64))
 
-        results = []
-        for var_name in selected_vars:
-            hdi = {
-                m: (_stack(acc[var_name]["lower"][m]), _stack(acc[var_name]["upper"][m]))
-                for m in masses
-            }
-            exceedance = {c: _stack(acc[var_name]["exceedance"][c]) for c in thresholds}
-            results.append(
-                self._create_series_value_dataframe(
-                    var_name,
-                    _stack(acc[var_name]["map"]),
-                    _stack(acc[var_name]["severe"]),
-                    _stack(acc[var_name]["bimodality"]),
-                    hdi,
-                    time_ids,
-                    entity_ids,
-                    exceedance=exceedance,
-                )
+        results = [
+            self._create_series_value_dataframe(
+                var_name, {q: _stack(acc[var_name][q]) for q in schema.SUMMARY_QUANTITIES},
+                time_ids, entity_ids,
             )
-
+            for var_name in selected_vars
+        ]
         return pd.concat(results, axis=1)
 
     def _analyze_samples(
