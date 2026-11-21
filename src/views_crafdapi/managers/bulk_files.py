@@ -10,9 +10,11 @@ history's direct download). Every key and the last-good fallback load the same d
 same id, so they share one file. A dataset without an id is never matched to a kept file: its file
 is built for that one request and removed after it is sent.
 
-When a file for a new forecast or history is built, the files of every other delivery are removed,
-including any left by an earlier process. A download of an old file that has already started keeps
-reading it (on Linux an open file stays readable after it is removed).
+The loader (`forecast_loader.py`) builds the files of a new delivery before it hands that delivery
+to the routes, then removes the files of every other delivery, including any left by an earlier
+process (`remove_other_deliveries`). A download of an old file that has already started keeps
+reading it (on Linux an open file stays readable after it is removed). The routes only read files,
+or build a missing one; they never remove any.
 """
 
 from __future__ import annotations
@@ -87,13 +89,22 @@ class BulkFiles:
             Path(scratch).unlink(missing_ok=True)
             raise
         logger.info("bulk file built: %s", path.name)
-        self._remove_other_deliveries(delivery)
         return path, True
 
-    def _remove_other_deliveries(self, delivery: str) -> None:
+    def remove_other_deliveries(self, keep) -> None:
+        """Remove the kept files of every delivery except those in `keep`, a list of
+        (forecast, history) dataset pairs. Files built for one request are left to it."""
+        names = set()
+        for forecast_ds, historical_ds in keep:
+            ids = (source_id(forecast_ds), source_id(historical_ds))
+            if None not in ids:
+                names.add(f"__{ids[0]}_{ids[1]}.parquet")
+        if not names or not self._directory.exists():
+            return
         for old in self._directory.glob("*.parquet"):
-            if not old.name.endswith(f"__{delivery}.parquet") and not old.name.endswith(".once.parquet"):
-                old.unlink(missing_ok=True)
+            if old.name.endswith(".once.parquet") or any(old.name.endswith(n) for n in names):
+                continue
+            old.unlink(missing_ok=True)
 
     def clear(self) -> None:
         """Remove every kept file (used by tests)."""

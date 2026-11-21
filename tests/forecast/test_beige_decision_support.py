@@ -26,7 +26,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from tests.conftest import make_fao_df
+from tests.conftest import make_fao_df, start_loader
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.forecast.serialize import schema
 from views_crafdapi.managers.api import CrafdApiManager
@@ -69,6 +69,7 @@ def beige_client(tmp_path):
         "type": "sampled_forecast_manifest", "category": "forecast", "name": "un_crafd"}
     mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: pm
     mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: MagicMock()
+    start_loader(mgr, "test-api-key", pm)   # loaded before the first request (ADR-044)
     return TestClient(mgr.app)
 
 

@@ -1,6 +1,6 @@
 # ADR-040: The kinds of key in CRAF'd's Appwrite project
 
-**Status:** Accepted
+**Status:** Accepted. Amended 2026-11-21: the open question below is decided by ADR-044 (a third kind of key, the server's own read key `crafdapi-server`).
 **Date:** 2026-11-17
 **Deciders:** Simon (PRIO), Claude Code
 **Supersedes:** ADR-038 (the scopes a caller key needs, written for the old shared project)
@@ -39,12 +39,20 @@ There are two kinds of key in CRAF'd's project. There are no others.
 
 Nobody but the delivery writes, so no reader key ever has a write scope.
 
-## Open
+## Open (decided 2026-11-21, ADR-044)
 
-**Does the server need a key of its own?** Today it does not: each request is answered with the
-caller's own key. The code plan includes loading the forecast when the server starts (#208). At
-start there is no caller, so the server would need a reader key of its own, and partner keys would
-only decide who gets in. That choice belongs to #208, and when it is made it amends this ADR.
+**Does the server need a key of its own?** Yes. The service loads the forecast at start and when a
+new delivery appears, before any partner asks, so it reads storage with a third kind of key:
+
+3. **The server's read key,** one per server, `crafdapi-server`.
+   - Scopes: exactly `files.read` and `rows.read`, proved with a real request before it goes live.
+   - Expiry: one year, not on the same day as FAO's server key (2027-10-29); the first is planned to
+     expire on 2027-05-21.
+   - Kept on the server in a file of its own, apart from the other settings, and in Bitwarden.
+
+Partner (reader) keys now only decide who gets in; the service no longer reads storage with them.
+They keep their three scopes, because the key check lists buckets (`buckets.read`); whether a
+smaller set would do is not measured.
 
 ## Consequences
 

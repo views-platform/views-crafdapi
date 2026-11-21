@@ -4,6 +4,8 @@ import pandas as pd
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from pathlib import Path
+import asyncio
+import threading
 import json
 import os
 import re
@@ -112,6 +114,12 @@ def _refuse_unknown_level_or_outcome(level: str, outcome: str) -> None:
             status_code=404,
             detail=f"Unknown outcome {outcome!r}. Outcomes: {', '.join(schema.SERIES)}",
         )
+
+
+def _forecast_made_in(forecast_ds) -> str:
+    """The month the forecast was made in, written `2026-07`: its first month. The newest
+    recorded month is the month the forecast is made in, and the forecast starts there."""
+    return month_id_to_date(outcome_table.forecast_months(forecast_ds)[0])
 
 
 def _refuse_outcome_not_forecast(forecast_ds, outcome: str) -> None:
@@ -250,6 +258,7 @@ def _validate_appwrite_env() -> dict[str, str]:
 from views_crafdapi.forecast.serialize import outcome_table, schema  # noqa: E402
 from views_crafdapi.forecast.serialize.bulk_file import write_bulk_file  # noqa: E402
 from views_crafdapi.managers.bulk_files import BulkFiles  # noqa: E402
+from views_crafdapi.managers.forecast_loader import ForecastLoader, check_minutes, read_server_key  # noqa: E402
 
 class CrafdApiManager(APIManager):
     """
@@ -292,31 +301,20 @@ class CrafdApiManager(APIManager):
             api_key_hash_fn=self._get_api_key_hash,
             check_staleness_fn=self._check_staleness,
         )
+        # ADR-044: the forecast is loaded with the server's own read key, at start and when a new
+        # delivery appears, never in a partner's request.
+        self._loader = ForecastLoader(
+            self._dataset_service, self._disk_cache, self._bulk_files,
+            read_server_key(), self._make_server_manager,
+        )
 
-        # Define lifespan context manager before creating FastAPI app
-        @asynccontextmanager
-        async def lifespan(app: FastAPI):
-            # Startup logic
-            logger.info("CRAF'd API is starting up...")
-            # Add any startup logic here (e.g., cache warming, DB connections)
-            
-            yield
-            
-            # Shutdown logic
-            logger.info("CRAF'd API is shutting down...")
-            # Clear manager cache
-            self._manager_cache.clear()
-            self._dataframe_cache.clear()
-            self._file_cache.clear()
-            logger.info("Cleared all caches")
-        
         self.app = FastAPI(
             title="VIEWS-CRAF'd Conflict Forecast API",
             description="VIEWS historical and forecasted fatalities data and statistical analysis for the Complex Risk Analytics Fund (CRAF'd).",
             # Derived, not literal: a hardcoded copy here drifted from pyproject
             # and is one more thing to remember at release time.
             version=version_info()["version"],
-            lifespan=lifespan
+            lifespan=self._lifespan
         )
         
         self.appwrite_manager: Optional[AppWriteFileManager] = None
@@ -333,6 +331,28 @@ class CrafdApiManager(APIManager):
         
         # Register routes
         self._register_routes()
+
+    @asynccontextmanager
+    async def _lifespan(self, app: FastAPI):
+        """Start the loader at start-up (ADR-044) and stop it at shutdown."""
+        logger.info("CRAF'd API is starting up...")
+        # Requests are answered at once; until the first load is complete they get a 503.
+        loading = asyncio.create_task(self._loader.run(check_minutes()))
+
+        yield
+
+        # Stop a running load at its next step, and wait a little for it, so the caches are not
+        # cleared under it. A grid file being written finishes first (about 40 seconds).
+        self._loader.stop()
+        try:
+            await asyncio.wait_for(loading, timeout=60)
+        except asyncio.TimeoutError:
+            logger.warning("the forecast load did not stop within 60 seconds")
+        logger.info("CRAF'd API is shutting down...")
+        self._manager_cache.clear()
+        self._dataframe_cache.clear()
+        self._file_cache.clear()
+        logger.info("Cleared all caches")
 
     @classmethod
     def from_config(
@@ -370,11 +390,22 @@ class CrafdApiManager(APIManager):
             api_key_hash_fn=instance._get_api_key_hash,
             check_staleness_fn=instance._check_staleness,
         )
+        # Tests give the loader a stand-in key and store (`server_key` in the config).
+        instance._loader = ForecastLoader(
+            instance._dataset_service, instance._disk_cache, instance._bulk_files,
+            config.get("server_key"), instance._make_server_manager,
+        )
 
         return instance
 
     def _init_caches(self):
         self._manager_cache: LRUCache = LRUCache(maxsize=100)
+        # Partner keys found valid, by key hash. An entry lasts one minute, so a key deleted in
+        # Appwrite stops working within a minute (service specification: "within minutes").
+        self._valid_keys: TTLCache = TTLCache(maxsize=1000, ttl=60)
+        # FastAPI runs a plain `def` dependency in a worker thread, and the cache is not safe to
+        # change from two threads at once.
+        self._valid_keys_lock = threading.Lock()
         self._dataframe_cache: TTLCache = TTLCache(maxsize=50, ttl=4 * 3600)
         self._file_cache: LRUCache = LRUCache(maxsize=20)
 
@@ -520,6 +551,32 @@ class CrafdApiManager(APIManager):
         
         return self._manager_cache[api_key_hash]["prediction"]
 
+    def _make_server_manager(self, server_key: str) -> PredictionStoreManager:
+        """The store reader the loader uses, with the server's own key (ADR-044)."""
+        return PredictionStoreManager(self._create_appwrite_config(server_key))
+
+    def _check_partner_key(self, x_api_key: str = Header(..., description="Your API key")) -> None:
+        """Let a partner in, or answer 401. The key is checked with the store, and a valid key is
+        remembered for one minute. Partner keys only decide who gets in; the data is read with
+        the server's key (ADR-044)."""
+        key_hash = self._get_api_key_hash(x_api_key)
+        with self._valid_keys_lock:
+            if key_hash in self._valid_keys:
+                return
+        self._validate_api_key(x_api_key)   # outside the lock: a network call
+        with self._valid_keys_lock:
+            self._valid_keys[key_hash] = True
+
+    def _served(self):
+        """The loaded forecast and history the routes answer from; 503 before the first load."""
+        served = self._loader.served()
+        if served is None:
+            raise HTTPException(
+                status_code=503,
+                detail="No forecast is available right now. Try again later.",
+            )
+        return served
+
     def _get_latest_dataframe(self, manager: PredictionStoreManager, x_api_key: str, category: str, force_refresh: bool = False) -> pd.DataFrame:
         """Delegate the data-fetch pipeline to the composed DatasetService (epic #144 / S2)."""
         return self._dataset_service.get_latest_dataframe(manager, x_api_key, category, force_refresh)
@@ -528,25 +585,18 @@ class CrafdApiManager(APIManager):
         """Delegate the data-fetch pipeline to the composed DatasetService (epic #144 / S2)."""
         return self._dataset_service.get_latest_dataset(manager, x_api_key, category, force_refresh)
 
-    def _history_holding(self, manager, x_api_key: str, outcome: str, route: str):
-        """The history, which must be loadable and hold `outcome`; otherwise a 503. Served empty,
-        the recorded deaths would read as "nothing recorded", so the answer is refused until the
-        history is back. A refused key stays a 401: it is not a missing history (C-268), and the
-        store's 403 arrives as this 401 too (`refuse_if_unauthorized`)."""
-        try:
-            historical_ds = self._get_latest_dataset(manager, x_api_key, "historical")
-            has_outcome = outcome_table.target_for(historical_ds, outcome) is not None
-        except HTTPException as e:
-            if e.status_code == 401:
-                raise
-            logger.error("%s: history unavailable (%s): %s", route, e.status_code, e.detail)
-            has_outcome = False
-        if not has_outcome:
+    @staticmethod
+    def _history_holding(served, outcome: str):
+        """The loaded history, which must hold `outcome`; otherwise a 503. Served empty, the
+        recorded deaths would read as "nothing recorded", so the answer is refused until the
+        history is back."""
+        history = served.history
+        if history is None or outcome_table.target_for(history, outcome) is None:
             raise HTTPException(
                 status_code=503,
                 detail="The recorded deaths are unavailable right now. Try again later.",
             )
-        return historical_ds
+        return history.copy()
 
     def _register_routes(self):
         """Register all API routes."""
@@ -587,8 +637,7 @@ class CrafdApiManager(APIManager):
         async def get_bulk(
             level: str,
             outcome: str,
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: PredictionStoreManager = Depends(self._get_prediction_manager),
+            _: None = Depends(self._check_partner_key),
         ):
             """The whole table of one outcome at one level, as one Parquet file (#203).
 
@@ -599,10 +648,11 @@ class CrafdApiManager(APIManager):
             as the slice is.
             """
             _refuse_unknown_level_or_outcome(level, outcome)
+            served = self._served()
             try:
-                forecast_ds = self._get_latest_dataset(manager, x_api_key, "forecast")
+                forecast_ds = served.forecast.copy()
                 _refuse_outcome_not_forecast(forecast_ds, outcome)
-                historical_ds = self._history_holding(manager, x_api_key, outcome, "bulk")
+                historical_ds = self._history_holding(served, outcome)
                 path, kept = self._bulk_files.get(
                     forecast_ds, historical_ds, level, outcome,
                     build=lambda p: write_bulk_file(p, forecast_ds, historical_ds, level, outcome),
@@ -611,6 +661,7 @@ class CrafdApiManager(APIManager):
                     path,
                     media_type="application/vnd.apache.parquet",
                     filename=f"{outcome}_{level}.parquet",
+                    headers={"X-Forecast-Made-In": _forecast_made_in(forecast_ds)},
                     background=None if kept else BackgroundTask(path.unlink, missing_ok=True),
                 )
             except HTTPException:
@@ -631,8 +682,7 @@ class CrafdApiManager(APIManager):
             places: Optional[str] = Query(None, description="Place ids at this level, comma-separated"),
             months: Optional[str] = Query(None, description="Months written year-month (2027-01), comma-separated"),
             columns: Optional[str] = Query(None, description="Summary column names, comma-separated"),
-            x_api_key: str = Header(..., description="Appwrite API Key"),
-            manager: PredictionStoreManager = Depends(self._get_prediction_manager),
+            _: None = Depends(self._check_partner_key),
         ):
             """A slice of one outcome at one level: four options, as the specification says.
 
@@ -647,8 +697,9 @@ class CrafdApiManager(APIManager):
                 asked_columns = _parse_names(columns)
             except ValueError as e:
                 raise HTTPException(status_code=422, detail=str(e))
+            served = self._served()
             try:
-                forecast_ds = self._get_latest_dataset(manager, x_api_key, "forecast")
+                forecast_ds = served.forecast.copy()
                 _refuse_outcome_not_forecast(forecast_ds, outcome)
                 value_columns = outcome_table.value_columns(outcome)
                 if asked_columns is not None:
@@ -665,7 +716,7 @@ class CrafdApiManager(APIManager):
                 # would read as "nothing recorded", so the slice is refused until it is back.
                 historical_ds = None
                 if outcome_table.needs_history(forecast_ds, parsed_months):
-                    historical_ds = self._history_holding(manager, x_api_key, outcome, "slice")
+                    historical_ds = self._history_holding(served, outcome)
 
                 identity = outcome_table.place_identity(forecast_ds, level)
                 if parsed_places is not None:
@@ -719,6 +770,7 @@ class CrafdApiManager(APIManager):
                 rows = table.to_json(orient="records", double_precision=15)
                 body = (
                     f'{{"level": {json.dumps(level)}, "outcome": {json.dumps(outcome)}, '
+                    f'"forecast_made_in": {json.dumps(_forecast_made_in(forecast_ds))}, '
                     f'"columns": {json.dumps(table.columns.tolist())}, "rows": {rows}}}'
                 )
                 return Response(content=body, media_type="application/json")
@@ -751,6 +803,16 @@ class CrafdApiManager(APIManager):
                     "status": "healthy",
                     "appwrite_connected": result.success,
                 }
+                # What partners are answered from (ADR-044). Nothing loaded yet is degraded:
+                # every data request answers 503 until the first load is complete.
+                loaded = self._loader.served()
+                health["forecast_loaded"] = loaded is not None
+                if loaded is None:
+                    health["status"] = "degraded"
+                if self._loader.failing_since() is not None:
+                    # The data already loaded is still served; the newest delivery is not in it.
+                    health["status"] = "degraded"
+                    health["forecast_loading"] = "the newest delivery could not be loaded; the previous one is served"
                 # S3 (#246, C-50): a stale forecast degrades health rather than logging silently.
                 # #290 sibling: freshness must be about the SERVED / newest-manifested run, not the
                 # store's newest metadata record — which can still be a superseded legacy artifact
@@ -758,7 +820,7 @@ class CrafdApiManager(APIManager):
                 # is being served. Prefer the served run's created_at, then the newest manifest's
                 # completion time, then (only if neither exists) the legacy provenance record.
                 try:
-                    served = self._dataset_service.served_forecast_provenance()
+                    served = loaded.provenance if loaded else None
                     created_at = served.get("created_at") if served else None
                     if not created_at:
                         try:
@@ -789,13 +851,14 @@ class CrafdApiManager(APIManager):
                 # S4 (#249, ADR-033 §6): a bounded grace fallback (the newest manifested run was
                 # refused, a last-good run is being served) is a degraded state — surface it and flip
                 # status, even when the served last-good is itself still within the freshness SLA.
-                serving_state = self._dataset_service.forecast_serving_state()
+                # Taken when the served data was handed over, so it describes what partners get.
+                serving_state = loaded.serving_state if loaded else None
                 if serving_state is not None:
                     health["forecast_serving_state"] = serving_state
                     # `cached_unverified` records that the *last* forecast was served while the
                     # store could not be asked. Once this probe reaches the store again it
                     # describes a past response, not the service: show it, but do not page on
-                    # it — the next forecast request re-verifies the cache (#158 review).
+                    # it — the loader's next check re-verifies the cache (#158 review, ADR-044).
                     unverified_but_store_back = (
                         serving_state.get("serving") == "cached_unverified" and result.success
                     )
@@ -809,7 +872,7 @@ class CrafdApiManager(APIManager):
                 # C-282 (#170): which build wrote the forecast being served. After a deploy the
                 # slot can still be the previous build's; this says whether a fix is in effect.
                 # Reported, not judged: an older writer is not a fault and does not degrade.
-                served_entry = self._dataset_service.served_forecast_entry()
+                served_entry = loaded.entry if loaded else None
                 if served_entry is not None:
                     health["served_entry"] = served_entry
                 return health

@@ -116,6 +116,19 @@ PY
     echo "Then run:  bash bootstrap.sh part3"
 }
 
+serverkey() {
+    echo "== The server's read key (crafdapi-server, ADR-044) =="
+    # The key comes from the environment, where you put it with `read -rs`; it is never shown.
+    # It goes into a file of its own, private to the service account, apart from .env.crafdapi.
+    : "${APPWRITE_CRAFDAPI_SERVER_API_KEY:?FATAL: put the server key in the environment first (RELEASE_RUNBOOK.md, section 5)}"
+    _tmp_key="$(sudo mktemp "${SVC_HOME}/.env.crafdapi-server-key.XXXXXX")"
+    sudo chmod 600 "$_tmp_key"
+    printf 'APPWRITE_CRAFDAPI_SERVER_API_KEY=%s\n' "${APPWRITE_CRAFDAPI_SERVER_API_KEY}" | sudo tee "$_tmp_key" >/dev/null
+    sudo chown "${SVC_USER}:${SVC_USER}" "$_tmp_key"
+    sudo mv "$_tmp_key" "${SVC_HOME}/.env.crafdapi-server-key"
+    echo "server key file written (value not displayed). Restart the service to use it."
+}
+
 part3() {
     echo "== Part 3: install the systemd service (it is not started yet) =="
     sudo cp "${REPO_DIR}/deployment/views-crafdapi.service" /etc/systemd/system/views-crafdapi.service
@@ -127,5 +140,6 @@ case "${1:-}" in
     part1) part1 ;;
     part2) part2 ;;
     part3) part3 ;;
-    *) echo "usage: bash bootstrap.sh {part1|part2|part3}" >&2; exit 1 ;;
+    serverkey) serverkey ;;
+    *) echo "usage: bash bootstrap.sh {part1|part2|part3|serverkey}" >&2; exit 1 ;;
 esac

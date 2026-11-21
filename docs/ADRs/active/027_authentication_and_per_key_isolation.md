@@ -1,6 +1,6 @@
 # ADR-027: Authentication and Per-API-Key Isolation
 
-**Status:** Amended (2026-11-18). §2–§3 (a separate copy of the data per key) are superseded: every partner sees the same forecast (service specification; ADR-040), and the per-key copies go with #208. §1 (the caller's key is passed to Appwrite) stays true until #208 decides whether the server has a key of its own.
+**Status:** Amended (2026-11-21, ADR-044): §1 is superseded as well. The caller's key now only decides who gets in, checked with Appwrite and remembered for one minute; the service reads storage with its own key, and all partners are served one loaded copy. Earlier amendment (2026-11-18). §2–§3 (a separate copy of the data per key) are superseded: every partner sees the same forecast (service specification; ADR-040), and the per-key copies go with #208. §1 (the caller's key is passed to Appwrite) stays true until #208 decides whether the server has a key of its own.
 
 > Earlier status: Accepted — amended 2026-10-16 (§4: what revocation does and does not reach, #159)
 **Date:** 2026-06-26

@@ -21,6 +21,10 @@ Type=exec
 User=views-crafdapi-deploy
 WorkingDirectory=/home/views-crafdapi-deploy/views-crafdapi
 EnvironmentFile=/home/views-crafdapi-deploy/.env.crafdapi
+# The server's own read key (crafdapi-server, ADR-044), in a file of its own, apart from the other
+# settings. The leading "-" lets the service start without it: it then loads nothing, answers 503,
+# and logs why. Written by `bootstrap.sh serverkey`.
+EnvironmentFile=-/home/views-crafdapi-deploy/.env.crafdapi-server-key
 ExecStartPre=/usr/bin/env bash /home/views-crafdapi-deploy/views-crafdapi/scripts/checkout-deploy-tag.sh
 ExecStart=/home/views-crafdapi-deploy/views-crafdapi/.venv/bin/uvicorn \
     views_crafdapi.managers.api:create_app \

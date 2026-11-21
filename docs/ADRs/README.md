@@ -126,6 +126,9 @@ These must comply with the constitutional ADRs above.
 - **[ADR-043](active/043_bulk_files.md)** — The bulk files: what each one holds, when it is built, and when it is refused  
   One Parquet file per outcome and level, holding the recorded months and the forecast months (each row only one kind); built on the first download after a new delivery and kept on disk, named by the delivery's storage identifiers; refused (503) when the recorded deaths cannot be loaded.
 
+- **[ADR-044](active/044_the_service_loads_the_forecast_itself.md)** — The service loads the forecast itself, with a read key of its own  
+  The server holds its own read key (`crafdapi-server`: `files.read`, `rows.read`, one year, kept in a file of its own) and loads each new delivery in the background, building the bulk files before switching requests to it. Partner keys only decide who gets in (checked, remembered one minute). Every answer names the month the forecast was made in.
+
 ---
 
 ## Recommended Adoption Order

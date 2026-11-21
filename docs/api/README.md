@@ -119,8 +119,9 @@ the forecast are recorded months: they have the recorded deaths, and their summa
 Forecast months have the summary columns, and their recorded-deaths column is empty. To keep only
 one kind, filter on whichever column is filled, or on `month_id`.
 
-The first download after a new forecast arrives builds the file and can take about a minute for the
-grid level; later downloads are sent straight away.
+The month the forecast was made in is sent with the file, in the response header
+`X-Forecast-Made-In` (for example `2026-07`). It is also the first month whose forecast columns are
+filled.
 
 ## Slices (a smaller piece)
 
@@ -138,7 +139,8 @@ GET /slice/{level}/{outcome}?places=...&months=...&columns=...
 
 Place names and the month are always included. Every row has a `month` column written the same
 way, `2027-01`, and VIEWS' own month number, `month_id`. Grid rows also give the cell's centre,
-`latitude` and `longitude`.
+`latitude` and `longitude`. The answer also says which month the forecast was made in, as
+`forecast_made_in` (for example `2026-07`).
 
 Example: state-based violence in Sudan and South Sudan, for two months, only the chance of more
 than 25 deaths.

@@ -905,6 +905,9 @@ class DatasetService:
         if not file_bytes:
             raise HTTPException(status_code=500, detail=f"Downloaded file {file_id} is empty")
         self._file_cache[file_id] = {"data": file_bytes, "timestamp": current_time}
+        # With the server key this line, and the loader's store-check line, are the two requests
+        # that prove the key's two scopes (files.read here; ADR-044).
+        logger.info("downloaded %s: %d bytes", file_id, len(file_bytes))
         return file_bytes
 
     def _guard_run_capacity(self, manifest, first_shard_state) -> None:

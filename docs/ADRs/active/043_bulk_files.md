@@ -1,6 +1,6 @@
 # ADR-043: The bulk files: what each one holds, when it is built, and when it is refused
 
-**Status:** Accepted
+**Status:** Accepted. Amended 2026-11-21 (ADR-044): the files are now built when a new delivery is loaded, before it is served, so the first consequence below (a wait on the first download) no longer applies.
 **Date:** 2026-11-21
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** the service specification (`docs/SERVICE_SPECIFICATION.md`), the partner guide

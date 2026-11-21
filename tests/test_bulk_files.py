@@ -42,9 +42,12 @@ def test_a_new_delivery_rebuilds_and_removes_the_old_files(tmp_path, changed):
     old_a, _ = store.get(_dataset(1, "fc1"), _dataset(2, "h1"), "admin1", "sb", build)
     old_b, _ = store.get(_dataset(1, "fc1"), _dataset(2, "h1"), "grid", "os", build)
     ids = ("fc2", "h1") if changed == "forecast" else ("fc1", "h2")
-    new, _ = store.get(_dataset(1, ids[0]), _dataset(2, ids[1]), "admin1", "sb", build)
+    fc, h = _dataset(1, ids[0]), _dataset(2, ids[1])
+    new, _ = store.get(fc, h, "admin1", "sb", build)
     assert build.count == 3 and new.read_text() == "build 3"
-    assert not old_a.exists() and not old_b.exists()
+    assert old_a.exists() and old_b.exists()        # building never removes: a route may send them
+    store.remove_other_deliveries([(fc, h)])             # the loader, after the hand-over
+    assert not old_a.exists() and not old_b.exists() and new.exists()
 
 
 def test_each_level_and_outcome_is_its_own_file(tmp_path):
@@ -81,7 +84,9 @@ def test_a_failed_build_leaves_no_file_and_the_next_request_builds_again(tmp_pat
 def test_files_left_by_an_earlier_process_are_removed_with_the_next_delivery(tmp_path):
     (tmp_path / "sb_grid__old_old.parquet").write_text("left behind")
     store = BulkFiles(tmp_path)
-    store.get(_dataset(1, "fc1"), _dataset(2, "h1"), "admin1", "sb", _Builds())
+    fc, h = _dataset(1, "fc1"), _dataset(2, "h1")
+    store.get(fc, h, "admin1", "sb", _Builds())
+    store.remove_other_deliveries([(fc, h)])
     assert not (tmp_path / "sb_grid__old_old.parquet").exists()
 
 
@@ -109,7 +114,9 @@ def test_a_new_delivery_leaves_one_request_files_being_sent(tmp_path):
     """A file built for one request belongs to that request until it is sent."""
     store, build = BulkFiles(tmp_path), _Builds()
     once, _ = store.get(_dataset(1, None), _dataset(2, "h1"), "admin1", "sb", build)
-    store.get(_dataset(1, "fc1"), _dataset(2, "h1"), "admin1", "sb", build)
+    fc, h = _dataset(1, "fc1"), _dataset(2, "h1")
+    store.get(fc, h, "admin1", "sb", build)
+    store.remove_other_deliveries([(fc, h)])
     assert once.exists()
 
 
