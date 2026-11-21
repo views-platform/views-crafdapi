@@ -97,7 +97,8 @@ Fetches and caches the latest prediction dataset.
 def _register_routes(self) -> None
 ```
 
-Registers the service's routes: `/ping`, `/version`, `/health`, `/data/forecast/bulk`, and one
+Registers the service's routes: `/ping`, `/version`, `/health`, one bulk route,
+`/bulk/{level}/{outcome}` (built by `forecast/serialize/bulk_file.py`, kept by `bulk_files.py`), and one
 slice route, `/slice/{level}/{outcome}`, for every level (`grid`, `admin1`, `country`) and every
 outcome. The slice takes four options (`places`, `months`, `columns`; the outcome is in the path)
 and builds its table with `forecast/serialize/outcome_table.py`. No partner request can force a

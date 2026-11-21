@@ -78,19 +78,10 @@ def test_identity_sources_are_real_metadata_columns():
         assert source in meta, f"{consumer} maps to {source!r}, absent from _METADATA_COLS"
 
 
-# --- the admin-1 bulk file's columns ----------------------------------------------------
+# --- one outcome's value columns -------------------------------------------------------
 def test_series_value_columns_are_the_eleven_in_order():
     assert schema.series_value_columns("sb") == [
         "sb_p_gt0", "sb_p_gt25", "sb_p_gt100", "sb_p_gt500", "sb_p_gt1000",
         "sb_mean", "sb_mean_if_any", "sb_median_if_any", "sb_severe_scenario",
         "sb_actual", "sb_n_draws",
     ]
-
-
-def test_bulk_layout_is_exactly_39_unique_columns():
-    cols = schema.bulk_columns()
-    assert len(cols) == len(set(cols)) == 39
-    assert cols[:6] == list(schema.IDENTITY_COLUMNS)
-    assert cols[6:17] == schema.series_value_columns("sb")
-    assert cols[17:28] == schema.series_value_columns("ns")
-    assert cols[28:39] == schema.series_value_columns("os")

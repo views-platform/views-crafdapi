@@ -68,7 +68,7 @@
 ## 8. Test Alignment
 
 - `tests/forecast/test_facade.py` — alias, `isinstance`, pickle round-trip, `copy()` buffer-sharing.
-- `tests/forecast/test_served_output_golden.py` — pins the served output (the var-keyed reduction) across the 3 served levels (pg, country, gaul1); re-baselined to the ADR-025 schema in #222/S4–S5 (`reports/adr025_output_schema/rebaseline_diff.md`). `tests/forecast/test_consumer_naming.py` pins the boundary `sb/ns/os` rename; `tests/forecast/test_bulk_parquet.py` the admin-1 bulk artifact.
+- `tests/forecast/test_served_output_golden.py` — pins the served output (the var-keyed reduction) across the 3 served levels (pg, country, gaul1); re-baselined to the ADR-025 schema in #222/S4–S5 (`reports/adr025_output_schema/rebaseline_diff.md`). `tests/forecast/test_consumer_naming.py` pins the boundary `sb/ns/os` rename; `tests/forecast/test_bulk_file.py` the bulk files.
 - `tests/forecast/test_*` — the per-module units (ingestion, frames, summarize, geography, aggregate, serialize).
 - `tests/test_aggregation.py`, `tests/test_views_frames_parity.py`, `tests/test_handler_statistics.py`, `tests/test_api_endpoints.py`.
 

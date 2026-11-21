@@ -629,7 +629,7 @@ class ForecastDataset(_GridDataset):
             )
 
         if len(out_index) == 0:
-            # Shaped, not bare: `build_bulk_table` calls `.index.set_names([...])` on this and
+            # Shaped, not bare: `outcome_table` calls `.index.set_names([...])` on this and
             # a (0, 0) RangeIndex frame fails there with an error naming neither cause.
             return pd.DataFrame(
                 {

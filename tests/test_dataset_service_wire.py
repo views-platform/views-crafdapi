@@ -128,6 +128,25 @@ def test_forecast_no_manifest_fails_visible_but_historical_still_legacy():
     mgr.get_latest_provenance.assert_called_once()
 
 
+def test_a_history_downloaded_directly_carries_its_store_file_id():
+    """The bulk files are named by the store's file id of the history (#203). A history loaded
+    without it would get a file built for every request, never kept."""
+    df = make_fao_df()
+    buf = io.BytesIO()
+    df.to_parquet(buf)
+    svc = _service()
+    mgr = MagicMock()
+    prov = MagicMock(file_id="legacy_1", source="datafactory", methodology_version="v1",
+                     file_hash="h", created_at="2026", filename="legacy.parquet")
+    prov.to_dict.return_value = {"file_id": "legacy_1", "source": "datafactory"}
+    mgr.get_latest_provenance.return_value = prov
+    mgr.get_latest_file_id.return_value = "legacy_1"
+    mgr.download_prediction.return_value = MagicMock(success=True, data={"file_bytes": buf.getvalue()})
+    assert svc.get_latest_dataset(mgr, "key", "historical").source_file_id == "legacy_1"
+    # The warm path hands out a copy of the same loaded dataset, and keeps the id.
+    assert svc.get_latest_dataset(mgr, "key", "historical").source_file_id == "legacy_1"
+
+
 def _legacy_manager_with_manifest(run, *, manifest_bytes=None):
     """A manager that returns a manifest whose run cannot be served (e.g. a malformed/corrupt
     manifest) AND has a working legacy path — to prove fail-safe fallback."""

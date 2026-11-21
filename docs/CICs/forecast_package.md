@@ -39,16 +39,16 @@ This is a consolidated, brief contract for the package; the facade contract is `
 - **`schema`** — the single source of truth for the ADR-025 column contract (Common Closure):
   `MASSES` (50/90/95) + `mass_pct`, `SERIES` (`sb`/`ns`/`os`) + `series_of(var)` (fail-loud),
   `IDENTITY_SOURCE` (consumer identity ← GAUL metadata; country = admin-0, not M49), the per-series
-  column builders + `bulk_columns()` (the 36-col layout: 33 base + per-series bimodality_flag), and `consumer_column` (the structured,
+  column builders, and `consumer_column` (the structured,
   quantity-scoped rename). Pure names — no pandas/numpy. *One reason: the FAO column contract.*
 - **`json_contract`** — numpy/`CollapseResult` → the served columns: `series_value_dataframe` /
   `series_value_data` / `series_value_column_names` build `{var}_map` + `{var}_hdi{50,90,95}_{lower,upper}`
   + `{var}_severe_scenario`; **`to_consumer_columns(df)`** applies the `{var}_→{series}_` rename at the
   API/bulk boundary. (`map_dataframe`/`hdi_dataframe` remain for the legacy single-HDI shape.)
   *One reason: the output column shape/names (ADR-025).*
-- **`bulk_parquet`** — the ADR-025 admin-1 bulk artifact: `build_bulk_table(forecast_ds, historical_ds)` /
-  `write_bulk_parquet(...)` produce the 45-column wide parquet (6 identity + 3 series x 13) (forecast quantities + historical
-  `actual` summed to admin-1). Its own contract: `BulkParquetWriter.md`. *One reason: the bulk product.*
+- **`outcome_table`** — the table for one outcome at one level, what a slice serves.
+- **`bulk_file`** — that table for every place and month, written as Parquet a few months at a
+  time (#203). *One reason: the bulk product.*
 
 ## `conformance.py` — assert the leaf's published contracts on real faoapi frames (#91)
 - **`assert_frame(frame)`** (frame contract + summarizer contract), **`assert_cross_level_law(index, mapping, target_level)`**, and the pinned **`CONFORMANCE_FLOOR`** (leaf ADR-016). Run as part of the pytest suite (the CI gate) on real forecast/historical frames + the injected GAUL mapping. *One reason: the leaf contract version faoapi is held to.*

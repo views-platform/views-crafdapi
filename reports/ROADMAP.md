@@ -88,7 +88,7 @@ What step 1 actually requires:
 3. **All of it comes back out through the API** — all historical data and all forecasts, with the
    correct columns.
 
-The column **set** is settled: `schema.bulk_columns()` is the authority — 45 columns, 6 identity +
+(2026-11-21: superseded. The column set decided on 2026-11-17 (#204) is in `schema.SUMMARY_QUANTITIES`, and `bulk_columns()` was removed with the nine bulk files, #203.) The column **set** is settled: `schema.bulk_columns()` is the authority — 45 columns, 6 identity +
 3 series × 13 — documented in `docs/api/data_dictionary.md` and reconciled across the repo on
 2026-08-23 (**C-244**, which had the repo carrying three different totals).
 

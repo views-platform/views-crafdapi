@@ -116,7 +116,7 @@ Health
 - GET `/health` — checks the store connection and the age of the served forecast
 
 Bulk download
-- GET `/data/forecast/bulk` — the whole forecast at admin 1, one Parquet file (to become one file per outcome and level, #203)
+- GET `/bulk/{level}/{outcome}` — the whole table of one outcome at one level, one Parquet file: what a slice with no options returns, built once per forecast
 
 Slice
 - GET `/slice/{level}/{outcome}?places=...&months=...&columns=...`

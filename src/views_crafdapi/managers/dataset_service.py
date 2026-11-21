@@ -640,6 +640,7 @@ class DatasetService:
 
         # Update in-memory cache with the processed dataframe from the dataset, keyed on the
         # artifact's own file id (this path is historical-only, so there is no manifest identity).
+        dataset.source_file_id = file_id   # which delivery, for the bulk files (#203)
         cache["data"] = dataset.dataframe
         cache["file_id"] = file_id
         cache["timestamp"] = current_time

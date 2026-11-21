@@ -206,6 +206,9 @@ class CrafdDiskCacheManager:
                 # (POSIX: an in-flight serve's memmap survives a concurrent cache-invalidation
                 # rmtree — the unlinked inode stays live until the mapping is GC'd. Host is Linux.)
                 dataset = ForecastDataset.from_value(value_dir, mmap=True)
+                # Which delivery this is, for files built from it (`BulkFiles`, #203). Copies
+                # of the dataset keep it.
+                dataset.source_file_id = meta.get("file_id")
 
             # C-277 (#168): the bytes passed C-72 when they were written; nothing since has
             # checked they still do. Re-run the same gate, so a disk read can never serve what
