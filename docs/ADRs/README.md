@@ -123,6 +123,9 @@ These must comply with the constitutional ADRs above.
 - **[ADR-025](active/025_fao_output_schema_and_naming.md)** — FAO Output Schema and Column Naming  
   The bulk artifact is a wide admin-1 parquet, **45 columns** (36 as decided here, plus ADR-034 §3's three exceedance columns per series — register C-244): 6 identity (GAUL admin-1 + GAUL admin-0 country + ISO3, `month_id`) + per series (`sb`/`ns`/`os`) `map`, three nested HDIs (50/90/95), `severe_scenario` (mean of the worst 5% — `expected_shortfall`, not max), `bimodality_flag`, and `actual`. Consumer-facing names — no `ged_`/`lr_`/`ln_`/`pred_` prefixes; country is GAUL admin-0 (not M49); `lat`/`lon` at pgm grain only. All raw counts (ADR-024). **Amends Release Note 01** (format + naming). Closes the "no output-schema/naming ADR" gap.
 
+- **[ADR-043](active/043_bulk_files.md)** — The bulk files: what each one holds, when it is built, and when it is refused  
+  One Parquet file per outcome and level, holding the recorded months and the forecast months (each row only one kind); built on the first download after a new delivery and kept on disk, named by the delivery's storage identifiers; refused (503) when the recorded deaths cannot be loaded.
+
 ---
 
 ## Recommended Adoption Order

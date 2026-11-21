@@ -1,6 +1,6 @@
 # ADR-026: API Surface and Resource Model
 
-**Status:** Superseded (2026-11-18) by the service specification, `docs/SERVICE_SPECIFICATION.md` (bulk files and slices). 2026-11-20: the levels `gaul0` and `gaul2` were removed (#205). Later on 2026-11-20 the whole `/{level}/{kind}/{category}/{operation}` grammar below was replaced by one slice route, `/slice/{level}/{outcome}` with levels `grid`, `admin1`, `country` and the options `places`, `months`, `columns` (#204, #206); the bulk route `/data/forecast/bulk` remains until #203. Nothing below describes a route the service still has, except that bulk route.
+**Status:** Superseded (2026-11-18) by the service specification, `docs/SERVICE_SPECIFICATION.md` (bulk files and slices). 2026-11-20: the levels `gaul0` and `gaul2` were removed (#205). Later on 2026-11-20 the whole `/{level}/{kind}/{category}/{operation}` grammar below was replaced by one slice route, `/slice/{level}/{outcome}` with levels `grid`, `admin1`, `country` and the options `places`, `months`, `columns` (#204, #206); the bulk route `/data/forecast/bulk` remained until #203. 2026-11-21: that bulk route was replaced by nine bulk files, `/bulk/{level}/{outcome}` (ADR-043). Nothing below describes a route the service still has.
 
 > Earlier status: Accepted
 **Date:** 2026-06-26
