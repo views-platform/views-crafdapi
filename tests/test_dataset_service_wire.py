@@ -928,3 +928,15 @@ def test_a_configuration_error_is_not_served_around_as_a_lookup_blip():
     with pytest.raises(RuntimeError):
         svc.get_latest_dataframe(mgr, "key", "forecast")
     assert (svc.forecast_serving_state() or {}).get("serving") != "cached_unverified"
+
+
+def test_a_download_logs_its_size(caplog):
+    """With the server key, this line is what proves the key may read files (files.read)."""
+    import logging
+
+    svc = _service()
+    mgr = MagicMock()
+    mgr.download_prediction.return_value = MagicMock(success=True, data={"file_bytes": b"x" * 42})
+    with caplog.at_level(logging.INFO, logger="views_crafdapi.managers.dataset_service"):
+        svc._download_file_bytes(mgr, "file_9", 0.0)
+    assert "downloaded file_9: 42 bytes" in caplog.text

@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from unittest.mock import MagicMock
 
-from tests.conftest import make_fao_df
+from tests.conftest import make_fao_df, start_loader
 from views_crafdapi.managers.api import CrafdApiManager
 from views_crafdapi.managers.appwrite import OperationResult
 from views_crafdapi.data.handlers import ForecastDataset
@@ -78,6 +78,10 @@ def app_client(tmp_path):
     }
     mgr.app.dependency_overrides[mgr._get_prediction_manager] = lambda: mock_pm
     mgr.app.dependency_overrides[mgr._get_appwrite_manager] = lambda: mock_appwrite
+
+    # ADR-044: the loader reads the store with the server's key; here the stand-in store and the
+    # warm entries above, under the same key. Loaded before the first request, as at start.
+    start_loader(mgr, "test-api-key", mock_pm)
 
     client = TestClient(mgr.app)
     return client, mgr, mock_pm
@@ -196,10 +200,8 @@ class TestHealthEndpoint:
         stale = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()  # legacy March record
         fresh = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()     # served rusty run
         mock_pm.get_latest_provenance.return_value = SimpleNamespace(created_at=stale)
-        mgr._dataset_service._last_forecast_provenance = {
-            "mode": "wire", "source": "rusty_bucket", "created_at": fresh,
-        }
-        mgr._dataset_service._forecast_serving_state = {"degraded": False}
+        _serve(mgr, provenance={"mode": "wire", "source": "rusty_bucket", "created_at": fresh})
+        _serve(mgr, serving_state={"degraded": False})
         body = client.get("/health", headers=HEADERS).json()
         assert body["forecast_freshness"]["is_stale"] is False  # served run, not the March record
         assert body["status"] == "healthy"
@@ -218,11 +220,11 @@ class TestHealthEndpoint:
         client, mgr, mock_pm = app_client
         fresh = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
         mock_pm.get_latest_provenance.return_value = SimpleNamespace(created_at=fresh)
-        mgr._dataset_service._forecast_serving_state = {
+        _serve(mgr, serving_state={
             "degraded": True, "reason": "ingest_failed", "fallback_available": True,
             "serving": "last_good_manifested", "file_id": "mani_good", "age_days": 5.0,
             "sla_days": 45.0,
-        }
+        })
         resp = client.get("/health", headers=HEADERS)
         assert resp.status_code == 200
         body = resp.json()
@@ -255,14 +257,14 @@ class TestHealthAfterAnUnverifiedServe:
     @staticmethod
     def _unverified(mgr):
         # A fresh served run, so freshness cannot be what decides the status.
-        mgr._dataset_service._last_forecast_provenance = {
+        _serve(mgr, provenance={
             "file_id": "wire_run_9", "mode": "wire", "source": "rusty_bucket",
             "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        mgr._dataset_service._forecast_serving_state = {
+        })
+        _serve(mgr, serving_state={
             "degraded": True, "reason": "manifest_lookup_error",
             "fallback_available": True, "serving": "cached_unverified",
-        }
+        })
 
 
 class TestHealthCarriesNoStoreText:
@@ -273,7 +275,7 @@ class TestHealthCarriesNoStoreText:
         from views_crafdapi.managers.prediction import MetadataLookupError
 
         client, mgr, mock_pm = app_client
-        mgr._dataset_service._last_forecast_provenance = None
+        _serve(mgr, provenance=None)
         mock_pm.get_latest_manifest.return_value = None
         mock_pm.get_latest_provenance.side_effect = MetadataLookupError(
             "storage_secret_detail", status=503)
@@ -398,7 +400,16 @@ _SB_COLUMNS = [
 
 
 def _fixture_dataset(mgr, category="forecast"):
-    return mgr._dataframe_cache[mgr._get_api_key_hash("test-api-key")][category]["dataset"]
+    """The loaded dataset the routes answer from (each request works on a copy of it)."""
+    served = mgr._loader.served()
+    return served.forecast if category == "forecast" else served.history
+
+
+def _serve(mgr, **replace):
+    """Hand the routes other data, as the loader does after a new delivery."""
+    import dataclasses
+
+    mgr._loader._served = dataclasses.replace(mgr._loader.served(), **replace)
 
 
 class TestSliceRoute:
@@ -557,7 +568,7 @@ class TestSliceRoute:
         """Forecast months only: answered without the history, so a broken history does not
         take these requests away."""
         client, mgr, _ = app_client
-        mgr._get_latest_dataset = _forecast_only(mgr._get_latest_dataset)
+        _serve(mgr, history=None)
         resp = client.get("/slice/admin1/sb", params={"months": "2029-12,2030-01"}, headers=HEADERS)
         assert resp.status_code == 200 and len(resp.json()["rows"]) == 4
 
@@ -613,7 +624,7 @@ class TestSliceRoute:
         """Every row carries the recorded deaths. Served empty they would read as "nothing
         recorded", so a missing history is a 503 that says so, not a quiet blank column."""
         client, mgr, _ = app_client
-        mgr._get_latest_dataset = _forecast_only(mgr._get_latest_dataset)
+        _serve(mgr, history=None)
         resp = client.get("/slice/admin1/sb", headers=HEADERS)
         assert resp.status_code == 503
         assert "recorded deaths are unavailable" in resp.json()["detail"]
@@ -664,49 +675,47 @@ class TestBulkRoute:
     def test_an_outcome_the_forecast_does_not_hold_is_404(self, app_client):
         """`ns` is a known outcome code, but this forecast holds only `sb`."""
         client, mgr, _ = app_client
-        slot = mgr._dataframe_cache[mgr._get_api_key_hash("test-api-key")]["forecast"]
         only_sb = ForecastDataset(make_fao_df(targets=("pred_lr_ged_sb",)))
         only_sb.source_file_id = "file_002"
-        slot["dataset"], slot["data"] = only_sb, only_sb.dataframe
+        _serve(mgr, forecast=only_sb)
         resp = client.get("/bulk/admin1/ns", headers=HEADERS)
         assert resp.status_code == 404 and "Outcomes: sb" in resp.json()["detail"]
 
-    def test_a_refused_key_on_the_history_lookup_is_401(self, app_client):
-        from views_crafdapi.managers.prediction import MetadataLookupError
-
-        client, _, mock_pm = app_client
-        mock_pm.get_latest_file_id.side_effect = MetadataLookupError("no", status=401)
-        mock_pm.get_latest_provenance.side_effect = MetadataLookupError("no", status=401)
+    def test_a_partner_key_the_store_refuses_is_401(self, app_client):
+        client, mgr, _ = app_client
+        mgr._valid_keys.clear()
+        mgr._validate_api_key.side_effect = HTTPException(status_code=401, detail="refused")
         assert client.get("/bulk/admin1/sb", headers=HEADERS).status_code == 401
 
     def test_without_history_the_file_is_refused_not_served_blank(self, app_client):
         client, mgr, _ = app_client
-        mgr._get_latest_dataset = _forecast_only(mgr._get_latest_dataset)
+        _serve(mgr, history=None)
         resp = client.get("/bulk/admin1/sb", headers=HEADERS)
         assert resp.status_code == 503
         assert "recorded deaths are unavailable" in resp.json()["detail"]
 
     def test_the_file_is_built_once_and_rebuilt_for_a_new_forecast(self, app_client, monkeypatch):
-        """Built on the first request, then served as is; a new delivery is a new file. Another
-        key, or a fresh load of the same delivery, gets the file already built."""
+        """Built once, then served as is; a new delivery is a new file. A fresh load of the same
+        delivery gets the file already built. (The loader builds the files before a delivery is
+        served; here they are removed first, so the route builds them.)"""
         from views_crafdapi.managers import api
 
         client, mgr, _ = app_client
+        mgr._bulk_files.clear()
         builds = []
         real = api.write_bulk_file
         monkeypatch.setattr(api, "write_bulk_file", lambda *a, **k: builds.append(a[3:]) or real(*a, **k))
         first = client.get("/bulk/admin1/sb", headers=HEADERS).content
         assert client.get("/bulk/admin1/sb", headers=HEADERS).content == first
-        slot = mgr._dataframe_cache[mgr._get_api_key_hash("test-api-key")]["forecast"]
         reloaded = ForecastDataset(make_fao_df(targets=("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")))
-        reloaded.source_file_id = "file_002"   # the same delivery, loaded again (another key)
-        slot["dataset"] = reloaded
+        reloaded.source_file_id = "file_002"   # the same delivery, loaded again
+        _serve(mgr, forecast=reloaded)
         assert client.get("/bulk/admin1/sb", headers=HEADERS).content == first
         assert builds == [("admin1", "sb")]
 
         new = ForecastDataset(make_fao_df(seed=7, targets=("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")))
         new.source_file_id = "file_003"
-        slot["dataset"], slot["data"] = new, new.dataframe
+        _serve(mgr, forecast=new)
         second = client.get("/bulk/admin1/sb", headers=HEADERS).content
         assert builds == [("admin1", "sb")] * 2
         assert second != first
@@ -714,19 +723,11 @@ class TestBulkRoute:
     def test_without_a_store_id_the_file_is_built_for_the_request_and_removed(self, app_client):
         """A dataset whose delivery is not known is never matched to a kept file."""
         client, mgr, _ = app_client
+        mgr._bulk_files.clear()
         del _fixture_dataset(mgr).source_file_id
         resp = client.get("/bulk/admin1/sb", headers=HEADERS)
         assert resp.status_code == 200 and len(pd.read_parquet(io.BytesIO(resp.content))) > 0
         assert list(mgr._bulk_files._directory.glob("*.parquet*")) == []
-
-
-def _forecast_only(get_latest_dataset):
-    """Wrap `_get_latest_dataset` so the historical artifact is missing."""
-    def wrapped(manager, key, category, *args, **kwargs):
-        if category == "historical":
-            raise HTTPException(status_code=503, detail="no historical artifact")
-        return get_latest_dataset(manager, key, category, *args, **kwargs)
-    return wrapped
 
 
 class TestResponseSizeBound:
@@ -821,6 +822,7 @@ class TestOperationResultDataConsumers:
         client, mgr, mock_pm = app_client
         api_key_hash = mgr._get_api_key_hash("test-api-key")
         mgr._dataframe_cache.pop(api_key_hash, None)
+        mgr._loader._served = None   # a cold start: nothing loaded yet
         mock_pm.download_prediction.return_value = OperationResult(
             success=True, data={}
         )
@@ -828,10 +830,11 @@ class TestOperationResultDataConsumers:
             success=True, data={"file_id": "file_001"}
         )
         # The behaviour under test is the INGEST error path (`download_prediction` returning
-        # data with no `file_bytes`), which every route reaches via `get_latest_dataset`; the
-        # cache entry is popped above, so the slice must ingest.
+        # data with no `file_bytes`), which the loader reaches; nothing gets served.
+        assert not mgr._loader.refresh()
         resp = client.get("/slice/grid/sb", headers=HEADERS)
         assert resp.status_code == 503
+        assert resp.json()["detail"] == "No forecast is available right now. Try again later."
 
 class TestHTTPExceptionPassthrough:
 
@@ -888,11 +891,19 @@ def _cold_app(cache_dir, pm):
     # These tests are about the forecast slot. The store mock holds no history, and the slice
     # refuses to answer without one (503), so the history is a stand-in loaded from memory.
     history = ForecastDataset(make_fao_df(targets=("pred_lr_ged_sb", "pred_lr_ged_ns", "pred_lr_ged_os")))
-    load = mgr._get_latest_dataset
-    mgr._get_latest_dataset = lambda m, key, category, *a, **kw: (
+    service = mgr._dataset_service
+    load = service.get_latest_dataset
+    service.get_latest_dataset = lambda m, key, category, *a, **kw: (
         history if category == "historical" else load(m, key, category, *a, **kw)
     )
-    return TestClient(mgr.app)
+    # At start the loader loads with the server key (ADR-044), before any request.
+    from views_crafdapi.managers.forecast_loader import ForecastLoader
+
+    mgr._loader = ForecastLoader(service, mgr._disk_cache, mgr._bulk_files, "server-key", lambda _k: pm)
+    mgr._loader.refresh()
+    client = TestClient(mgr.app)
+    client.mgr = mgr
+    return client
 
 
 class TestDegradedFallbackAcrossARestart:
@@ -936,11 +947,9 @@ class TestDegradedFallbackAcrossARestart:
 
 
 class TestARevokedKeyIsRefusedOnItsNextRequest:
-    """The key validated once and its manager is cached (`_manager_cache` has no TTL, ADR-011 §3),
-    so revocation is only ever seen as a 401 from the store's metadata calls. Every request
-    looks up the forecast's manifest, and one reaching past months also the history's latest
-    file, so that 401 must end the request — not be served around as a lookup blip, from cache
-    or from the fallback."""
+    """A partner key decides who gets in (ADR-044); the data is read with the server's key. A
+    valid key is remembered for one minute, so a key deleted in Appwrite is refused within a
+    minute. /health still asks the store with the caller's key, so a refusal there is a 401."""
 
     ROUTES = [
         "/slice/grid/sb",
@@ -949,19 +958,29 @@ class TestARevokedKeyIsRefusedOnItsNextRequest:
     ]
 
     @pytest.mark.parametrize("route", ROUTES)
-    def test_revoked_key_on_warm_worker_is_401(self, app_client, route):
-        from views_crafdapi.managers.prediction import MetadataLookupError
+    def test_a_deleted_key_is_refused_within_a_minute(self, app_client, route):
+        client, mgr, _ = app_client
+        assert client.get(route, headers=HEADERS).status_code == 200        # checked, remembered
+        mgr._validate_api_key.side_effect = HTTPException(status_code=401, detail="refused")
+        assert client.get(route, headers=HEADERS).status_code == 200        # within the minute
+        mgr._valid_keys.clear()                                             # the minute is over
+        assert client.get(route, headers=HEADERS).status_code == 401
 
-        client, mgr, mock_pm = app_client
-        revoked = MetadataLookupError("general_unauthorized_scope: missing scope", status=401,
-                                      appwrite_type="general_unauthorized_scope")
-        for lookup in ("get_latest_manifest", "get_latest_file_id", "get_latest_provenance",
-                       "resolve_artifact_file_ids"):
-            getattr(mock_pm, lookup).side_effect = revoked
+    def test_a_valid_key_is_remembered_for_one_minute_only(self, app_client):
+        _, mgr, _ = app_client
+        assert mgr._valid_keys.ttl == 60
 
-        resp = client.get(route, headers=HEADERS)
-        assert resp.status_code == 401, resp.text
-        assert "general_unauthorized_scope" not in resp.text   # nothing about the store (C-264)
+    def test_a_store_that_cannot_be_asked_about_the_key_is_503_not_401(self, app_client):
+        client, mgr, _ = app_client
+        mgr._valid_keys.clear()
+        mgr._validate_api_key.side_effect = HTTPException(status_code=503, detail="Metadata store unavailable")
+        assert client.get("/slice/grid/sb", headers=HEADERS).status_code == 503
+
+    def test_an_unknown_key_is_checked_before_anything_is_answered(self, app_client):
+        client, mgr, _ = app_client
+        mgr._valid_keys.clear()
+        mgr._validate_api_key.side_effect = HTTPException(status_code=401, detail="refused")
+        assert client.get("/bulk/admin1/sb", headers={"X-API-Key": "never-seen"}).status_code == 401
 
     def test_health_is_401_when_only_the_metadata_lookup_is_refused(self, app_client):
         """A key that lost its database scope but kept buckets.read passes the bucket probe; its
@@ -969,47 +988,17 @@ class TestARevokedKeyIsRefusedOnItsNextRequest:
         from views_crafdapi.managers.prediction import MetadataLookupError
 
         client, mgr, mock_pm = app_client
-        mgr._dataset_service._last_forecast_provenance = None   # /health must ask the store
+        _serve(mgr, provenance=None)   # /health must ask the store
         mock_pm.get_latest_manifest.side_effect = MetadataLookupError("no", status=401)
         mock_pm.get_latest_provenance.side_effect = MetadataLookupError("no", status=401)
         assert client.get("/health", headers=HEADERS).status_code == 401
-
-    def test_the_warm_path_itself_refuses(self, app_client):
-        """Only the per-request manifest lookup is refused; a retry would succeed. The warm path
-        must stop there — not treat the refusal as a blip and go on to try again."""
-        from views_crafdapi.managers.prediction import MetadataLookupError
-
-        client, _, mock_pm = app_client
-        good = mock_pm.get_latest_manifest.return_value
-        answers = iter([MetadataLookupError("no", status=401)])
-
-        def manifest():
-            nxt = next(answers, None)
-            if nxt is not None:
-                raise nxt
-            return good
-        mock_pm.get_latest_manifest.side_effect = manifest
-        assert client.get("/slice/grid/sb", headers=HEADERS).status_code == 401
-
-    @pytest.mark.parametrize("status", [401, 403])
-    def test_a_slice_refuses_when_only_the_history_lookup_is_refused(self, app_client, status):
-        """A missing history answers 503; a refused key is not a missing history, and must end
-        the request with a 401."""
-        from views_crafdapi.managers.prediction import MetadataLookupError
-
-        client, _, mock_pm = app_client
-        revoked = MetadataLookupError("no", status=status)
-        # The forecast's manifest lookup still answers; only the history's lookups are refused.
-        mock_pm.get_latest_file_id.side_effect = revoked
-        mock_pm.get_latest_provenance.side_effect = revoked
-        assert client.get("/slice/grid/sb", headers=HEADERS).status_code == 401   # the API says 401 for both
 
     @pytest.mark.parametrize("refused", ["manifest", "stored"])
     def test_each_health_freshness_lookup_refuses_on_its_own(self, app_client, refused):
         from views_crafdapi.managers.prediction import MetadataLookupError, PredictionProvenance
 
         client, mgr, mock_pm = app_client
-        mgr._dataset_service._last_forecast_provenance = None      # /health must ask the store
+        _serve(mgr, provenance=None)      # /health must ask the store
         revoked = MetadataLookupError("no", status=401)
         if refused == "manifest":
             mock_pm.get_latest_manifest.side_effect = revoked
@@ -1153,20 +1142,91 @@ class TestHealthNamesTheBuildThatWroteTheServedForecast:
         assert client.get(self.ROUTE, headers=HEADERS).status_code == 200
         assert client.get("/health", headers=HEADERS).json()["served_entry"]["written_by"] == "0.6.9"
 
-    def test_nothing_is_reported_while_no_forecast_can_be_served(self, tmp_path, store):
-        """A refused run with no last-good is a 503: no entry is being served, so none is named —
-        not the one this worker served before."""
+    def test_a_refused_delivery_leaves_the_loaded_forecast_served_and_named(self, tmp_path, store):
+        """ADR-044: a new delivery that cannot be served does not take the loaded forecast away,
+        even with no last-good slot on disk. /health names what is served and says degraded."""
         pm, state = store
         client = _cold_app(tmp_path / "cache", pm)
         assert client.get(self.ROUTE, headers=HEADERS).status_code == 200
-        assert "served_entry" in client.get("/health", headers=HEADERS).json()
+        named = client.get("/health", headers=HEADERS).json()["served_entry"]
 
         for slot in (tmp_path / "cache").rglob("*_forecast_meta.json"):
             slot.unlink()              # the last-good slot is gone
         state["phase"] = "bad"
-        assert client.get(self.ROUTE, headers=HEADERS).status_code == 503
-        assert "served_entry" not in client.get("/health", headers=HEADERS).json()
+        assert not client.mgr._loader.refresh()          # the next check finds nothing servable
+        assert client.get(self.ROUTE, headers=HEADERS).status_code == 200
+        health = client.get("/health", headers=HEADERS).json()
+        assert health["served_entry"] == named and health["status"] == "degraded"
 
         state["phase"] = "good"        # the producer recovers; the warm entry serves again
         assert client.get(self.ROUTE, headers=HEADERS).status_code == 200
         assert "served_entry" in client.get("/health", headers=HEADERS).json()
+
+
+# ============================================================
+# #208 (ADR-044): the month the forecast was made in, what /health says about the loading, and
+# the loader started at start-up and stopped at shutdown
+# ============================================================
+
+
+class TestTheMonthTheForecastWasMadeIn:
+    """The fixture's forecast runs 2029-12 to 2030-01; it was made in its first month."""
+
+    def test_a_slice_names_it(self, app_client):
+        client, _, _ = app_client
+        body = client.get("/slice/admin1/sb", params={"months": "2030-01"}, headers=HEADERS).json()
+        assert body["forecast_made_in"] == "2029-12"
+
+    def test_a_bulk_file_names_it_in_a_header(self, app_client):
+        client, _, _ = app_client
+        resp = client.get("/bulk/admin1/sb", headers=HEADERS)
+        assert resp.headers["X-Forecast-Made-In"] == "2029-12"
+
+
+class TestHealthSaysWhatIsLoaded:
+
+    def test_a_loaded_forecast_is_reported(self, app_client):
+        client, _, _ = app_client
+        body = client.get("/health", headers=HEADERS).json()
+        assert body["forecast_loaded"] is True and "forecast_loading" not in body
+
+    def test_nothing_loaded_yet_is_degraded(self, app_client):
+        client, mgr, _ = app_client
+        mgr._loader._served = None
+        body = client.get("/health", headers=HEADERS).json()
+        assert body["forecast_loaded"] is False and body["status"] == "degraded"
+
+    def test_a_delivery_that_cannot_be_loaded_is_degraded(self, app_client):
+        client, mgr, _ = app_client
+        _serve(mgr, provenance={"created_at": datetime.now(timezone.utc).isoformat()})
+        mgr._loader._failed_at = time.time()
+        body = client.get("/health", headers=HEADERS).json()
+        assert body["status"] == "degraded" and "could not be loaded" in body["forecast_loading"]
+        assert body["forecast_loaded"] is True
+
+
+class TestTheLoaderRunsWithTheService:
+
+    def test_started_at_start_up_and_stopped_at_shutdown(self, tmp_path):
+        import asyncio
+
+        mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
+        events = []
+
+        class Loader:
+            def __init__(self):
+                self.stopped = asyncio.Event()
+
+            async def run(self, minutes):
+                events.append("run")
+                await self.stopped.wait()
+                events.append("ended")
+
+            def stop(self):
+                events.append("stop")
+                self.stopped.set()
+
+        mgr._loader = Loader()
+        with TestClient(FastAPI(lifespan=mgr._lifespan)):
+            assert events == ["run"]
+        assert events == ["run", "stop", "ended"]

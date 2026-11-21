@@ -5,6 +5,13 @@ ensemble or the models it combines. Newest first.
 
 ## 2026-11-21
 
+- **No request waits for the forecast to load.** The service loads each new forecast by itself,
+  when it starts and within a few minutes of a delivery, and builds the bulk files before it
+  serves them. Until the first forecast is loaded after a restart, data requests answer `503`
+  ("No forecast is available right now. Try again later.").
+- **Every answer says which month the forecast was made in:** `forecast_made_in` in a slice
+  (for example `"2026-07"`), and the header `X-Forecast-Made-In` with a bulk file.
+- **A deleted key stops working within a minute.**
 - **Nine bulk files replace the one admin-1 bulk file.** `GET /bulk/{level}/{outcome}` returns
   one Parquet file per level (`grid`, `admin1`, `country`) and outcome (`sb`, `ns`, `os`). Each
   file holds the same table as a slice with no options: every place, the recorded months and the

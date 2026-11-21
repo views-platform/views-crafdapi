@@ -3,11 +3,12 @@
 *For the maintainer. crafdapi runs alone on its own server, as the `views-crafdapi` service on
 `127.0.0.1:8001`, behind nginx, at `https://crafdapi.viewsforecasting.org` (ADR-039).*
 
-This page covers four things:
+This page covers five things:
 1. releasing a new version;
 2. what to do when the API is down;
 3. what to do when it serves an old forecast;
-4. setting up a new server.
+4. setting up a new server;
+5. adding or renewing the server's own read key.
 
 Nothing monthly is done by hand here. (A daily automated check, `data-freshness.yml`, opens a
 reminder when a monthly delivery is due.) The forecast reaches this API from upstream:
@@ -39,7 +40,9 @@ sudo od -c /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
 ```
 
 Restart, then check the version. Both `version` and `deployed_tag` should name your tag. The
-service may answer `502` for a few seconds while it restarts.
+service may answer `502` for a few seconds while it restarts. After a restart it loads the forecast
+by itself before answering data requests; until then those answer `503`. From the disk cache this
+takes under a minute; after a new delivery, a few minutes.
 
 ```bash
 sudo systemctl restart views-crafdapi
@@ -167,7 +170,46 @@ Bitwarden.
    ```bash
    sudo certbot --nginx -d crafdapi.viewsforecasting.org
    ```
-8. **Start it,** then check it as in section 1:
+8. **The server's read key,** as in section 5.
+9. **Start it,** then check it as in section 1:
    ```bash
    sudo systemctl enable --now views-crafdapi
    ```
+
+## 5. The server's own read key (once per server, and once a year)
+
+The service reads the forecast with a key of its own, `crafdapi-server` (ADR-044). Partner keys
+only decide who gets in. Without the server key the service starts but serves nothing: every data
+request answers `503`.
+
+1. **Create it** in the Appwrite console, in CRAF'd's project: *Overview → API keys → Create API
+   key* (as in `PARTNER_KEYS.md`, section 1). Name: `crafdapi-server`. Expiry: one year, and not on 2027-10-29 (the day FAO's
+   server key expires), so the two never need renewing on the same day. Scopes: `files.read` and
+   `rows.read`, nothing else. Save it in Bitwarden under the same name.
+2. **Put it on the server.** **ON THE BOX**, copy the setup script over if it is not there
+   (section 4, step 2). This line prompts for the key; paste it alone:
+   ```bash
+   read -rsp "server key: " APPWRITE_CRAFDAPI_SERVER_API_KEY; echo; export APPWRITE_CRAFDAPI_SERVER_API_KEY
+   ```
+   ```bash
+   bash /tmp/crafd-bootstrap.sh serverkey
+   ```
+   ```bash
+   unset APPWRITE_CRAFDAPI_SERVER_API_KEY
+   ```
+3. **Restart and check:**
+   ```bash
+   sudo systemctl restart views-crafdapi
+   ```
+   Then read the service log. It must show the two requests the key's two scopes are for: a line
+   `loader: store listing: newest forecast manifest ...` naming a manifest (not `NONE`), and
+   `downloaded ...: N bytes` lines. If the listing says `NONE`, the key may lack `rows.read`; if a
+   download fails, it may lack `files.read`.
+   ```bash
+   sudo journalctl -u views-crafdapi -n 100 | grep -E "store listing|downloaded"
+   ```
+   Then run the full check as in section 1.
+
+**Renewing it:** create a new key as in step 1, put it on the server as in step 2, restart, check,
+and only then delete the old key in the console.
+
