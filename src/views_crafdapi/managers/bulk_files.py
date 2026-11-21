@@ -24,7 +24,14 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
+from views_crafdapi.forecast.serialize import outcome_table, schema
+
 logger = logging.getLogger(__name__)
+
+# The level and outcome codes a file name may contain, mapped to themselves. A name is built from
+# the value found here, never from the text a request sent, so no request can steer a path.
+_LEVEL_NAMES = {level: level for level in outcome_table.LEVELS}
+_OUTCOME_NAMES = {outcome: outcome for outcome in schema.SERIES}
 
 # Store ids are letters, digits and a few marks; anything else is not used in a file name.
 _SAFE_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}")
@@ -49,10 +56,13 @@ class BulkFiles:
         Returns the path and whether it is kept. A file that is not kept (a dataset without a
         store id) is the caller's to remove once it has been sent.
         """
+        level_name, outcome_name = _LEVEL_NAMES.get(level), _OUTCOME_NAMES.get(outcome)
+        if level_name is None or outcome_name is None:
+            raise ValueError(f"unknown level or outcome: {level!r}, {outcome!r}")
         ids = (source_id(forecast_ds), source_id(historical_ds))
         self._directory.mkdir(parents=True, exist_ok=True)
         if None in ids:
-            logger.warning("bulk file for %s %s built for one request: no store id", level, outcome)
+            logger.warning("bulk file for %s %s built for one request: no store id", level_name, outcome_name)
             handle, scratch = tempfile.mkstemp(dir=self._directory, suffix=".once.parquet")
             os.close(handle)
             try:
@@ -63,7 +73,7 @@ class BulkFiles:
             return Path(scratch), False
 
         delivery = f"{ids[0]}_{ids[1]}"
-        path = self._directory / f"{outcome}_{level}__{delivery}.parquet"
+        path = self._directory / f"{outcome_name}_{level_name}__{delivery}.parquet"
         if path.exists():
             return path, True
         # Written under a temporary name and renamed when complete, so a failed build never

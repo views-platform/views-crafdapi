@@ -111,3 +111,11 @@ def test_a_new_delivery_leaves_one_request_files_being_sent(tmp_path):
     once, _ = store.get(_dataset(1, None), _dataset(2, "h1"), "admin1", "sb", build)
     store.get(_dataset(1, "fc1"), _dataset(2, "h1"), "admin1", "sb", build)
     assert once.exists()
+
+
+@pytest.mark.parametrize("level,outcome", [("../admin1", "sb"), ("admin1", "sb/../../x"), ("gaul2", "sb")])
+def test_a_file_name_never_comes_from_an_unknown_level_or_outcome(tmp_path, level, outcome):
+    store, build = BulkFiles(tmp_path), _Builds()
+    with pytest.raises(ValueError, match="unknown level or outcome"):
+        store.get(_dataset(1, "fc1"), _dataset(2, "h1"), level, outcome, build)
+    assert build.count == 0
