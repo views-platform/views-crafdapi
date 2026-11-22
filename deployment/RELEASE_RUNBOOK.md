@@ -123,8 +123,14 @@ Bitwarden.
    ```bash
    scp deployment/bootstrap.sh <you>@<server>:/tmp/crafd-bootstrap.sh
    ```
+   The registry must be the edition this repository pins (`REGISTRY_PIN_TAG` in
+   `src/views_crafdapi/seam_contract.py`, today `appwrite-seam-v1.9.0`), not whatever your
+   views-appwrite checkout happens to hold. Take it from the tag:
    ```bash
-   scp ../views-appwrite/docs/ADRs/platform/coordinate_registry.toml <you>@<server>:/tmp/coordinate_registry.toml
+   git -C ../views-appwrite fetch --tags --quiet && git -C ../views-appwrite show appwrite-seam-v1.9.0:docs/ADRs/platform/coordinate_registry.toml > /tmp/coordinate_registry.toml
+   ```
+   ```bash
+   scp /tmp/coordinate_registry.toml <you>@<server>:/tmp/coordinate_registry.toml
    ```
    Then, **ON THE BOX**, run `bash /tmp/crafd-bootstrap.sh part1`. It prints a public key.
 3. **The deploy key.** On GitHub, open views-crafdapi → Settings → Deploy keys → Add deploy key.

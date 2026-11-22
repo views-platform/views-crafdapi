@@ -18,9 +18,9 @@ production deploy (epic #12 / S11), when the drift was discovered.
 
 ### The intended mechanism (PLATFORM-001 D2 / þing-01 #275)
 
-> **Pin in force (note 2026-10-16, register C-250):** `seam_contract.REGISTRY_PIN_TAG`, which is
-> `appwrite-seam-v1.5.2` today, the first edition with the `UNCRAFD_CONSUMER_DOCUMENT_NAME` row the
-> CI binding reads. The `v1.4.4` links below are the edition current when this ADR was written,
+> **Pin in force (note 2026-10-16, register C-250; updated 2026-11-22, #231):**
+> `seam_contract.REGISTRY_PIN_TAG`, which is `appwrite-seam-v1.9.0` today. It may not go below
+> v1.9.0: ADR-044 needs that edition's §5.8 "uniform entitlement" mode, and a test enforces it. The `v1.4.4` links below are the edition current when this ADR was written,
 > kept as history. Follow the constant, not this page.
 
 Coordinates are **read from the owned, versioned registry** —
