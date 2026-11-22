@@ -852,24 +852,26 @@ class TestHTTPExceptionPassthrough:
         assert resp.status_code == 401
 
 
-class TestHealthKeysTheFreshnessMonitorParses:
-    """`.github/workflows/data-freshness.yml` polls `/health` daily and opens an issue when
-    the served data goes stale — the question Better Stack's `/ping` monitor cannot answer.
+class TestHealthWritesTheWordTheMonitorSearchesFor:
+    """The Better Stack monitor `crafdapi — forecast health` (ADR-041, deployment/MONITORING.md)
+    alarms when the raw body of `/health` does not contain `"status":"healthy"`, written exactly
+    so: no space after the colon. A change to how the body is written (spaces, another JSON
+    encoder) would make it alarm on every check, and a renamed field or value would too."""
 
-    It parses these keys out of the body. Renaming one here without renaming it there leaves
-    the monitor inspecting a field that no longer exists: it would report healthy forever
-    while checking nothing. `forecast_freshness` is the dangerous one, because api.py builds
-    it best-effort and swallows its own errors, so its absence is silent by design."""
-
-    def test_health_emits_the_keys_the_monitor_reads(self, app_client):
+    def test_a_healthy_body_contains_the_exact_keyword(self, app_client):
         client, _, _ = app_client
-        body = client.get("/health", headers=HEADERS).json()
-        assert "status" in body
-        assert "appwrite_connected" in body
-        assert "forecast_freshness" in body
-        assert "is_stale" in body["forecast_freshness"]
-        assert "age_days" in body["forecast_freshness"]     # #173: the age is the verdict's input
-        assert "created_at" in body["forecast_freshness"]   # #173: the delivery-due date reads it
+        resp = client.get("/health", headers=HEADERS)
+        assert resp.json()["status"] == "healthy"
+        assert '"status":"healthy"' in resp.text
+
+    def test_a_degraded_body_never_contains_the_keyword(self, app_client):
+        """Anywhere in the body, the keyword would blind the monitor: it would never alarm."""
+        client, _, mock_pm = app_client
+        old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+        mock_pm.get_latest_provenance.return_value = SimpleNamespace(created_at=old)
+        resp = client.get("/health", headers=HEADERS)
+        assert resp.json()["status"] == "degraded"
+        assert '"status":"healthy"' not in resp.text
 
 
 # ============================================================
