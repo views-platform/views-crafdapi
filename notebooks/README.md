@@ -4,43 +4,44 @@ Worked examples for the CRAF'd Forecast API — how to **call the service**, **v
 returns, and **reproduce its analytics offline** on synthetic data.
 
 The API serves a **global** forecast (every land PRIO-GRID cell worldwide) and global
-historical — not the earlier Africa/Middle-East scope. `01` (§2.5) and `02` (§0) confirm that
-coverage live for historical **and** forecast.
+recorded deaths. `02` (section 2) maps the whole world for one month.
 
 ## What the forecasts are (and how to read them)
 
 - These are **conflict-fatality** forecasts — an *input/driver* to food-security analysis, **not**
   a food-security, IPC, or hunger output.
-- **All values are raw fatality counts** (not rates or log-counts). The `lr_`/`ln_`/`pred_` prefixes
-  on data-endpoint column names are legacy VIEWS naming and carry **no** meaning — `lr_ged_sb` is a
-  raw count, not a log-rate (ADR-024).
+- **Every number of deaths is a count** (ADR-024). The `{outcome}_p_gt{c}` columns are chances
+  between 0 and 1, and `n_draws` counts draws.
 - Three violence series, reported separately: `sb` state-based, `ns` non-state, `os` one-sided.
-- Every served column is defined in the **[data dictionary](../docs/api/data_dictionary.md)** — start
-  there if a column name is unclear (it also maps the three naming conventions across the endpoints).
+- Every served column is defined in the **[data dictionary](../docs/api/data_dictionary.md)**: start
+  there if a column name is unclear.
 - Method & skill: these forecasts come from **VIEWS** (<https://viewsforecasting.org>); consult VIEWS
   for methodology, validation, and appropriate-use guidance. Treat forecasts as probabilistic
-  estimates with genuine uncertainty — always read the credible intervals, not just the MAP.
+  estimates with genuine uncertainty: read the chances and the severe case, not only the expected
+  number.
 
 ## The three notebooks
 
-> **`01` and `02` describe the old routes.** The service now answers slices at
-> `/slice/{level}/{outcome}`, and the client methods these two notebooks call (`fetch_subset`,
-> `hdi_map`) are gone. They are being rewritten (#223); until then they do not run.
+> **`01` and `02` were rewritten for the bulk files and slices (#223)** and are stored without
+> outputs until they are run against the live service after the next release. They were run end to
+> end against a local copy of the new service on 2026-11-22.
 
 | Notebook | Shows | Needs an API key? |
 |---|---|---|
-| [`01_quickstart.ipynb`](01_quickstart.ipynb) | The HTTP API end to end — authentication, a global-coverage check, historical + forecast subsetting (`pg`/`country`/`gaul1`), posterior samples, and HDI/MAP uncertainty (cell-level + aggregated). Data via `CrafdApiClient`; `sample_idx` and `/analysis` shown as raw HTTP with an endpoint reference. | **Yes** (live API) |
-| [`02_visualization.ipynb`](02_visualization.ipynb) | PRIO-GRID pixel maps via `views_crafdapi.plotting` — **global coverage maps (historical & forecast)**, single-month, shared-scale multi-month panels, all three features, regional GAUL-1 zooms, cross-country comparison. | **Yes** (live API) |
-| [`03_offline_demo.ipynb`](03_offline_demo.ipynb) | The analytics the service performs — subsetting, HDI/MAP, geographic aggregation, a map — run **in-process on synthetic data** (`_synthetic.py`). | **No** |
+| [`01_quickstart.ipynb`](01_quickstart.ipynb) | The API end to end: the bulk download (`/bulk/{level}/{outcome}`), recorded versus forecast months, the summary columns, slices with `CrafdApiClient.slice` (places by GAUL code, months written `2027-01`), and the three levels (grid, admin 1, country). | **Yes** (live API) |
+| [`02_visualization.ipynb`](02_visualization.ipynb) | PRIO-GRID pixel maps via `views_crafdapi.plotting`: the whole world for one month, one country (expected deaths and the chance of more than 25), several months on one scale, the three outcomes side by side, recorded deaths next to the forecast. | **Yes** (live API) |
+| [`03_offline_demo.ipynb`](03_offline_demo.ipynb) | The analytics the service performs (subsetting, the summaries of the draws, aggregation across levels, a map) run **in-process on synthetic data** (`_synthetic.py`). | **No** |
 
 ## Conventions
 
-- **Public surface only** — the API client (`CrafdApiClient`), the published helpers
-  (`views_crafdapi.time`, `views_crafdapi.plotting`), and the dataset class for the offline demo.
-- **No secrets, no real data committed** — cell outputs are stripped; the live-API notebooks
-  read credentials from `.env`; `03` uses synthetic data with **fictional geography** (a toy
+- **Public surface only**: the API client (`CrafdApiClient`), the plotting helpers
+  (`views_crafdapi.plotting`), the dataset class for the offline demo, and plain HTTP (`requests`)
+  for the bulk download, which is a file, not JSON.
+- **No secrets committed**: the live-API notebooks read the key from `.env` and print only whether
+  it is set; stored outputs are checked for keys before a commit; `03` uses synthetic data with **fictional geography** (a toy
   lattice, fixed seed) so anyone can *Run All* with zero credentials.
-- **`01`/`02` are read-to-learn without a key, run-with-a-key.** `03` always runs.
+- **`01`/`02` need a key to run;** once their outputs are stored (after the next release) they can
+  be read without one. `03` always runs.
 
 ## Prerequisites & running
 
@@ -63,22 +64,22 @@ cp .env.example .env        # then set APPWRITE_DATASTORE_API_KEY (request one f
 `02` additionally needs `geopandas` for the border overlay (installed by `uv sync`).
 `03_offline_demo.ipynb` needs no `.env` and no network.
 
-### Outputs are committed on purpose
+### Outputs are committed on purpose (from the next release)
 
-`01` and `02` are stored **with their executed outputs**, matching views-faoapi. Someone
-browsing this repo on GitHub sees the real numbers and the six maps without needing a key —
+`01` and `02` are stored **with their executed outputs** once they have been run against the live
+service (at the moment they are stored without: see above), matching views-faoapi. Someone
+browsing this repo on GitHub sees the real numbers and the maps without needing a key —
 which is the point, since these notebooks are the worked example an external analyst is pointed
 at. `03_offline_demo.ipynb` stays stripped (also matching faoapi): it is deterministic and runs
 in seconds, so stored output adds nothing.
 
-The cost is honest: `02` is ~1.1 MB of embedded PNGs, and re-executing it produces a large diff
+The cost is honest: `02` stores its maps as embedded PNGs (about 1 MB before the rewrite), and re-executing it produces a large diff
 even when nothing meaningful changed. Two consequences:
 
 * **Do not strip the outputs** to make a diff smaller. That silently removes the only thing a
   browsing reader can see.
-* **Re-execute both when the served run changes** — the outputs name a specific run
-  (`rusty_bucket_forecasting_20260727_095355`) and a specific window, so after a new delivery
-  they describe something that is no longer live:
+* **Re-execute both when the served run changes**: the outputs show a specific forecast and its
+  months, so after a new delivery they describe something that is no longer live:
 
   ```bash
   .venv/bin/python -m pytest --nbmake notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb
@@ -92,17 +93,12 @@ even when nothing meaningful changed. Two consequences:
 Outputs are checked for secrets before commit: the auth cell prints `API key : set`, never the
 value, and no long token appears in any stored output.
 
-### The forecast window moves
+### The forecast months move
 
-A forecast run covers a **fixed 36-month window**, and that window advances every time a new
-run is delivered. `01` and `02` hard-code `FORECAST_MONTH = date_to_month_id(2026, 7)`, which
-is the first month of the run live at the time of writing (`rusty_bucket`, months 559–594 =
-2026-07 … 2029-06).
-
-**If a later run has superseded it, that month is outside the window and every forecast cell
-returns an empty frame.** Both notebooks now open with a preflight cell that catches this and
-tells you what to change; without it the failure surfaces as a bare `KeyError` several cells
-later.
+A forecast covers a window of months that advances with every delivery. `01` and `02` hard-code no
+month: they read the forecast and recorded months from the data (forecast months
+from the month in the `X-Forecast-Made-In` header on, recorded months before it),
+so they keep working after a new delivery.
 
 ## Access, updates & citation
 
