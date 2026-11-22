@@ -10,8 +10,8 @@ This page covers five things:
 4. setting up a new server;
 5. adding or renewing the server's own read key.
 
-Nothing monthly is done by hand here. (A daily automated check, `data-freshness.yml`, opens a
-reminder when a monthly delivery is due.) The forecast reaches this API from upstream:
+Nothing monthly is done by hand here. (A Better Stack monitor alerts when the served forecast is
+old or incomplete: ADR-041, `deployment/MONITORING.md`.) The forecast reaches this API from upstream:
 views-datafactory supplies the data, views-models runs the chain, the models are built on
 views-pipeline-core and each lives in its own repository (such as views-baseline or
 views-hydranet), and views-postprocessing (which may be renamed views-delivery) delivers the result

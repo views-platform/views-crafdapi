@@ -62,7 +62,7 @@ check. Its one failure, `/health` reporting `degraded`, was the stale forecast (
 | Key | Holder | Expiry | Scopes | Against §1 |
 |---|---|---|---|---|
 | `crafd-caller-read` | CRAF'd | never | `buckets.read`, `documents.read`, `files.read`, `databases.read`, `tables.read`, `rows.read` | three extra read scopes, none used by this service |
-| `crafdapi-probe` (created 2026-10-20) | the operator's smoke test, notebooks, integration tests and the data-freshness monitor (`APPWRITE_DATASTORE_API_KEY`, locally and as the repository secret) | never | the three in §1 | exact |
+| `crafdapi-probe` (created 2026-10-20) | the operator's smoke test, notebooks, integration tests and, until #214, the data-freshness job (`APPWRITE_DATASTORE_API_KEY`, locally and as the repository secret, which is deleted once the job is gone) | never | the three in §1 | exact |
 | `VIEWS Pipeline Core` | the pipeline; until 2026-10-21 also `APPWRITE_DATASTORE_API_KEY` | 2026-11-17 | 20 scopes | not a caller key; this service no longer uses it |
 
 The extra scopes on `crafd-caller-read` are read-only, but they may reach database and table
