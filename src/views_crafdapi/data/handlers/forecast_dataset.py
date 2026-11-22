@@ -605,10 +605,11 @@ class ForecastDataset(_GridDataset):
                 f"positions and the joined frame are read positionally against each other."
             )
 
-        # `observed=True` guards any level whose group column is `category` dtype (the country
-        # level grouped by the categorical ISO3 until #225). With the pandas default a categorical key emits a row for EVERY
-        # category — all ~250 countries — even for a single-country request. This groupby fixes
-        # the output index and its order, exactly as the pre-S7 `_aggregate_distributions` did.
+        # `observed=True` guards any level whose group column is `category` dtype (the
+        # geography's name and ISO3 columns are). With the pandas default a categorical key
+        # emits a row for EVERY category, all ~250 countries, even for a single-country request.
+        # This groupby fixes the output index and its order, exactly as the pre-S7
+        # `_aggregate_distributions` did.
         grouped = keyframe.groupby([time_col, target_level_col], observed=True)
         group_meta = (
             grouped.agg({c: "first" for c in metadata_cols_to_include})

@@ -76,7 +76,7 @@ These must comply with the constitutional ADRs above.
 ### Active Project-Specific ADRs
 
 - **[ADR-010](active/010_technical_risk_register.md)** — Technical Risk Register  
-  Establishes and governs the project's technical risk register at `reports/technical_risk_register.md`.
+  Establishes and governs the project's technical risk register at `reports/technical_risk_register.md` (a local working document, untracked since 2026-11-22).
 
 - **[ADR-011](active/011_caching_strategy_and_eviction_policy.md)** — Caching Strategy and Eviction Policy  
   Mandates bounded, TTL-aware, versioned caching across all three tiers. Addresses C-05, C-07.

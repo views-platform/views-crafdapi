@@ -153,7 +153,120 @@ def test_a_country_without_an_iso3_is_still_served():
     by_code = table.drop_duplicates("country_code").set_index("country_code")
     assert by_code.loc[20, "country_iso3"] is None or pd.isna(by_code.loc[20, "country_iso3"])
     assert by_code.loc[10, "country_iso3"] == "AAA"
+    assert pd.notna(by_code.loc[20, "country_name"]) and by_code.loc[20, "country_name"]
     assert table["sb_mean"].notna().all()
+    asked = outcome_table.build_outcome_table(ForecastDataset(df), None, "country", "sb", places=[20])
+    assert asked["country_code"].unique().tolist() == [20] and asked["country_name"].notna().all()
+
+
+def test_a_country_takes_the_iso3_most_of_its_cells_carry_at_every_level(caplog):
+    """A border cell marked with a neighbour's ISO3 does not blank the whole country; the
+    disagreement is logged once. Country 10 is cells 100, 101 and (here) 102."""
+    import logging
+
+    df = make_fao_df(targets=_TARGETS)
+    df["country_iso_a3"] = df["country_iso_a3"].astype(object)
+    df["admin1_gaul0_name"] = df["admin1_gaul0_name"].astype(object)
+    df["admin1_gaul1_name"] = df["admin1_gaul1_name"].astype(object)
+    cells = df.index.get_level_values("priogrid_id")
+    # Cell 102 joins region 1 of country 10 but carries country 20's ISO3, BBB: 2 cells say AAA,
+    # 1 says BBB. Cell 100 (the first listed) is the BBB one, so "first listed" would pick wrong.
+    df.loc[cells == 102, ["admin1_gaul1_code", "admin1_gaul1_name", "admin1_gaul0_code", "admin1_gaul0_name"]] = [
+        1, "Region1", 10, "Province1"]
+    df.loc[cells == 102, "country_iso_a3"] = "AAA"
+    df.loc[cells == 100, "country_iso_a3"] = "BBB"
+    outcome_table._REPORTED_ISO3_DISAGREEMENTS.clear()
+    with caplog.at_level(logging.WARNING):
+        table = outcome_table.build_outcome_table(ForecastDataset(df), None, "country", "sb")
+        outcome_table.build_outcome_table(ForecastDataset(df), None, "country", "sb")
+    by_code = table.drop_duplicates("country_code").set_index("country_code")
+    assert by_code.loc[10, "country_iso3"] == "AAA"
+    reports = [r for r in caplog.records if "more than one ISO3" in r.getMessage()]
+    assert len(reports) == 1 and "{10: 'AAA'}" in reports[0].getMessage()
+    # Every level tells the same story about country 10, its admin-1 region and its cells too.
+    admin1 = outcome_table.build_outcome_table(ForecastDataset(df), None, "admin1", "sb")
+    assert set(admin1.loc[admin1["country_code"] == 10, "country_iso3"]) == {"AAA"}
+    grid = outcome_table.build_outcome_table(ForecastDataset(df), None, "grid", "sb")
+    assert set(grid.loc[grid["country_code"] == 10, "country_iso3"]) == {"AAA"}
+
+
+def test_a_cell_without_a_country_code_keeps_its_own_iso3():
+    """No country to agree with: the cell's own code is the only one there is."""
+    df = make_fao_df(targets=_TARGETS)
+    df["admin1_gaul0_code"] = df["admin1_gaul0_code"].astype(float)
+    df.loc[df.index.get_level_values("priogrid_id") == 103, "admin1_gaul0_code"] = None
+    grid = outcome_table.build_outcome_table(ForecastDataset(df), None, "grid", "sb")
+    assert set(grid.loc[grid["priogrid_id"] == 103, "country_iso3"]) == {"BBB"}
+
+
+@pytest.mark.parametrize("level", ["grid", "admin1", "country"])
+def test_cells_without_a_country_code_and_different_iso3_codes_never_break_a_level(level):
+    """Cells 102 and 103 lose their country code and carry AAA and BBB: every level still
+    answers, one row per place."""
+    df = make_fao_df(targets=_TARGETS)
+    df["country_iso_a3"] = df["country_iso_a3"].astype(object)
+    df["admin1_gaul0_code"] = df["admin1_gaul0_code"].astype(float)
+    cells = df.index.get_level_values("priogrid_id")
+    df.loc[cells.isin([102, 103]), "admin1_gaul0_code"] = None
+    df.loc[cells == 102, "country_iso_a3"] = "AAA"
+    table = outcome_table.build_outcome_table(ForecastDataset(df), None, level, "sb")
+    place = outcome_table.PLACE_COLUMN[level]
+    assert not table.duplicated(subset=[place, "month_id"]).any()
+    # The region made of those cells takes the first ISO3 its cells carry (cell 102's, AAA); a
+    # grid cell keeps its own; cells without a country code make no country row at all.
+    no_country = table[table["country_code"].isna()]
+    expected = {"grid": {"AAA", "BBB"}, "admin1": {"AAA"}, "country": set()}[level]
+    assert set(no_country["country_iso3"]) == expected
+
+
+def test_a_country_whose_only_code_is_on_one_cell_keeps_it():
+    """Country 10: cell 100 says BBB, cells 101 and 102 (moved in) say nothing: missing values
+    are not a code. (Missing values outvoting a code in the majority vote itself would need more
+    cells than the fixture has: #238.)"""
+    df = make_fao_df(targets=_TARGETS)
+    for column in ("country_iso_a3", "admin1_gaul0_name", "admin1_gaul1_name"):
+        df[column] = df[column].astype(object)
+    cells = df.index.get_level_values("priogrid_id")
+    df.loc[cells == 102, ["admin1_gaul1_code", "admin1_gaul1_name", "admin1_gaul0_code", "admin1_gaul0_name"]] = [
+        1, "Region1", 10, "Province1"]
+    df.loc[cells == 100, "country_iso_a3"] = "BBB"
+    df.loc[cells.isin([101, 102]), "country_iso_a3"] = None
+    table = outcome_table.build_outcome_table(ForecastDataset(df), None, "country", "sb")
+    assert table.drop_duplicates("country_code").set_index("country_code").loc[10, "country_iso3"] == "BBB"
+
+
+def test_cells_without_an_iso3_do_not_outvote_a_code():
+    """Country 10 with six cells: 2 say AAA, 1 says BBB, 3 say nothing. AAA wins: missing values
+    are not a candidate in the vote."""
+    base = make_fao_df(targets=_TARGETS)
+    extra = base[base.index.get_level_values("priogrid_id").isin([100, 101])].copy()
+    # Two more cells per pair of the fixture's country-10 cells, ids 104 to 107.
+    frames = [base]
+    for offset in (4, 6):
+        more = extra.copy()
+        months = more.index.get_level_values("month_id")
+        ids = more.index.get_level_values("priogrid_id") + offset
+        more.index = pd.MultiIndex.from_arrays([months, ids], names=base.index.names)
+        frames.append(more)
+    df = pd.concat(frames).sort_index()
+    df["country_iso_a3"] = df["country_iso_a3"].astype(object)
+    cells = df.index.get_level_values("priogrid_id")
+    country10 = df["admin1_gaul0_code"] == 10
+    codes = {100: "AAA", 101: "AAA", 104: "BBB", 105: None, 106: None, 107: None}
+    for cell, code in codes.items():
+        df.loc[(cells == cell) & country10, "country_iso_a3"] = code
+    table = outcome_table.build_outcome_table(ForecastDataset(df), None, "country", "sb")
+    assert table.drop_duplicates("country_code").set_index("country_code").loc[10, "country_iso3"] == "AAA"
+
+
+def test_a_tie_between_two_iso3_codes_is_served_without_one():
+    """Cells 102 and 103 make country 20; one says BBB, one CCC: no code to trust."""
+    df = make_fao_df(targets=_TARGETS)
+    df["country_iso_a3"] = df["country_iso_a3"].astype(object)
+    df.loc[df.index.get_level_values("priogrid_id") == 103, "country_iso_a3"] = "CCC"
+    table = outcome_table.build_outcome_table(ForecastDataset(df), None, "country", "sb")
+    by_code = table.drop_duplicates("country_code").set_index("country_code")
+    assert pd.isna(by_code.loc[20, "country_iso3"]) and by_code.loc[10, "country_iso3"] == "AAA"
 
 
 @pytest.mark.parametrize("level,place,code", [("country", "country_code", 20), ("admin1", "admin1_code", 2)])

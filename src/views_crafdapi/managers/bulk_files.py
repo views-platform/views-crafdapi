@@ -23,12 +23,16 @@ import logging
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
 from views_crafdapi.forecast.serialize import outcome_table, schema
 
 logger = logging.getLogger(__name__)
+
+# A scratch or one-request file older than this is no running build's or request's.
+STALE_SECONDS = 3600
 
 # The level and outcome codes a file name may contain, mapped to themselves. A name is built from
 # the value found here, never from the text a request sent, so no request can steer a path.
@@ -37,6 +41,12 @@ _OUTCOME_NAMES = {outcome: outcome for outcome in schema.SERIES}
 
 # Store ids are letters, digits and a few marks; anything else is not used in a file name.
 _SAFE_ID = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+
+def _delivery_suffix(forecast_id: str, history_id: str) -> str:
+    """The end of every kept file's name: which delivery it was built from. The one place it is
+    written, so building and removing files cannot disagree about it."""
+    return f"__{forecast_id}+{history_id}.parquet"   # "+" is not allowed in an id: no two pairs collide
 
 
 def source_id(dataset) -> Optional[str]:
@@ -74,8 +84,7 @@ class BulkFiles:
                 raise
             return Path(scratch), False
 
-        delivery = f"{ids[0]}_{ids[1]}"
-        path = self._directory / f"{outcome_name}_{level_name}__{delivery}.parquet"
+        path = self._directory / f"{outcome_name}_{level_name}{_delivery_suffix(*ids)}"
         if path.exists():
             return path, True
         # Written under a temporary name and renamed when complete, so a failed build never
@@ -93,18 +102,32 @@ class BulkFiles:
 
     def remove_other_deliveries(self, keep) -> None:
         """Remove the kept files of every delivery except those in `keep`, a list of
-        (forecast, history) dataset pairs. Files built for one request are left to it."""
-        names = set()
+        (forecast, history) dataset pairs, and scratch or one-request files more than
+        `STALE_SECONDS` old (left by a build or request that was killed). Called by the loader after
+        each hand-over, so a leftover is swept at the next one, not on a timer. Files still in use are
+        left: a file may vanish between listing and removing it (another build renames it)."""
+        keep_names = set()
         for forecast_ds, historical_ds in keep:
             ids = (source_id(forecast_ds), source_id(historical_ds))
             if None not in ids:
-                names.add(f"__{ids[0]}_{ids[1]}.parquet")
-        if not names or not self._directory.exists():
+                keep_names |= {f"{o}_{lv}{_delivery_suffix(*ids)}"
+                               for o in _OUTCOME_NAMES for lv in _LEVEL_NAMES}
+        if not self._directory.exists():
             return
-        for old in self._directory.glob("*.parquet"):
-            if old.name.endswith(".once.parquet") or any(old.name.endswith(n) for n in names):
+        for path in self._directory.iterdir():
+            name = path.name
+            if name in keep_names:
                 continue
-            old.unlink(missing_ok=True)
+            try:
+                if name.endswith(".parquet.tmp") or name.endswith(".once.parquet"):
+                    if time.time() - path.stat().st_mtime > STALE_SECONDS:
+                        path.unlink(missing_ok=True)
+                elif name.endswith(".parquet") and keep_names and name not in keep_names:
+                    path.unlink(missing_ok=True)
+            except FileNotFoundError:
+                continue
+            except OSError as e:   # one file that cannot be removed must not stop the rest
+                logger.warning("bulk files: could not remove %s: %r", name, e)
 
     def clear(self) -> None:
         """Remove every kept file (used by tests)."""

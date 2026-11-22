@@ -215,6 +215,11 @@ class DatasetService:
         resumes (producer recovered)."""
         return self._forecast_serving_state
 
+    def api_key_hash(self, x_api_key: str) -> str:
+        """The hash a key's cache entries and disk slot are labelled with (the loader reads the
+        disk slot of the server key's own loads)."""
+        return self._api_key_hash(x_api_key)
+
     def served_forecast_provenance(self) -> Optional[Dict[str, Any]]:
         """S7 (#252): provenance of the forecast currently being served — the authoritative source
         for /provenance's ``{artifact_id, mode, status, created_at, source}``. Carries ``mode``

@@ -17,8 +17,10 @@ import pytest
 
 REGISTER = Path(__file__).resolve().parent.parent / "reports" / "technical_risk_register.md"
 
+# The register is a local working document, ignored by git (2026-11-22). This test runs on the
+# maintainer's machine, where the file is; in CI and fresh checkouts it skips by design.
 pytestmark = pytest.mark.skipif(
-    not REGISTER.exists(), reason="register is not present in this checkout"
+    not REGISTER.exists(), reason="the risk register is local and untracked; not in this checkout"
 )
 
 

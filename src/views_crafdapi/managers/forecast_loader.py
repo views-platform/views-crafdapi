@@ -51,11 +51,17 @@ def read_server_key() -> Optional[str]:
 def check_minutes() -> float:
     """Minutes between checks, from `CRAFDAPI_CHECK_MINUTES`: 1 to 60, else the default."""
     raw = os.getenv("CRAFDAPI_CHECK_MINUTES")
-    try:
-        value = float(raw) if raw else DEFAULT_CHECK_MINUTES
-    except ValueError:
+    if not raw:
         return DEFAULT_CHECK_MINUTES
-    return value if 1.0 <= value <= 60.0 else DEFAULT_CHECK_MINUTES
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if value is None or not 1.0 <= value <= 60.0:
+        logger.warning("CRAFDAPI_CHECK_MINUTES=%r is not a number of minutes from 1 to 60; using %s",
+                       raw, DEFAULT_CHECK_MINUTES)
+        return DEFAULT_CHECK_MINUTES
+    return value
 
 
 # A delivery that could not be served completely (the newest run refused, or no history) is tried
@@ -148,7 +154,10 @@ class ForecastLoader:
             # Keep the previous delivery's files: a download that began before the hand-over may
             # still open one. They go at the next new delivery.
             keep = [(forecast, history)] + ([(previous.forecast, previous.history)] if previous else [])
-            self._bulk_files.remove_other_deliveries(keep)
+            try:
+                self._bulk_files.remove_other_deliveries(keep)
+            except Exception as e:   # a clean-up failure is not a failed load
+                logger.error("loader: removing old bulk files failed: %r", e)
             self._failed_at = None
             logger.info("loader: forecast %s and history %s are served",
                         getattr(forecast, "source_file_id", None),
@@ -186,7 +195,7 @@ class ForecastLoader:
         """
         if dataset is None:
             return None
-        key_hash = self._service._api_key_hash(self._key)
+        key_hash = self._service.api_key_hash(self._key)
         disk = self._disk_cache.read(key_hash, category, enforce_ttl=False)
         fresh = disk["dataset"] if disk else None
         if fresh is not None and getattr(fresh, "source_file_id", None) == getattr(dataset, "source_file_id", None):

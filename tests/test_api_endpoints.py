@@ -1196,6 +1196,18 @@ class TestHealthSaysWhatIsLoaded:
         body = client.get("/health", headers=HEADERS).json()
         assert body["forecast_loaded"] is False and body["status"] == "degraded"
 
+    def test_a_forecast_without_its_recorded_deaths_is_degraded(self, app_client):
+        """The forecast is served, but bulk files and past months answer 503: not healthy."""
+        client, mgr, _ = app_client
+        _serve(mgr, history=None)
+        body = client.get("/health", headers=HEADERS).json()
+        assert body["history_loaded"] is False and body["status"] == "degraded"
+        assert body["forecast_loaded"] is True
+
+    def test_the_recorded_deaths_loaded_are_reported(self, app_client):
+        client, _, _ = app_client
+        assert client.get("/health", headers=HEADERS).json()["history_loaded"] is True
+
     def test_a_delivery_that_cannot_be_loaded_is_degraded(self, app_client):
         client, mgr, _ = app_client
         _serve(mgr, provenance={"created_at": datetime.now(timezone.utc).isoformat()})
@@ -1230,3 +1242,38 @@ class TestTheLoaderRunsWithTheService:
         with TestClient(FastAPI(lifespan=mgr._lifespan)):
             assert events == ["run"]
         assert events == ["run", "stop", "ended"]
+
+    def test_a_load_that_ended_with_an_error_still_lets_the_caches_clear(self, tmp_path):
+        """It no longer writes the caches, so they are cleared, and shutdown does not fail."""
+        mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
+
+        class BrokenLoader:
+            async def run(self, minutes):
+                raise RuntimeError("the loader broke")
+
+            def stop(self):
+                pass
+
+        mgr._loader = BrokenLoader()
+        with TestClient(FastAPI(lifespan=mgr._lifespan)):
+            mgr._file_cache["x"] = {"data": b"1"}
+        assert "x" not in mgr._file_cache
+
+    def test_caches_are_kept_when_the_load_does_not_stop_in_time(self, tmp_path):
+        """The worker thread may still be writing them; clearing under it is unsafe."""
+        import asyncio
+
+        mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
+        mgr._STOP_WAIT_SECONDS = 0.1
+
+        class StuckLoader:
+            async def run(self, minutes):
+                await asyncio.sleep(3600)
+
+            def stop(self):
+                pass
+
+        mgr._loader = StuckLoader()
+        with TestClient(FastAPI(lifespan=mgr._lifespan)):
+            mgr._file_cache["x"] = {"data": b"1"}
+        assert "x" in mgr._file_cache
