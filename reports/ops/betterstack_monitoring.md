@@ -1,5 +1,11 @@
 # Better Stack — crafdapi monitoring (the owned record)
 
+> **How to set the monitors up, check them and re-create them: `deployment/MONITORING.md` (#213).**
+> This note is the older record of what was monitored and why. Where it disagrees with the guide
+> or ADR-041 (the GitHub freshness job as the current check, `/health` being healthy before the
+> first delivery, "when it fires, the delivery is missing"), the guide and ADR-041 are right:
+> `/health` is `degraded` until a forecast is loaded, and a degraded `/health` has several causes.
+
 *Per ADR-032 §3, the list of monitored targets + recipients lives in the repo, not only in the
 vendor dashboard, so re-creating it elsewhere is minutes of work. crafdapi co-hosts with faoapi and
 shares the **same Better Stack account**; each API adds its `/ping` as one more monitored URL.*
@@ -19,10 +25,13 @@ failure — if `/health` is unreachable the workflow logs a notice and opens not
 an availability event Better Stack has already alarmed on within three minutes. A duplicate alarm
 for one event teaches people to ignore both.
 
-The freshness half is a workflow rather than a Better Stack monitor for the same reason
-views-datafactory's is: Better Stack's free tier cannot inspect a response *body*, and `/health`
-deliberately returns **200 with `status: "degraded"`** when the data is stale — HTTP status stays
-about service health. When it fires, the month's delivery is missing: ask views-models.
+The freshness half was a workflow rather than a Better Stack monitor because this note once said
+Better Stack's free tier cannot inspect a response *body*. **That was wrong** (corrected
+2026-11-22, #213): the free tier matches a keyword in the body and sends request headers, as
+views-faoapi's `faoapi — forecast health` monitor has done since August 2026. `/health` returns
+**200 with `status: "degraded"`** when the data is stale, so a keyword check on
+`"status":"healthy"` catches it. ADR-041 moves the alarm to Better Stack; the setup is in
+`deployment/MONITORING.md`, which also lists what a degraded `/health` can mean.
 
 - **Created:** 2026-08-06 (crafdapi v0.1.0 deploy).
 - **SSL/TLS verification:** on (catches an expired/broken cert on the public path).

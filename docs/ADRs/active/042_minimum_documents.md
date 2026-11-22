@@ -27,7 +27,7 @@ A partner-facing API repository keeps these documents. Each has one reader and o
 | Partner keys | maintainer | how a key is made, recorded, sent, renewed and revoked | `deployment/PARTNER_KEYS.md` (the kinds of key: ADR-040) |
 | Release runbook | maintainer | release a version; the API is down; an old forecast; a new server | `deployment/RELEASE_RUNBOOK.md` |
 | Service settings and setup script | the server | the files the runbook installs, with plain comments | `deployment/views-crafdapi.service`, `deployment/bootstrap.sh` |
-| Monitoring setup | maintainer | how to re-create the monitors | to write (#213); the decisions: ADR-032, ADR-041 |
+| Monitoring setup | maintainer | how to re-create the monitors | `deployment/MONITORING.md` (#213); the decisions: ADR-032, ADR-041 |
 | Repository README | anyone opening the repository | what it is, where the documents above are, how to run the tests | `README.md` |
 | ADRs | maintainer, reviewers | why things are as they are | `docs/ADRs/active/` |
 | Code rules | people and AI agents changing the code | class contracts, standards, contributor protocols | `docs/CICs/`, `docs/standards/`, `docs/contributor_protocols/` |
