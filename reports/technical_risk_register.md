@@ -667,6 +667,7 @@ Cross-refs: **C-260** (two live implementations of one operation, already disagr
 | Source | production journal + Better Stack incident history (2026-08-21) |
 | Trigger | When a deploy leaves the service 502ing for more than a minute or two, read the journal for `FATAL deploy-gate:` before assuming a slow start — and when adding any new refusal to `checkout-deploy-tag.sh`, check that it is one an operator can act on from `systemctl status` alone. |
 | Location | `deployment/views-crafdapi.service` (`Restart=always`, `RestartSec=5`), `scripts/checkout-deploy-tag.sh:19-65` (four `exit 1` paths) |
+| Status | 2026-11-22 (#212): an UNREACHABLE origin is no longer a refusal. The fetch has a time limit (60 s), and a timeout or a network error (DNS, connection refused or timed out, no route) logs a WARN and the gate serves the tag already on the server, with `origin NOT checked` on its success line; a tag the server does not have is still refused, naming that origin could not be reached. Any other fetch failure (a refused deploy key, a broken remote) is a new fifth refusal, by design: tolerating it could serve a stale re-cut tag silently. Trade-off kept: while origin is unreachable, a tag re-cut on origin is served in its old form until the next start that reaches origin. Tests: `test_deployment_artifacts.py::TestDeployGateWithoutGitHub`. |
 
 `checkout-deploy-tag.sh` runs as `ExecStartPre` and refuses on four conditions: a missing or
 blank deploy-tag file, a tag absent from origin, a `uv sync --frozen` failure, and a

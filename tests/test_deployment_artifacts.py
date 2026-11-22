@@ -870,3 +870,94 @@ class TestTheDateIsUTCWhereverTheRunnerIs:
             env={**os.environ, "TZ": "Etc/GMT+12", "FRESHNESS_TODAY": "2026-10-23",
                  "DELIVERY_DAY": _ENV["DELIVERY_DAY"]}).stdout)
         assert out["due"] == "true"
+
+
+class TestDeployGateWithoutGitHub:
+    """#212: a restart while GitHub cannot be reached starts from the tag already on the server,
+    and serves exactly that tag; any other fetch failure still stops the start. The gate runs for
+    real in a scratch repo with a stand-in `uv`, isolated from the developer's git settings."""
+
+    @staticmethod
+    def _env(tmp_path, extra=None):
+        import os
+        import shutil
+
+        home = tmp_path / "home"
+        git_dir = os.path.dirname(shutil.which("git"))
+        env = {"HOME": str(home), "PATH": f"{home}/.local/bin:{git_dir}:/usr/bin:/bin",
+               "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
+        env.update(extra or {})
+        return env
+
+    def _server(self, tmp_path, tag, origin, version="0.0.1", extra_env=None):
+        repo = tmp_path / "repo"
+        (repo / "scripts").mkdir(parents=True)
+        (repo / "scripts" / "checkout-deploy-tag.sh").write_text(_GATE)
+        home = tmp_path / "home"
+        (home / ".local" / "bin").mkdir(parents=True)
+        env = self._env(tmp_path)
+
+        def git(*args):
+            return subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+                                   "-c", "commit.gpgsign=false", *args],
+                                  check=True, capture_output=True, text=True, env=env).stdout.strip()
+
+        git("init", "-q")
+        git("commit", "-q", "--allow-empty", "-m", "tagged")
+        git("tag", "v0.0.1")
+        tagged = git("rev-parse", "HEAD")
+        git("commit", "-q", "--allow-empty", "-m", "after the tag")   # HEAD is not on the tag
+        git("remote", "add", "origin", origin)
+        uv = home / ".local" / "bin" / "uv"
+        # `uv sync` does nothing; `uv run ... python -c ...` prints the package version.
+        uv.write_text(f'#!/usr/bin/env bash\nif [ "$1" = run ]; then echo {version}; fi\n')
+        uv.chmod(0o755)
+        tag_file = tmp_path / "tag"
+        tag_file.write_text(tag + "\n")
+        result = subprocess.run(
+            ["bash", str(repo / "scripts" / "checkout-deploy-tag.sh")], capture_output=True, text=True,
+            env=self._env(tmp_path, {"CRAFDAPI_DEPLOY_TAG_FILE": str(tag_file), **(extra_env or {})}),
+        )
+        return result, git("rev-parse", "HEAD"), tagged
+
+    UNREACHABLE = "http://127.0.0.1:1/views-crafdapi.git"   # nothing listens on port 1: refused
+
+    def test_the_tag_on_the_server_is_served_when_origin_cannot_be_reached(self, tmp_path):
+        result, head, tagged = self._server(tmp_path, "v0.0.1", self.UNREACHABLE)
+        assert result.returncode == 0, result.stderr
+        assert "could not fetch tags from origin" in result.stderr
+        assert "serving tag v0.0.1" in result.stdout and "origin NOT checked" in result.stdout
+        assert head == tagged          # it serves the tag, not whatever was checked out
+
+    def test_a_stalled_connection_counts_as_unreachable(self, tmp_path):
+        """A connection that hangs instead of failing is cut off by the time limit."""
+        stall = tmp_path / "stall-ssh"
+        stall.write_text("#!/usr/bin/env bash\nsleep 30\n")   # an ssh that never answers
+        stall.chmod(0o755)
+        result, head, tagged = self._server(
+            tmp_path, "v0.0.1", "ssh://example.invalid/repo.git",
+            extra_env={"GIT_SSH_COMMAND": str(stall), "CRAFDAPI_FETCH_TIMEOUT": "1"},
+        )
+        assert result.returncode == 0, result.stderr
+        assert "could not fetch tags from origin" in result.stderr and head == tagged
+
+    def test_a_tag_the_server_does_not_have_is_still_refused(self, tmp_path):
+        result, _, _ = self._server(tmp_path, "v9.9.9", self.UNREACHABLE)
+        assert result.returncode == 1
+        assert "could not fetch tags from origin" in result.stderr
+        assert "tag not found on this server, and origin could not be reached" in result.stderr
+
+    def test_the_version_check_still_runs_without_origin(self, tmp_path):
+        result, _, _ = self._server(tmp_path, "v0.0.1", self.UNREACHABLE, version="0.0.2")
+        assert result.returncode == 1 and "does not match package version" in result.stderr
+
+    def test_a_fetch_that_fails_for_another_reason_stops_the_start(self, tmp_path):
+        """A broken remote or a refused deploy key is not an outage: the server could serve a
+        stale re-cut tag without anyone seeing why, so the start stops."""
+        result, _, _ = self._server(tmp_path, "v0.0.1", str(tmp_path / "no-such-repo"))
+        assert result.returncode == 1
+        assert "not because origin is unreachable" in result.stderr
+
+    def test_tags_are_fetched_with_force(self):
+        """A re-cut tag must replace the server's stale copy (2026-08-15)."""
+        assert "git fetch --tags --force" in _GATE

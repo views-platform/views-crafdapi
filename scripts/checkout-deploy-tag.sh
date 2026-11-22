@@ -38,10 +38,39 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # said v0.2.0, and the code was a different v0.2.0. Re-cutting a tag is rare and should not be
 # routine, but when it happens the box must converge on the remote rather than silently pin an
 # object nobody can find any more.
-git fetch --tags --force --quiet origin
+#
+# If GitHub cannot be reached (a reboot or crash while GitHub or DNS is down), the start goes on
+# with the tags already on the server (#212). Failing instead would make every restart fail, and
+# after 30 tries systemd gives up and the service stays down although the right tag is on disk.
+# Only an unreachable origin is tolerated: a refused deploy key or a broken remote still stops the
+# start, because then a re-cut tag could be served stale without anyone seeing why. The fetch has
+# a time limit, so a connection that stalls instead of failing counts as unreachable too.
+FETCH_SECONDS="${CRAFDAPI_FETCH_TIMEOUT:-60}"
+set +e
+fetch_err="$(GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2}" \
+    timeout "$FETCH_SECONDS" git fetch --tags --force --quiet origin 2>&1)"
+fetch_rc=$?
+set -e
+ORIGIN="checked"
+if [ "$fetch_rc" -ne 0 ]; then
+    if [ "$fetch_rc" -eq 124 ] || printf '%s' "$fetch_err" | grep -qiE \
+        'could not resolve host|temporary failure in name resolution|name or service not known|network is unreachable|no route to host|connection timed out|connection refused|failed to connect|operation timed out'; then
+        echo "WARN deploy-gate: could not fetch tags from origin (unreachable); using the tags already on this server" >&2
+        ORIGIN="NOT checked: unreachable"
+    else
+        echo "FATAL deploy-gate: fetching tags from origin failed, and not because origin is unreachable:" >&2
+        printf '%s\n' "$fetch_err" >&2
+        echo "  For example a refused deploy key or a wrong remote. Fix it, or the server could serve a stale tag." >&2
+        exit 1
+    fi
+fi
 
 if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-    echo "FATAL deploy-gate: tag not found on origin: $TAG" >&2
+    if [ "$ORIGIN" = "checked" ]; then
+        echo "FATAL deploy-gate: tag not found on origin: $TAG" >&2
+    else
+        echo "FATAL deploy-gate: tag not found on this server, and origin could not be reached: $TAG" >&2
+    fi
     exit 1
 fi
 
@@ -64,4 +93,4 @@ if [ "v$INSTALLED" != "$TAG" ]; then
     exit 1
 fi
 
-echo "deploy-gate: serving tag $TAG (v$INSTALLED, $(git rev-parse --short HEAD))"
+echo "deploy-gate: serving tag $TAG (v$INSTALLED, $(git rev-parse --short HEAD); origin $ORIGIN)"
