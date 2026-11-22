@@ -11,6 +11,7 @@ environment plumbing (fetch the registry at the pinned tag via ``git show``; FAI
 CI, a silent skip there would re-open the invisible-delivery hole — ADR-016 §6).
 """
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -148,3 +149,38 @@ def test_the_config_carries_the_path_manager_so_the_name_filter_actually_applies
         "query runs unscoped across the collection"
     )
     assert config.path_manager.model_name == CONSUMER_DOCUMENT_NAME
+
+
+def test_the_pinned_edition_is_at_least_the_floor():
+    """ADR-044 serves every partner one loaded copy, which the storage contract allows only from
+    appwrite-seam-v1.9.0 (§5.8, "uniform entitlement"). A lower pin passes the binding above,
+    because the UNCRAFD row exists from v1.5.2, so the floor is checked on its own. The floor is
+    written here, not read from the code it checks, so one edit cannot lower both."""
+    import tomllib
+
+    version = tomllib.loads(_pinned_registry_text())["meta"]["version"]
+    assert tuple(int(p) for p in version.split(".")) >= (1, 9, 0), (
+        f"REGISTRY_PIN_TAG {REGISTRY_PIN_TAG} is registry edition {version}, below 1.9.0. "
+        "ADR-044 needs the uniform-entitlement mode of contract §5.8, first in v1.9.0."
+    )
+
+
+def test_the_pin_is_a_published_tag_not_a_branch():
+    """A branch moves; the contract is referenced only at a published tag."""
+    assert re.fullmatch(r"appwrite-seam-v\d+\.\d+\.\d+", REGISTRY_PIN_TAG), REGISTRY_PIN_TAG
+
+
+def test_the_bound_name_and_row_are_crafds():
+    """Both sides of the binding come from production code, so a swap of both (say to FAO's row
+    and name) would still agree. The values themselves are pinned here."""
+    assert (CONSUMER_DOCUMENT_NAME, REGISTRY_CONTRACT_KEY) == ("un_crafd", "UNCRAFD_CONSUMER_DOCUMENT_NAME")
+
+
+def test_the_readme_links_the_contract_at_the_pinned_tag_and_no_other():
+    """The README's contract link and the CI pin are one tag; they drifted apart before (C-250)."""
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    url = (f"https://github.com/views-platform/views-appwrite/blob/{REGISTRY_PIN_TAG}/"
+           "docs/ADRs/platform/appwrite_seam_contract.md")
+    assert url in readme
+    linked_tags = set(re.findall(r"views-appwrite/blob/(appwrite-seam-v[0-9.]+)/", readme))
+    assert linked_tags == {REGISTRY_PIN_TAG}, linked_tags

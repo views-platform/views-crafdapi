@@ -29,9 +29,11 @@ CONSUMER_DOCUMENT_NAME = "un_crafd"
 #: The registry ``[contract]`` row this name is the authority-checked mirror of.
 REGISTRY_CONTRACT_KEY = "UNCRAFD_CONSUMER_DOCUMENT_NAME"
 
-#: The immutable registry edition we bind to. The UNCRAFD row exists only from v1.5.2, so this
-#: must be ≥ that; re-pinning to a later edition is a deliberate edit = the contract amendment.
-REGISTRY_PIN_TAG = "appwrite-seam-v1.5.2"
+#: The immutable registry edition we bind to; re-pinning is a deliberate edit = the contract
+#: amendment. It must be ≥ v1.9.0 (re-pinned 2026-11-22, #231): ADR-044 needs that edition's §5.8
+#: "uniform entitlement" mode, which permits serving every partner one loaded copy. Enforced by
+#: `tests/test_seam_contract_binding.py::test_the_pinned_edition_is_at_least_the_floor`.
+REGISTRY_PIN_TAG = "appwrite-seam-v1.9.0"
 
 #: Path of the coordinate registry within the views-appwrite repo.
 REGISTRY_RELPATH = "docs/ADRs/platform/coordinate_registry.toml"

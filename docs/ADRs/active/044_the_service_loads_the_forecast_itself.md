@@ -89,7 +89,8 @@ partners ever had to see different data, this decision would have to be undone, 
 apart per partner again. Who notices: whoever changes that sentence of the service
 specification. A test (`tests/test_uniform_entitlement.py`) fails when the sentence changes, and
 its message points here. The platform's shared test for keeping callers' cached data apart has a
-mode for this case ("uniform entitlement"), which cites the service specification.
+mode for this case ("uniform entitlement", storage contract §5.8, from version
+`appwrite-seam-v1.9.0`, which this repository pins), which cites the service specification.
 
 ### 5. Every answer says which month the forecast was made in
 
