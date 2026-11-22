@@ -28,13 +28,19 @@ EnvironmentFile=-/home/views-crafdapi-deploy/.env.crafdapi-server-key
 ExecStartPre=/usr/bin/env bash /home/views-crafdapi-deploy/views-crafdapi/scripts/checkout-deploy-tag.sh
 ExecStart=/home/views-crafdapi-deploy/views-crafdapi/.venv/bin/uvicorn \
     views_crafdapi.managers.api:create_app \
-    --factory --host 127.0.0.1 --port 8001
+    --factory --host 127.0.0.1 --port 8001 --timeout-graceful-shutdown 30
 Restart=always
 RestartSec=5
 
 # A start that hangs (for example fetching tags) counts as failed after 3 minutes. A normal start
 # takes about 3 seconds.
 TimeoutStartSec=180
+# A stop (#236): uvicorn gives open requests up to 30 s (--timeout-graceful-shutdown), then the
+# lifespan shutdown waits up to 60 s for a running forecast load (ADR-044); after that the process
+# ends at once. That is normally 90 s at most, systemd's default limit exactly, so allow 120 s. A
+# request that blocks the server (a bulk file built on request) can push a stop past it; systemd
+# then kills it.
+TimeoutStopSec=120
 
 # Memory. The service runs alone on a 32 GB server. Its highest use is at start, when it reads the
 # forecast: 7.3 GB, measured 2026-08-21 on v0.5.1. If it goes above 24 GB, it is stopped and

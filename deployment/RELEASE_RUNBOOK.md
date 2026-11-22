@@ -48,6 +48,22 @@ takes under a minute; after a new delivery, a few minutes.
 sudo systemctl restart views-crafdapi
 ```
 
+The restart checked out the new tag. Check whether the tag changed the service's unit file (its
+start command or stop limits, #236). This shows the difference, or nothing if there is none:
+
+```bash
+sudo diff /etc/systemd/system/views-crafdapi.service /home/views-crafdapi-deploy/views-crafdapi/deployment/views-crafdapi.service
+```
+
+Only if it showed a difference: install it and restart once more. The forecast loads again, so
+data requests answer `503` for up to a minute. (To see why the file changed: `git log -p
+vOLD..vX.Y.Z -- deployment/views-crafdapi.service` in the checkout, where vOLD is the tag served
+before.)
+
+```bash
+sudo cp /home/views-crafdapi-deploy/views-crafdapi/deployment/views-crafdapi.service /etc/systemd/system/views-crafdapi.service && sudo systemctl daemon-reload && sudo systemctl restart views-crafdapi
+```
+
 ```bash
 curl -s https://crafdapi.viewsforecasting.org/version
 ```
@@ -74,7 +90,10 @@ read -rsp "reader key: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATAS
 
 Expect `ALL PASS`. Then `exit`.
 
-**To roll back,** do the same steps with the previous tag.
+**To roll back,** do the same steps with the previous tag. If the unit-file check then shows a
+difference, keep the installed unit file unless the release you are undoing changed it and that
+change is the problem. (The #236 unit file works with every tag from v0.5.1 on: all pin uvicorn
+0.37.0, which accepts its flags.)
 
 ## 2. The API is down
 

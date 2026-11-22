@@ -31,8 +31,6 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from contextlib import asynccontextmanager
 import uvicorn
-import signal
-import sys
 from dotenv import load_dotenv
 import hashlib
 from cachetools import LRUCache, TTLCache
@@ -322,10 +320,11 @@ class CrafdApiManager(APIManager):
             "workers": int(self.configs.get("workers", 1)),
         }
         
-        # Setup signal handlers
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-        
+        # No signal handlers of our own (#236): uvicorn's handle SIGTERM and SIGINT and run the
+        # lifespan shutdown (`_lifespan`: stop the loader, wait for it, then clear the caches).
+        # A handler installed here replaced uvicorn's, so a stop skipped all of that and cleared
+        # the caches under a running load (checked 2026-11-22 with a real SIGTERM).
+
         # Register routes
         self._register_routes()
 
@@ -343,12 +342,18 @@ class CrafdApiManager(APIManager):
 
         # Stop a running load at its next step, and wait up to a minute for it (a grid file being
         # written finishes first, about 40 seconds). The caches are cleared only once it stopped.
+        # This runs after uvicorn has finished the open requests (up to 30 s): until then the
+        # loader keeps checking, and a load it starts then is stopped here like any other.
         self._loader.stop()
         try:
             await asyncio.wait_for(loading, timeout=self._STOP_WAIT_SECONDS)
         except asyncio.TimeoutError:
-            # The worker thread may still be writing the caches: leave them. (Whether the process
-            # then waits for that thread, or systemd kills it at its stop limit, is #236.)
+            # The worker thread may still be writing the caches: leave them. On SIGTERM (how
+            # systemd stops it) the process then ends at once: uvicorn sends the signal to itself
+            # again once it has finished, and the thread dies in the middle of its step. Bulk files
+            # are written under a temporary name, so none is left half-written; the loader's sweep
+            # removes old temporary files (BulkFiles.remove_other_deliveries), and #243 tracks the
+            # cache's staging folders.
             logger.warning("CRAF'd API is shutting down; the forecast load did not stop within %s "
                            "seconds, so the caches are left to it", self._STOP_WAIT_SECONDS)
             return
@@ -901,13 +906,6 @@ class CrafdApiManager(APIManager):
                 ) from e
 
         
-
-    def _signal_handler(self, signum, frame):
-        """Handle shutdown signals gracefully."""
-        logger.info(f"Received signal {signum}, shutting down...")
-        self._is_running = False
-        self._shutdown()
-        sys.exit(0)
 
     def _startup(self):
         """Initialize and start the API server."""
