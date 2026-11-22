@@ -62,6 +62,6 @@ Until then the GitHub job runs unchanged.
 - A read-only key is stored at an outside company (EU, ADR-032). If Better Stack is left, that key
   is revoked and a new one made.
 - The monitors and their settings are written down in this repository, so they can be re-created
-  elsewhere (ADR-032 §3). A setup guide for crafdapi's monitors does not exist yet (#213).
+  elsewhere (ADR-032 §3). The setup guide is `deployment/MONITORING.md` (#213).
 - This supersedes the freshness part of ADR-032 §2a for crafdapi, and the GitHub job described in
   `reports/ops/betterstack_monitoring.md`.
