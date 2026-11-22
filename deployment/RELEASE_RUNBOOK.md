@@ -88,8 +88,14 @@ sudo journalctl -u views-crafdapi -n 60 --no-pager | grep -E "deploy-gate|FATAL|
 If it prints nothing, the service has not started recently, so the cause is elsewhere: read the
 last lines in full with `sudo journalctl -u views-crafdapi -n 60 --no-pager`.
 
-`deploy-gate: serving tag ...` means it started. A line with `oom` means it ran out of memory and
-was stopped; systemd restarts it on its own. A `FATAL deploy-gate:` line names what is wrong,
+`deploy-gate: serving tag ...` means it started. If that line contains `origin NOT checked`, the
+fetch from GitHub failed at the start (a `WARN deploy-gate:` line above it says how), and the server
+runs the tag it already had. That is right unless the tag was re-made on GitHub meanwhile: then
+restart once the fetch works again. The lines starting `deploy-gate: git:` are git's own words. If
+they name a `.lock` file under `.git`: the gate removes the locks a fetch takes (under `refs/`,
+`packed-refs.lock`, `shallow.lock`, `FETCH_HEAD.lock`) once they are a minute old; any other lock,
+such as `index.lock`, delete by hand if no git is running. A line with `oom` means it ran out of
+memory and was stopped; systemd restarts it on its own. A `FATAL deploy-gate:` line names what is wrong,
 usually a tag that does not exist on GitHub. Fix it (write a good tag, section 1), or restart:
 
 ```bash
