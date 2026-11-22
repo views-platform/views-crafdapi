@@ -11,6 +11,7 @@ import re
 import os
 import shutil
 import subprocess
+import time
 import sys
 import textwrap
 from pathlib import Path
@@ -906,3 +907,337 @@ class TestTheDateIsUTCWhereverTheRunnerIs:
             env={**os.environ, "TZ": "Etc/GMT+12", "FRESHNESS_TODAY": "2026-10-23",
                  "DELIVERY_DAY": _ENV["DELIVERY_DAY"]}).stdout)
         assert out["due"] == "true"
+
+
+class TestDeployGateWithoutGitHub:
+    """#212: a fetch that fails starts from the tag already on the server, and serves exactly that
+    tag; only a refusal from origin (a refused key or login, a missing repository) stops the start. The gate runs for real in a scratch repo with a stand-in `uv`, isolated from
+    the developer's git settings."""
+
+    UNREACHABLE = "http://127.0.0.1:1/views-crafdapi.git"   # nothing listens on port 1: refused
+
+    @staticmethod
+    def _env(tmp_path, extra=None):
+        home = tmp_path / "home"
+        git_path = shutil.which("git")
+        assert git_path, "these tests run the real deploy gate and need git on PATH"
+        env = {"HOME": str(home), "PATH": f"{home}/.local/bin:{os.path.dirname(git_path)}:/usr/bin:/bin",
+               "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"}
+        env.update(extra or {})
+        return env
+
+    @staticmethod
+    def _git(repo, env, *args):
+        return subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+                               "-c", "commit.gpgsign=false", *args],
+                              check=True, capture_output=True, text=True, env=env).stdout.strip()
+
+    @staticmethod
+    def _script(tmp_path, name, body):
+        path = tmp_path / name
+        path.write_text("#!/usr/bin/env bash\n" + body + "\n")
+        path.chmod(0o755)
+        return str(path)
+
+    def _server(self, tmp_path, tag, origin, version="0.0.1", extra_env=None, git_config=None,
+                before_gate=None, offline_sync_fails=False, uv_fails_on=None):
+        repo = tmp_path / "repo"
+        (repo / "scripts").mkdir(parents=True)
+        (repo / "scripts" / "checkout-deploy-tag.sh").write_text(_GATE)
+        home = tmp_path / "home"
+        (home / ".local" / "bin").mkdir(parents=True)
+        env = self._env(tmp_path)
+        git = lambda *a: self._git(repo, env, *a)   # noqa: E731
+        git("init", "-q")
+        git("commit", "-q", "--allow-empty", "-m", "tagged")
+        git("tag", "v0.0.1")
+        tagged = git("rev-parse", "HEAD")
+        git("commit", "-q", "--allow-empty", "-m", "after the tag")   # HEAD is not on the tag
+        git("remote", "add", "origin", origin)
+        for key, value in (git_config or {}).items():
+            git("config", key, value)
+        # `uv sync` does nothing; `uv run ... python -c ...` prints the package version.
+        offline = 'if [ "$1" = sync ] && [[ " $* " == *" --offline "* ]]; then echo "no network for package x" >&2; exit 1; fi' \
+            if offline_sync_fails else ""
+        if uv_fails_on:
+            offline += f'\nif [ "$1" = {uv_fails_on} ]; then echo broken >&2; exit 1; fi'
+        # Every uv call is recorded, so a test can see whether it ran offline.
+        self._script(home / ".local" / "bin", "uv",
+                     f'echo "$*" >> {tmp_path}/uv-calls\n{offline}\n'
+                     f'if [ "$1" = run ]; then echo "warning: a uv notice" >&2; echo VERSION={version}; '
+                     f'echo "warning: printed after the version" >&2; fi')
+        tag_file = tmp_path / "tag"
+        tag_file.write_text(tag + "\n")
+        if before_gate:
+            before_gate(repo)
+        result = subprocess.run(
+            ["bash", str(repo / "scripts" / "checkout-deploy-tag.sh")], capture_output=True, text=True,
+            env=self._env(tmp_path, {"CRAFDAPI_DEPLOY_TAG_FILE": str(tag_file), **(extra_env or {})}),
+        )
+        return result, git("rev-parse", "HEAD"), tagged
+
+    def _origin(self, tmp_path):
+        """A reachable origin whose v0.0.1 points at a different commit (a re-cut tag)."""
+        origin = tmp_path / "origin"
+        origin.mkdir()
+        env = self._env(tmp_path)
+        self._git(origin, env, "init", "-q")
+        self._git(origin, env, "commit", "-q", "--allow-empty", "-m", "re-cut")
+        self._git(origin, env, "tag", "v0.0.1")
+        return origin, self._git(origin, env, "rev-parse", "HEAD")
+
+    def _served_from_disk(self, result, head, tagged):
+        assert result.returncode == 0, result.stderr
+        calls = (Path(result.args[1]).parents[2] / "uv-calls").read_text().splitlines()
+        assert all("--offline" in c for c in calls), calls     # no network assumed after a failed fetch
+        assert "could not fetch tags from origin" in result.stderr
+        assert "serving tag v0.0.1" in result.stdout and "origin NOT checked" in result.stdout
+        assert head == tagged          # it serves the tag, not whatever was checked out
+
+    def test_a_refused_connection_serves_the_tag_on_the_server(self, tmp_path):
+        self._served_from_disk(*self._server(tmp_path, "v0.0.1", self.UNREACHABLE))
+
+    def test_a_name_lookup_failure_serves_the_tag_on_the_server(self, tmp_path):
+        """DNS down: the case the gate most needs to survive."""
+        result, head, tagged = self._server(tmp_path, "v0.0.1", "http://no-such-host.invalid/repo.git")
+        self._served_from_disk(result, head, tagged)
+        assert "resolve host" in result.stderr.lower()
+
+    @pytest.mark.parametrize("ssh_says", [
+        "Timeout, server github.com not responding.",               # ssh keep-alive gave up
+        "kex_exchange_identification: read: Connection reset by peer",
+        "Connection closed by 140.82.121.4 port 22",
+        "fatal: unable to access 'https://github.com/x/': The requested URL returned error: 503",
+        "fatal: unable to access 'https://github.com/x/': The requested URL returned error: 429",
+        "fatal: unable to access 'https://github.com/x/': OpenSSL SSL_read: SSL_ERROR_SYSCALL, errno 0",
+        "fatal: early EOF",
+        "fatal: unable to access 'https://github.com/x/': The requested URL returned error: 408",
+        # A bare 403 can be rate limiting: not proof that origin refused.
+        "fatal: unable to access 'https://github.com/x/': The requested URL returned error: 403",
+    ])
+    def test_a_github_side_outage_serves_the_tag_on_the_server(self, tmp_path, ssh_says):
+        ssh = self._script(tmp_path, "ssh", f"echo \"{ssh_says}\" >&2\nexit 255")
+        result, head, tagged = self._server(tmp_path, "v0.0.1", "ssh://git@github.invalid/repo.git",
+                                            extra_env={"GIT_SSH_COMMAND": ssh})
+        self._served_from_disk(result, head, tagged)
+        assert ssh_says in result.stderr      # git's own words reach the journal
+
+    @pytest.mark.parametrize("origin_says", [
+        "git@github.com: Permission denied (publickey).",
+        "remote: Permission to x/y.git denied to someone.\nfatal: unable to access 'https://github.com/x/': The requested URL returned error: 403",
+        "Received disconnect from 140.82.121.4 port 22:2: Too many authentication failures",
+        "ERROR: Repository not found.",
+        "fatal: unable to access 'https://github.com/x/': The requested URL returned error: 404",
+        "fatal: unable to access 'https://github.com/x/': The requested URL returned error: 401",
+        "Host key verification failed.",
+        "remote: Invalid username or password.\nfatal: Authentication failed for 'https://github.com/x/'",
+        "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+        "fatal: could not read Password for 'https://user@github.com': terminal prompts disabled",
+        "remote: Not Found\nfatal: repository 'https://github.com/x/y.git/' not found",
+        "ERROR: Your account is suspended. Please check with your installation administrator.",
+        "fatal: 'origin' does not appear to be a git repository",
+        # A refusal that also mentions the connection closing is still a refusal.
+        "git@github.com: Permission denied (publickey).\nConnection closed by 140.82.121.4 port 22",
+    ])
+    def test_a_no_from_origin_stops_the_start(self, tmp_path, origin_says):
+        """Origin answered and refused: the server could otherwise serve a stale re-cut tag."""
+        ssh = self._script(tmp_path, "ssh", f"echo \"{origin_says}\" >&2\nexit 255")
+        result, _, _ = self._server(tmp_path, "v0.0.1", "ssh://git@github.invalid/repo.git",
+                                    extra_env={"GIT_SSH_COMMAND": ssh})
+        assert result.returncode == 1
+        assert "origin refused the fetch" in result.stderr
+        assert origin_says.splitlines()[0] in result.stderr
+
+    @pytest.mark.parametrize("git_says", [
+        "error: index-pack failed\nfatal: early EOF",                  # a transfer cut off
+        "fatal: write error: No space left on device",                 # a fault on this server
+        "Connection to github.com closed by remote host.",
+        "error: RPC failed; curl 56 OpenSSL SSL_read: Connection reset by peer",
+        "something no list foresaw",
+    ])
+    def test_any_failure_that_is_not_a_refusal_serves_the_tag_on_the_server(self, tmp_path, git_says):
+        """Only a refusal stops the start; listing every way a fetch can fail does not work."""
+        ssh = self._script(tmp_path, "ssh", f"echo \"{git_says}\" >&2\nexit 255")
+        result, head, tagged = self._server(tmp_path, "v0.0.1", "ssh://git@github.invalid/repo.git",
+                                            extra_env={"GIT_SSH_COMMAND": ssh})
+        self._served_from_disk(result, head, tagged)
+        assert "deploy-gate: git: " + git_says.splitlines()[0] in result.stderr
+
+    @pytest.mark.parametrize("step", ["sync", "run"])
+    def test_a_failing_uv_step_stops_the_start_with_a_fatal_line(self, tmp_path, step):
+        """Without a FATAL line the runbook's journal search would find nothing."""
+        origin, _ = self._origin(tmp_path)
+        result, _, _ = self._server(tmp_path, "v0.0.1", str(origin), uv_fails_on=step)
+        assert result.returncode == 1
+        assert "FATAL deploy-gate:" in result.stderr and "deploy-gate: uv: broken" in result.stderr
+        step_line = {"sync": "syncing the packages", "run": "reading the installed version"}[step]
+        assert step_line in result.stderr          # the FATAL line names the step that failed
+        assert "does not match package version" not in result.stderr   # it stopped at that step
+
+    def test_offline_a_tag_that_needs_new_packages_stops_the_start_and_says_why(self, tmp_path):
+        result, _, _ = self._server(tmp_path, "v0.0.1", self.UNREACHABLE, offline_sync_fails=True)
+        assert result.returncode == 1
+        assert "synced offline" in result.stderr and "may need packages this server does not have" in result.stderr
+        calls = (tmp_path / "uv-calls").read_text().splitlines()
+        assert not any(c.startswith("run") for c in calls)    # stopped at the sync, before the version check
+        assert "deploy-gate: uv: no network for package x" in result.stderr
+
+    @pytest.mark.parametrize("lock_path", [
+        "refs/tags/v0.0.1.lock", "refs/heads/main.lock", "refs/remotes/origin/main.lock",
+        "packed-refs.lock", "shallow.lock", "FETCH_HEAD.lock"])
+    def test_a_lock_file_left_by_an_earlier_fetch_is_removed(self, tmp_path, lock_path):
+        """A fetch killed mid-update leaves a lock that would fail every later fetch."""
+        origin, recut = self._origin(tmp_path)
+
+        def old_lock(repo):     # 90 seconds: past the one minute, early in systemd's retries
+            lock = repo / ".git" / lock_path
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text("")
+            os.utime(lock, (time.time() - 90, time.time() - 90))
+            # Real refs just as old must survive: only locks are removed.
+            for ref in (repo / ".git" / "refs" / "tags" / "v0.0.1", repo / ".git" / "refs" / "heads" / "keep-me"):
+                if not ref.exists():
+                    ref.write_text((repo / ".git" / "refs" / "tags" / "v0.0.1").read_text())
+                os.utime(ref, (time.time() - 90, time.time() - 90))
+
+        result, head, _ = self._server(tmp_path, "v0.0.1", str(origin), before_gate=old_lock)
+        assert result.returncode == 0, result.stderr
+        assert not (tmp_path / "repo" / ".git" / lock_path).exists()
+        assert (tmp_path / "repo" / ".git" / "refs" / "heads" / "keep-me").exists()
+        assert "removed a leftover lock file" in result.stderr and head == recut
+        assert "deploy-gate: git:" not in result.stderr          # nothing empty or stray logged
+
+    def test_a_fresh_lock_file_is_left_and_the_tag_on_the_server_served(self, tmp_path):
+        """A lock less than a minute old may belong to a running git: not touched. The fetch it
+        blocks fails, which is not a refusal: the tag on the server is served, with git's words."""
+        origin, _ = self._origin(tmp_path)
+        lock = lambda repo: repo / ".git" / "refs" / "tags" / "v0.0.1.lock"   # noqa: E731
+        result, head, tagged = self._server(tmp_path, "v0.0.1", str(origin),
+                                            before_gate=lambda repo: lock(repo).write_text(""))
+        self._served_from_disk(result, head, tagged)
+        assert ".lock" in result.stderr and lock(tmp_path / "repo").exists()
+
+    def test_a_lock_a_fetch_does_not_take_is_left_alone(self, tmp_path):
+        """An operator's own git (say a `git gc`) holds other locks; only a fetch's are removed."""
+        origin, _ = self._origin(tmp_path)
+
+        def gc_lock(repo):
+            lock = repo / ".git" / "gc.pid.lock"
+            lock.write_text("")
+            os.utime(lock, (time.time() - 600, time.time() - 600))
+
+        result, _, _ = self._server(tmp_path, "v0.0.1", str(origin), before_gate=gc_lock)
+        assert result.returncode == 0, result.stderr
+        assert (tmp_path / "repo" / ".git" / "gc.pid.lock").exists()
+
+    def test_a_stalled_connection_is_cut_off_and_serves_the_tag_on_the_server(self, tmp_path):
+        ssh = self._script(tmp_path, "stall-ssh", "sleep 30")   # an ssh that never answers
+        started = time.monotonic()
+        result, head, tagged = self._server(
+            tmp_path, "v0.0.1", "ssh://example.invalid/repo.git",
+            extra_env={"GIT_SSH_COMMAND": ssh, "CRAFDAPI_FETCH_TIMEOUT": "1"})
+        self._served_from_disk(result, head, tagged)
+        assert time.monotonic() - started < 15, "the 1-second limit did not cut the stall off"
+        assert "the fetch ran past 1 s" in result.stdout
+        assert not re.search(r"deploy-gate: git: *$", result.stderr, re.M)   # no empty git lines
+
+    def test_a_time_limit_setting_that_is_not_a_number_is_not_handed_to_timeout(self, tmp_path):
+        """"soon" given to `timeout` would fail at once ("invalid time interval") and leave no
+        limit at all; it must fall back to the default instead."""
+        ssh = self._script(tmp_path, "refused-ssh", "echo 'Connection refused' >&2\nexit 255")
+        result, head, tagged = self._server(tmp_path, "v0.0.1", "ssh://example.invalid/repo.git",
+                                            extra_env={"GIT_SSH_COMMAND": ssh, "CRAFDAPI_FETCH_TIMEOUT": "soon"})
+        self._served_from_disk(result, head, tagged)
+        assert "invalid time interval" not in result.stderr
+        assert "CRAFDAPI_FETCH_TIMEOUT=soon is not 1 to 90 seconds; using 60" in result.stderr
+        assert "time limit 60 s" in result.stderr       # the value actually used
+
+    @pytest.mark.parametrize("setting,used", [("0", 60), ("91", 60), ("90", 90), ("1", 1), (None, 60)])
+    def test_the_time_limit_actually_used(self, tmp_path, setting, used):
+        """0 would mean no limit at all for `timeout`; out-of-range values fall back to 60."""
+        ssh = self._script(tmp_path, "refused-ssh", "echo 'Connection refused' >&2\nexit 255")
+        env = {"GIT_SSH_COMMAND": ssh}
+        if setting is not None:
+            env["CRAFDAPI_FETCH_TIMEOUT"] = setting
+        result, head, tagged = self._server(tmp_path, "v0.0.1", "ssh://example.invalid/repo.git", extra_env=env)
+        self._served_from_disk(result, head, tagged)
+        assert f"time limit {used} s" in result.stderr
+
+    def test_a_huge_time_limit_setting_is_not_kept(self, tmp_path):
+        """Twenty digits are too big for bash's comparison, which then lets the value through."""
+        ssh = self._script(tmp_path, "refused-ssh", "echo 'Connection refused' >&2\nexit 255")
+        result, head, tagged = self._server(tmp_path, "v0.0.1", "ssh://example.invalid/repo.git",
+                                            extra_env={"GIT_SSH_COMMAND": ssh,
+                                                       "CRAFDAPI_FETCH_TIMEOUT": "9" * 20})
+        self._served_from_disk(result, head, tagged)
+        assert "is not 1 to 90 seconds" in result.stderr
+
+    def test_the_default_and_the_range_of_the_time_limit(self):
+        """Read, not run: observing a 60-second limit, or 0 meaning "no limit", takes minutes."""
+        assert 'CRAFDAPI_FETCH_TIMEOUT:-60' in _GATE
+        assert '[ "$FETCH_SECONDS" -lt 1 ] || [ "$FETCH_SECONDS" -gt 90 ]' in _GATE
+        # The package sync and version check have their own limits, and with the fetch's maximum
+        # they fit systemd's 180-second start budget (read, not run).
+        version = int(re.search(r"^VERSION_SECONDS=(\d+)$", _GATE, re.M)[1])
+        assert "SYNC_SECONDS=$(( 170 - SECONDS - 5 - VERSION_SECONDS - 5 ))" in _GATE
+        assert 'timeout -k 5 "$SYNC_SECONDS" uv sync' in _GATE
+        assert 'timeout -k 5 "$VERSION_SECONDS" uv run' in _GATE
+        assert (90 + 5) + (10 + 5) + (version + 5) <= 180     # the sync's floor still fits
+
+    def test_git_never_waits_for_a_password(self):
+        """Read, not run: a waiting prompt would pass for an outage (the tests' own environment
+        already sets GIT_TERMINAL_PROMPT=0, so running cannot tell)."""
+        assert re.search(r"^export GIT_TERMINAL_PROMPT=0$", _GATE, re.M) and "-o BatchMode=yes" in _GATE
+
+    def test_a_repository_that_does_not_exist_stops_the_start(self, tmp_path):
+        result, _, _ = self._server(tmp_path, "v0.0.1", str(tmp_path / "no-such-repo"))
+        assert result.returncode == 1
+        assert "origin refused the fetch" in result.stderr
+        assert "does not appear to be a git repository" in result.stderr
+
+    def test_the_ssh_wrapper_named_in_git_ssh_is_kept(self, tmp_path):
+        used = tmp_path / "wrapper-used"
+        ssh = self._script(tmp_path, "wrapper-ssh", f"touch {used}\necho 'Connection refused' >&2\nexit 255")
+        self._served_from_disk(*self._server(tmp_path, "v0.0.1", "ssh://git@github.invalid/repo.git",
+                                             extra_env={"GIT_SSH": ssh}))
+        assert used.exists()
+
+    def test_the_deploy_key_named_in_git_config_is_kept(self, tmp_path):
+        """`core.sshCommand` may name the deploy key; the gate's own ssh limits must not
+        override it."""
+        used = tmp_path / "configured-ssh-used"
+        ssh = self._script(tmp_path, "configured-ssh", f"touch {used}\necho 'Connection refused' >&2\nexit 255")
+        self._served_from_disk(*self._server(tmp_path, "v0.0.1", "ssh://git@github.invalid/repo.git",
+                                             git_config={"core.sshCommand": ssh}))
+        assert used.exists()
+
+    def test_a_tag_the_server_does_not_have_is_still_refused(self, tmp_path):
+        result, _, _ = self._server(tmp_path, "v9.9.9", self.UNREACHABLE)
+        assert result.returncode == 1
+        assert "could not fetch tags from origin" in result.stderr
+        assert "tag not found on this server, and origin could not be checked" in result.stderr
+
+    def test_the_version_check_still_runs_without_origin(self, tmp_path):
+        """And says the likely cause: a tag re-made on GitHub while it could not be reached."""
+        result, _, _ = self._server(tmp_path, "v0.0.1", self.UNREACHABLE, version="0.0.2")
+        assert result.returncode == 1 and "does not match package version" in result.stderr
+        fatal = [line for line in result.stderr.splitlines() if "does not match package version" in line]
+        assert fatal and "origin NOT checked" in fatal[0]       # the FATAL line itself says so
+        assert "restart once the fetch works" in result.stderr
+
+    def test_a_tag_that_cannot_be_checked_out_stops_the_start(self, tmp_path):
+        """A leftover index.lock (not one a fetch takes) blocks the checkout."""
+        result, _, _ = self._server(tmp_path, "v0.0.1", self.UNREACHABLE,
+                                    before_gate=lambda repo: (repo / ".git" / "index.lock").write_text(""))
+        assert result.returncode == 1 and "could not check out v0.0.1" in result.stderr
+        assert "deploy-gate: git: " in result.stderr and "index.lock" in result.stderr   # git's words
+        assert "serving tag" not in result.stdout
+
+    def test_a_tag_re_cut_on_origin_replaces_the_servers_copy(self, tmp_path):
+        """--force: when origin can be reached, the server converges on origin's tag (2026-08-15)."""
+        origin, recut = self._origin(tmp_path)
+        result, head, stale = self._server(tmp_path, "v0.0.1", str(origin))
+        assert result.returncode == 0, result.stderr
+        assert head == recut and head != stale and "origin checked" in result.stdout
+        calls = (tmp_path / "uv-calls").read_text().splitlines()
+        assert calls and not any("--offline" in c for c in calls)   # online when origin answered
