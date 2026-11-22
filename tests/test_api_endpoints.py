@@ -267,6 +267,52 @@ class TestHealthAfterAnUnverifiedServe:
         })
 
 
+class TestHealthDegradesWhenItCannotVouchForTheData:
+    """#248: the Better Stack monitor alarms only when /health is not healthy. Two cases the old
+    GitHub job caught must therefore degrade /health itself."""
+
+    def test_an_unmeasurable_forecast_age_degrades(self, app_client):
+        client, mgr, mock_pm = app_client
+        _serve(mgr, provenance={"created_at": "not a date"})
+        resp = client.get("/health", headers=HEADERS)
+        assert resp.status_code == 200
+        assert resp.json()["forecast_freshness"]["is_stale"] is None
+        assert resp.json()["status"] == "degraded"
+
+    @pytest.mark.parametrize("status", [500, None])   # None: the store could not be reached
+    def test_a_store_error_other_than_a_refused_key_degrades(self, app_client, status):
+        client, mgr, _ = app_client
+        # A measurable, fresh age, so the store error is the only reason left to degrade.
+        fresh = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        _serve(mgr, provenance={"created_at": fresh})
+        appwrite = mgr.app.dependency_overrides[mgr._get_appwrite_manager]()
+        appwrite.list_buckets.return_value = SimpleNamespace(success=False, status=status)
+        resp = client.get("/health", headers=HEADERS)
+        assert resp.status_code == 200
+        assert resp.json()["appwrite_connected"] is False
+        assert resp.json()["forecast_freshness"]["is_stale"] is False
+        assert resp.json()["status"] == "degraded"
+
+    def test_no_date_anywhere_degrades(self, app_client):
+        """Not on the served run, no manifest, no provenance record: the age is unknown."""
+        client, mgr, mock_pm = app_client
+        _serve(mgr, provenance=None)
+        mock_pm.get_latest_manifest.return_value = None
+        mock_pm.get_latest_provenance.return_value = None
+        body = client.get("/health", headers=HEADERS).json()
+        assert body["forecast_freshness"]["created_at"] is None
+        assert body["forecast_freshness"]["is_stale"] is None
+        assert body["status"] == "degraded"
+
+    def test_a_measured_fresh_age_and_a_working_store_stay_healthy(self, app_client):
+        client, mgr, _ = app_client
+        fresh = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat()
+        _serve(mgr, provenance={"created_at": fresh})
+        body = client.get("/health", headers=HEADERS).json()
+        assert body["appwrite_connected"] is True and body["forecast_freshness"]["is_stale"] is False
+        assert body["status"] == "healthy"
+
+
 class TestHealthCarriesNoStoreText:
     """ADR-033 §6a rule 6 / C-264: no response carries the store's own error text — /health
     included, which had put `str(e)` in its freshness error and its 503 detail (#160 review)."""
@@ -283,6 +329,7 @@ class TestHealthCarriesNoStoreText:
         assert resp.status_code == 200
         assert "storage_secret_detail" not in resp.text
         assert resp.json()["forecast_freshness"] == {"error": "freshness check failed"}
+        assert resp.json()["status"] == "degraded"   # #248: an unmeasured age is not healthy
 
     def test_the_unhealthy_detail_is_generic(self, app_client, caplog):
         client, mgr, _ = app_client

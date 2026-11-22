@@ -65,3 +65,9 @@ Until then the GitHub job runs unchanged.
   elsewhere (ADR-032 §3). The setup guide is `deployment/MONITORING.md` (#213).
 - This supersedes the freshness part of ADR-032 §2a for crafdapi, and the GitHub job described in
   `reports/ops/betterstack_monitoring.md`.
+
+> **Amendment, 2026-11-22 (#248):** the GitHub job also alarmed in two cases where `/health` read
+> `healthy`: a forecast whose age could not be measured, and a store answering with errors other
+> than a refused key. `/health` now reports `degraded` in both, so the monitor covers them. A third
+> case is not covered: the job's reminder on the 22nd when a month's delivery had not arrived; the
+> monitor alarms only when the forecast passes the 45-day limit.

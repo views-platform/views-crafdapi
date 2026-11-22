@@ -803,10 +803,11 @@ class CrafdApiManager(APIManager):
             """Health check: Appwrite connectivity + forecast freshness (S3/#246, C-50).
 
             HTTP status stays about *service* health (401 for a refused key; 503 only if
-            the check raises). *Data* freshness is reported in the body: a served forecast
-            older than the SLA sets ``status="degraded"`` (service is up, the forecast is
-            stale) so an external monitor can page on the body without conflating it with a
-            service outage.
+            the check raises). The body's ``status`` is ``"degraded"`` (service up, data not
+            vouched for) when nothing is loaded, the history is missing, the newest delivery
+            failed to load, the forecast is older than the SLA or its age cannot be measured,
+            the store answers with an error other than a refused key, or a fallback is served
+            (#248). The Better Stack monitor reads only ``status`` (ADR-041).
             """
             try:
                 result = manager.list_buckets(limit=1)
@@ -818,6 +819,13 @@ class CrafdApiManager(APIManager):
                     "status": "healthy",
                     "appwrite_connected": result.success,
                 }
+                if not result.success:
+                    # The store answered with an error other than a refused key, or could not be
+                    # reached: the next delivery cannot be loaded, so the monitor must alarm (#248).
+                    health["status"] = "degraded"
+                    logger.warning("Store probe FAILED: status=%s code=%s error=%s",   # log only (C-264)
+                                   getattr(result, "status", None), getattr(result, "code", None),
+                                   getattr(result, "error", None))
                 # What partners are answered from (ADR-044). Nothing loaded yet is degraded:
                 # every data request answers 503 until the first load is complete.
                 loaded = self._loader.served()
@@ -856,6 +864,11 @@ class CrafdApiManager(APIManager):
                         created_at, self._forecast_freshness_sla_days
                     )
                     health["forecast_freshness"] = fr
+                    if fr.get("is_stale") is None:
+                        # No usable date: the age of what is served cannot be measured, so nothing
+                        # can say it is current (#248).
+                        health["status"] = "degraded"
+                        logger.warning("Forecast age UNKNOWN: no usable created_at (%r)", created_at)
                     if fr.get("is_stale"):
                         health["status"] = "degraded"
                         logger.warning(
@@ -868,6 +881,7 @@ class CrafdApiManager(APIManager):
                     refuse_if_unauthorized(e)
                     logger.warning("Forecast freshness check failed (non-blocking): %s", e)
                     health["forecast_freshness"] = {"error": "freshness check failed"}  # C-264
+                    health["status"] = "degraded"   # the age is unknown (#248)
                 # S4 (#249, ADR-033 §6): a bounded grace fallback (the newest manifested run was
                 # refused, a last-good run is being served) is a degraded state — surface it and flip
                 # status, even when the served last-good is itself still within the freshness SLA.

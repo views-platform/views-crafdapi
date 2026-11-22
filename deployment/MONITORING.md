@@ -98,6 +98,12 @@ in views-faoapi `reports/ops/betterstack_deployment.md`, section 4).
   right. `/health` says which:
   - `forecast_freshness.is_stale` true: the forecast is older than the freshness limit; a monthly
     delivery was missed (`RELEASE_RUNBOOK.md` section 3).
+  - `forecast_freshness.is_stale` null, or `forecast_freshness` holding `error`: the forecast's
+    age cannot be measured (no usable creation date, or the lookup failed), so nothing says it is
+    current. Read the service log ("Forecast age UNKNOWN" or "freshness check failed").
+  - `appwrite_connected` false: Appwrite answered with an error other than a refused key, or could
+    not be reached, so the next delivery cannot be loaded. Check Appwrite's status; the loader's log shows its failed
+    checks.
   - `forecast_loaded` false: expected for a few minutes after a restart (the monitor's 10-minute
     confirmation covers it); longer, and the service cannot load: read the service log on the
     server (`sudo journalctl -u views-crafdapi -n 100`).
@@ -117,10 +123,9 @@ in views-faoapi `reports/ops/betterstack_deployment.md`, section 4).
       server (`RELEASE_RUNBOOK.md` section 4).
 - **`forecast health` alerts and `liveness` too:** it is an outage; start with `liveness`.
 
-Not always caught: Appwrite answering errors other than a refused key. While the key's check is
-remembered, `/health` still reads `healthy` (it reports `appwrite_connected: false` without
-degrading); when it is not, `/health` answers 503 and the monitor alerts. The loader logs its failed
-checks either way (#238).
+Not caught by either monitor: the reminder the old GitHub job gave on the 22nd when a month's
+delivery had not arrived. The forecast-health monitor alarms only once the served forecast is older
+than the freshness limit (45 days).
 
 ## 5. Keep it working
 

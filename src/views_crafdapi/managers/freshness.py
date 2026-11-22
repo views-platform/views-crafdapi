@@ -35,8 +35,9 @@ def forecast_freshness(created_at: Optional[str], sla_days: float) -> Dict[str, 
     """Freshness verdict for a forecast, from its artifact ``created_at`` (ISO-8601).
 
     Returns ``{"sla_days", "created_at", "age_days", "is_stale"}``. When ``created_at`` is missing
-    or unparseable, ``age_days``/``is_stale`` are ``None`` — *unknown*, never asserted-stale: we do
-    not flip health red (or refuse a fallback) on a signal we cannot compute (no false positives)."""
+    or unparseable, ``age_days``/``is_stale`` are ``None`` — *unknown*, never asserted-stale, so a
+    fallback is not refused on a signal we cannot compute. ``/health`` reports an unknown age as
+    degraded, since it cannot vouch for the data (#248)."""
     verdict: Dict[str, Any] = {
         "sla_days": sla_days, "created_at": created_at, "age_days": None, "is_stale": None,
     }
