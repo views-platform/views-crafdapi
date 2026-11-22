@@ -55,14 +55,14 @@ def test_categorical_geo_uses_far_less_memory_than_object():
 
 
 def test_single_country_aggregation_returns_only_that_country():
-    """Regression: `country` level groups by the categorical `country_iso_a3`. Requesting ONE
-    country must not surface phantom rows for the other categories still carried in the dtype
-    (the `observed=True` guard). Fixture has AAA + BBB; we ask for AAA."""
+    """Requesting ONE country must not surface rows for the others. (The country level used to
+    group by the categorical `country_iso_a3`; since #225 it groups by the GAUL code.)
+    Fixture has countries 10 and 20; we ask for 10."""
     ds = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=8,
                                      targets=("pred_lr_ged_sb",)))
-    agg = ds.get_subset_dataframe(entity_ids=["AAA"], level="country", aggregate=True)
-    countries = set(agg.index.get_level_values("country_iso_a3"))
-    assert countries == {"AAA"}, countries
+    agg = ds.get_subset_dataframe(entity_ids=[10], level="country", aggregate=True)
+    countries = set(agg.index.get_level_values("admin1_gaul0_code"))
+    assert countries == {10}, countries
     assert not agg.isna().any().any()  # no phantom NaN rows
     assert len(agg) == 2  # one row per month, no cartesian blow-up
 
@@ -71,7 +71,7 @@ def test_all_countries_aggregation_covers_every_observed_country():
     ds = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=8,
                                      targets=("pred_lr_ged_sb",)))
     agg = ds.get_subset_dataframe(level="country", aggregate=True)
-    assert set(agg.index.get_level_values("country_iso_a3")) == {"AAA", "BBB"}
+    assert set(agg.index.get_level_values("admin1_gaul0_code")) == {10, 20}
     assert len(agg) == 4  # 2 countries x 2 months, no empty groups
 
 
@@ -117,3 +117,17 @@ def test_categorical_geo_roundtrips_through_value(tmp_path):
     for col in _CAT_COLS:
         assert isinstance(out.geo_metadata[col].dtype, pd.CategoricalDtype), col
     assert out.geo_metadata.equals(ds.geo_metadata)
+
+
+def test_a_level_grouped_by_a_categorical_column_returns_only_the_units_asked_for():
+    """The `observed=True` guard. No served level groups by a categorical column since #225, but
+    the geography's name and ISO3 columns are categorical, and a level grouped by one of them
+    must not emit a row for every category. Grouping by ISO3 here exercises the guard."""
+    ds = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=8,
+                                     targets=("pred_lr_ged_sb",)))
+    assert isinstance(ds.geo_metadata["country_iso_a3"].dtype, pd.CategoricalDtype)
+    ds.levels = {**ds.levels, "country": "country_iso_a3"}
+    agg = ds.get_subset_dataframe(entity_ids=["AAA"], level="country", aggregate=True)
+    assert set(agg.index.get_level_values("country_iso_a3")) == {"AAA"}
+    out = ds.summarize(entity_ids=["AAA"], aggregate=True, level="country", with_metadata=False)
+    assert set(out.index.get_level_values("country_iso_a3")) == {"AAA"}

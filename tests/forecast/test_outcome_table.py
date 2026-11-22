@@ -33,14 +33,17 @@ def test_a_region_whose_cells_are_all_missing_stays_missing():
     assert actual[2] == pytest.approx(history._sample_array("pred_lr_ged_sb")[3, 0])
 
 
-def test_two_country_codes_sharing_one_iso3_are_refused():
-    """The dataset sums countries by ISO3 and partners name them by GAUL code. If two GAUL
-    codes shared one ISO3, their rows would merge silently, so the table refuses instead."""
+def test_two_countries_sharing_one_iso3_are_served_apart():
+    """Countries are summed by GAUL code (#225). ISO3 merges a few separate GAUL countries (some
+    islands); they must stay two countries, each with its own cells."""
     df = make_fao_df(targets=_TARGETS)
     df["country_iso_a3"] = "AAA"   # GAUL countries 10 and 20 now share one ISO3
     forecast = ForecastDataset(df)
-    with pytest.raises(ValueError, match="share one ISO3"):
-        outcome_table.build_outcome_table(forecast, None, "country", "sb")
+    table = outcome_table.build_outcome_table(forecast, None, "country", "sb")
+    assert sorted(table["country_code"].unique()) == [10, 20]
+    alone = ForecastDataset(make_fao_df(targets=_TARGETS))
+    expected = outcome_table.build_outcome_table(alone, None, "country", "sb")
+    assert table["sb_mean"].tolist() == expected["sb_mean"].tolist()
 
 
 @pytest.mark.parametrize("level,place", [("admin1", "admin1_code"), ("country", "country_code")])
@@ -141,11 +144,28 @@ def test_a_place_only_the_history_knows_is_left_out_not_served_nameless():
     assert table["admin1_name"].notna().all()
 
 
-def test_a_country_code_without_an_iso3_is_named_in_the_refusal():
+def test_a_country_without_an_iso3_is_still_served():
+    """A disputed area can have a GAUL country code and no ISO3. It is served, with an empty
+    `country_iso3`, and the other countries are not affected."""
     df = make_fao_df(targets=_TARGETS)
     df.loc[df["admin1_gaul0_code"] == 20, "country_iso_a3"] = None
-    with pytest.raises(ValueError, match=r"without an ISO3 code.*\[20\]"):
-        outcome_table.build_outcome_table(ForecastDataset(df), None, "country", "sb")
+    table = outcome_table.build_outcome_table(ForecastDataset(df), None, "country", "sb")
+    by_code = table.drop_duplicates("country_code").set_index("country_code")
+    assert by_code.loc[20, "country_iso3"] is None or pd.isna(by_code.loc[20, "country_iso3"])
+    assert by_code.loc[10, "country_iso3"] == "AAA"
+    assert table["sb_mean"].notna().all()
+
+
+@pytest.mark.parametrize("level,place,code", [("country", "country_code", 20), ("admin1", "admin1_code", 2)])
+def test_a_place_whose_iso3_is_missing_on_some_cells_is_served_with_its_iso3(level, place, code):
+    """Cell 102 says nothing, cell 103 says BBB: one place with one ISO3, not two names. The empty
+    cell comes first, so a fill that takes the first value without skipping gaps is caught.
+    Country 20 and admin-1 region 2 are both cells 102 and 103."""
+    df = make_fao_df(targets=_TARGETS)
+    df["country_iso_a3"] = df["country_iso_a3"].astype(object)
+    df.loc[df.index.get_level_values("priogrid_id") == 102, "country_iso_a3"] = None
+    table = outcome_table.build_outcome_table(ForecastDataset(df), None, level, "sb")
+    assert table.drop_duplicates(place).set_index(place).loc[code, "country_iso3"] == "BBB"
 
 
 def test_only_the_months_asked_for_are_read_from_the_history():

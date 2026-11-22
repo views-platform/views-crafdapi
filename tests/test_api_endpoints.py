@@ -456,8 +456,8 @@ class TestSliceRoute:
         assert past["sb_mean"] is None and past["n_draws"] is None and ahead["sb_actual"] is None
 
     def test_a_country_is_named_by_its_gaul_code(self, app_client):
-        """Partners name countries by GAUL code; the dataset groups them by ISO3. Country 20 is
-        BBB (cells 102, 103), so its values equal the BBB aggregate, not AAA's."""
+        """Partners name countries by GAUL code, and the dataset sums them by it (#225). Country 20
+        is cells 102 and 103; its ISO3, BBB, is a plain column."""
         client, mgr, _ = app_client
         expected = _fixture_dataset(mgr).summarize(
             features=["pred_lr_ged_sb"], level="country", aggregate=True, with_metadata=False
@@ -466,9 +466,9 @@ class TestSliceRoute:
             "/slice/country/sb", params={"places": "20", "months": "2029-12"}, headers=HEADERS
         ).json()["rows"]
         assert [(r["country_code"], r["country_iso3"]) for r in rows] == [(20, "BBB")]
-        assert rows[0]["sb_mean"] == pytest.approx(expected.loc[(600, "BBB"), "pred_lr_ged_sb_mean"])
+        assert rows[0]["sb_mean"] == pytest.approx(expected.loc[(600, 20), "pred_lr_ged_sb_mean"])
         assert rows[0]["sb_median_if_any"] == pytest.approx(
-            expected.loc[(600, "BBB"), "pred_lr_ged_sb_median_if_any"]
+            expected.loc[(600, 20), "pred_lr_ged_sb_median_if_any"]
         )
         assert rows[0]["sb_severe_scenario"] is None   # 10 draws: below the 20 a severe case needs
 

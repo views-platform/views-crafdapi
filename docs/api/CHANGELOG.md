@@ -3,6 +3,13 @@
 Changes that affect partners: new or removed columns, outcomes or levels, and changes to the
 ensemble or the models it combines. Newest first.
 
+## 2026-11-22
+
+- **Countries are added up by their GAUL country code,** the code partners use to name them,
+  not by ISO3. Where one ISO3 code covers more than one GAUL country (`AUS`, `PYF`, `xFR`), each
+  GAUL country is now its own row. A country without an ISO3 code is served with an empty
+  `country_iso3`.
+
 ## 2026-11-21
 
 - **No request waits for the forecast to load.** The service loads each new forecast by itself,

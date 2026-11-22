@@ -35,7 +35,7 @@ Then, depending on the level:
 | `latitude`, `longitude` | ✓ | | | The centre of the grid cell, in decimal degrees (WGS 84). |
 | `admin1_code`, `admin1_name` | ✓ | ✓ | | The FAO GAUL 2024 admin-1 region: its code and name. |
 | `country_code`, `country_name` | ✓ | ✓ | ✓ | The country: its FAO GAUL 2024 admin-0 code (a number between 100 and 372; not every number in that range is used) and its name. |
-| `country_iso3` | ✓ | ✓ | ✓ | The country's three-letter ISO 3166 code, for joining with other data. |
+| `country_iso3` | ✓ | ✓ | ✓ | The country's three-letter ISO 3166 code, for joining with other data. Empty for an area that has no ISO3 code. |
 
 Things to know about these codes:
 

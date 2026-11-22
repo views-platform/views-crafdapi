@@ -4,10 +4,10 @@
 |-------------------|------------------------------------------------|
 | Project           | views-crafdapi                                 |
 | Owner             | Simon Polichinel von der Maase (simmaa@prio.org) |
-| Last Updated      | 2026-11-20                                     |
+| Last Updated      | 2026-11-22                                     |
 | Total Concerns    | 99                                             |
-| Open Concerns     | 54                                             |
-| Resolved Concerns | 45                                             |
+| Open Concerns     | 53                                             |
+| Resolved Concerns | 46                                             |
 | Governed by       | [ADR-010](../docs/ADRs/active/010_technical_risk_register.md) |
 
 ---
@@ -2013,7 +2013,9 @@ The secret must also move to `crafdapi-probe` (ADR-038).
 
 Cross-refs: **C-362** (`/health`'s own status on an outage), **C-272** (served state is process-global), **C-287** (the monitor's key warms its own partition), cluster A, #153, #173.
 
-### C-373: Countries are summed by ISO3 but named by GAUL code, so one unmatched country code fails every country slice
+### C-373 (RESOLVED): Countries are summed by ISO3 but named by GAUL code, so one unmatched country code fails every country slice
+
+**RESOLVED 2026-11-22 by #225.** The country level is summed by the GAUL country code (`metadata_table.LEVELS["country"] = "admin1_gaul0_code"`); the GAUL to ISO3 translation and `_iso3_of_country_code` are gone. A country without an ISO3 is served with an empty `country_iso3`; two GAUL countries sharing an ISO3 stay apart. Tests: `test_outcome_table.py::test_a_country_without_an_iso3_is_still_served`, `::test_two_countries_sharing_one_iso3_are_served_apart`. Checked on the delivered run: 202 countries, each country's `sb_mean` equal to the sum of its cells' (difference 0.0).
 
 | Field | Value |
 |-------|-------|

@@ -198,7 +198,7 @@ Aggregates raw distributions by geographic level using element-wise summation.
 
 | Level | Group Column | Entity ID Type |
 |-------|--------------|----------------|
-| `country` | `country_iso_a3` | ISO Alpha-3 (e.g., "SOM") |
+| `country` | `admin1_gaul0_code` | GAUL admin-0 code (e.g., 226; #225) |
 | `gaul1` | `admin1_gaul1_code` | Integer |
 
 ##### `validate_indices`
