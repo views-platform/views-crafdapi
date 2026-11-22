@@ -18,11 +18,11 @@ pytestmark = pytest.mark.layer2_data
 class TestGetPgCells:
 
     def test_country_level(self, fao_dataset):
-        cells = fao_dataset._get_pg_cells("country", "AAA")
+        cells = fao_dataset._get_pg_cells("country", 10)
         assert sorted(cells) == [100, 101]
 
     def test_country_level_other(self, fao_dataset):
-        cells = fao_dataset._get_pg_cells("country", "BBB")
+        cells = fao_dataset._get_pg_cells("country", 20)
         assert sorted(cells) == [102, 103]
 
     def test_gaul1_level(self, fao_dataset):
@@ -46,7 +46,7 @@ class TestGetPgCells:
             fao_dataset._get_pg_cells("invalid_level", "AAA")
 
     def test_unknown_code_returns_empty(self, fao_dataset):
-        cells = fao_dataset._get_pg_cells("country", "ZZZ")
+        cells = fao_dataset._get_pg_cells("country", 99)
         assert cells == []
 
 
@@ -113,7 +113,7 @@ class TestAggregateDistributions:
         cell_101_m600 = cells.loc[(600, 101), "pred_test"]
         expected_sum = cell_100_m600 + cell_101_m600
 
-        agg_value = result.loc[(600, "AAA"), "pred_test"]
+        agg_value = result.loc[(600, 10), "pred_test"]
         np.testing.assert_array_almost_equal(agg_value, expected_sum)
 
     def test_empty_dataframe(self, fao_dataset):
@@ -168,9 +168,9 @@ class TestGetSubsetDataframe:
 
     def test_entity_ids_country(self, fao_dataset):
         result = fao_dataset.get_subset_dataframe(
-            level="country", entity_ids=["AAA"], with_metadata=False
+            level="country", entity_ids=[10], with_metadata=False
         )
-        # Only cells in country AAA (100, 101) × 2 months = 4 rows
+        # Only cells in country 10 (GAUL; cells 100, 101) × 2 months = 4 rows
         assert result.shape[0] == 4
         cell_ids = result.index.get_level_values("priogrid_id").unique()
         assert sorted(cell_ids) == [100, 101]
@@ -228,10 +228,10 @@ class TestSummarize:
         summary that adds up (the data dictionary says partners may add it); the median does
         not."""
         cells = fao_dataset.summarize(with_metadata=False).join(
-            fao_dataset.geo_metadata[["country_iso_a3"]], how="left"
+            fao_dataset.geo_metadata[["admin1_gaul0_code"]], how="left"
         )
         naive = cells.groupby(
-            [cells.index.get_level_values("month_id"), "country_iso_a3"]
+            [cells.index.get_level_values("month_id"), "admin1_gaul0_code"]
         ).sum(numeric_only=True)
         summed = fao_dataset.summarize(level="country", aggregate=True, with_metadata=False)
         assert len(summed) == len(naive)
@@ -281,7 +281,7 @@ class TestFeatureAggregationStaysFloat64:
             cell = np.asarray(row["lr_ged_sb"])
             assert cell.dtype == np.float64, "historical aggregate must stay float64"
             members = raw[(raw.index.get_level_values(ds._time_id) == t)
-                          & (raw["country_iso_a3"] == unit)]["lr_ged_sb"]
+                          & (raw["admin1_gaul0_code"] == unit)]["lr_ged_sb"]
             expected = np.stack([np.asarray(v, np.float64) for v in members]).sum(axis=0)
             assert np.array_equal(cell, expected), f"{unit}@{t}: feature sum re-baselined"
 
@@ -294,7 +294,7 @@ class TestFeatureAggregationStaysFloat64:
 def _known_prediction_df():
     """A 2-cell, 1-month prediction frame with KNOWN per-draw sample values.
 
-    Both priogrid cells (100, 101) map to country 'AAA' in ``make_fao_df``, so a
+    Both priogrid cells (100, 101) map to GAUL country 10 in ``make_fao_df``, so a
     country aggregate must equal cell-100 + cell-101 **draw by draw**. ``pred_test``
     uses an ascending signature per cell so a draw-misalignment (a reversed/rolled
     draw axis on one cell) cannot coincidentally produce the aligned sum.
@@ -326,13 +326,13 @@ class TestC70FrameNativeAlignment:
         sub = ds.get_subset_dataframe(with_metadata=False).join(ds.geo_metadata, how="left")
         agg = ds._aggregate_distributions(sub, "country")
 
-        # draw k of AAA == draw k of cell-100 + draw k of cell-101, for every k
+        # draw k of country 10 == draw k of cell-100 + draw k of cell-101, for every k
         np.testing.assert_array_equal(
-            np.asarray(agg.loc[(600, "AAA"), "pred_test"]),
+            np.asarray(agg.loc[(600, 10), "pred_test"]),
             np.array([30.0, 32.0, 34.0, 36.0, 38.0]),
         )
         np.testing.assert_array_equal(
-            np.asarray(agg.loc[(600, "AAA"), "pred_other"]),
+            np.asarray(agg.loc[(600, 10), "pred_other"]),
             np.array([1.0, 3.0, 5.0, 7.0, 9.0]),
         )
 
@@ -345,7 +345,7 @@ class TestC70FrameNativeAlignment:
             ds = ForecastDataset(df)
             sub = ds.get_subset_dataframe(with_metadata=False).join(ds.geo_metadata, how="left")
             agg = ds._aggregate_distributions(sub, "country")
-            return np.asarray(agg.loc[(600, "AAA"), "pred_test"])
+            return np.asarray(agg.loc[(600, 10), "pred_test"])
 
         base = _known_prediction_df()
         reversed_rows = base.iloc[::-1]
@@ -465,7 +465,7 @@ class TestAggregatePathValidatesItsInputs:
     def test_country_level_index_is_not_a_categorical_carrying_every_category(self):
         """A CategoricalIndex re-exports the fan-out `observed=True` exists to prevent."""
         out = self._ds().summarize(aggregate=True, level="country", with_metadata=False)
-        level_values = out.index.get_level_values("country_iso_a3")
+        level_values = out.index.get_level_values("admin1_gaul0_code")
         assert not isinstance(level_values.dtype, pd.CategoricalDtype), (
             "the country index level is categorical: a downstream groupby on it emits a row "
             "for every unobserved category, and `.loc` on an absent label raises rather than "

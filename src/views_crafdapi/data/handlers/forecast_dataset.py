@@ -466,9 +466,10 @@ class ForecastDataset(_GridDataset):
 
         # The grouped object fixes the (sorted) (time, target_unit) index — identical to the
         # legacy ``.agg`` index — for both the scalar reductions and the frame-summed targets.
-        # `observed=True` is load-bearing: the country level groups by `country_iso_a3`, which
-        # is now `category` dtype (memory fix). With the pandas default `observed=False` a
-        # categorical group key emits a row for EVERY category — all ~250 countries — even for
+        # `observed=True` guards any level whose group column is `category` dtype (the geography's
+        # name and ISO3 columns are, as a memory fix; the country level grouped by ISO3 until
+        # #225 and now groups by the numeric GAUL code). With the pandas default `observed=False`
+        # a categorical group key emits a row for EVERY category — all ~250 countries — even for
         # a single-country request, which would inject phantom NaN rows and make the
         # frame-native-sum lookup at `result[var] = [sums[idx] ...]` KeyError on the unobserved
         # keys. `observed=True` restricts to combinations actually present, exactly reproducing
@@ -604,8 +605,8 @@ class ForecastDataset(_GridDataset):
                 f"positions and the joined frame are read positionally against each other."
             )
 
-        # `observed=True` is load-bearing: the country level groups by `country_iso_a3`, which is
-        # `category` dtype. With the pandas default a categorical key emits a row for EVERY
+        # `observed=True` guards any level whose group column is `category` dtype (the country
+        # level grouped by the categorical ISO3 until #225). With the pandas default a categorical key emits a row for EVERY
         # category — all ~250 countries — even for a single-country request. This groupby fixes
         # the output index and its order, exactly as the pre-S7 `_aggregate_distributions` did.
         grouped = keyframe.groupby([time_col, target_level_col], observed=True)

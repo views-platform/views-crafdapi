@@ -9,12 +9,14 @@ import pandas as pd
 
 # Served level -> the geo-metadata column that identifies a unit at that level.
 LEVELS = {
-    "country": "country_iso_a3",
+    # GAUL admin 0, as partners name countries (#205, #225). Not ISO3: ISO3 merges a few separate
+    # GAUL countries (some islands), and a disputed area can have a GAUL code but no ISO3.
+    "country": "admin1_gaul0_code",
     "gaul1": "admin1_gaul1_code",
 }
 
 # Served level -> the extra metadata columns to carry through aggregation to output
-# (the identifying column rides as the group key; "country" uses its ISO3 as the unit id).
+# (the identifying column rides as the group key; "country" uses its GAUL code as the unit id).
 LEVEL_METADATA_COLUMNS = {
     "country": [],
     "gaul1": ["country_iso_a3", "admin1_gaul1_name", "admin1_gaul0_name"],

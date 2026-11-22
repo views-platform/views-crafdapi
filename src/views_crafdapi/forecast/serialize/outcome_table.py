@@ -144,6 +144,9 @@ def place_identity(forecast_ds, level: str) -> pd.DataFrame:
         ident[code] = ident[code].astype("Int64")
     columns = PLACE_COLUMNS[level]
     place = PLACE_COLUMN[level]
+    # A place whose cells give its ISO3 on some rows and nothing on others has one ISO3, not two
+    # names: fill the gaps from the place's own value (#225).
+    ident["country_iso3"] = ident.groupby(place)["country_iso3"].transform("first")
     ident = ident[columns].drop_duplicates()
     if ident[place].duplicated().any():
         bad = sorted(ident.loc[ident[place].duplicated(keep=False), place].unique().tolist())
@@ -163,19 +166,6 @@ def cells_read(forecast_ds, level: str, places: Optional[list[int]]) -> int:
     return int(np.isin(geo[source].to_numpy(), places).sum())
 
 
-def _iso3_of_country_code(identity: pd.DataFrame) -> dict[int, str]:
-    """GAUL country code -> ISO3. The dataset aggregates countries by ISO3; partners name them
-    by GAUL code. Fails loudly unless the two match one to one (#225, register C-373)."""
-    pairs = identity["country_iso3"]
-    missing = sorted(pairs.index[pairs.isna()].tolist())
-    if missing:
-        raise ValueError(f"GAUL country codes without an ISO3 code cannot be summed: {missing[:10]}")
-    shared = sorted(pairs[pairs.duplicated(keep=False)].unique().tolist())
-    if shared:
-        raise ValueError(f"two GAUL country codes share one ISO3 code; their rows would merge: {shared[:10]}")
-    return pairs.to_dict()
-
-
 def _forecast_rows(forecast_ds, level, outcome, places, months, identity) -> Optional[pd.DataFrame]:
     """The summary columns for the forecast months asked for, indexed (month_id, place)."""
     target = target_for(forecast_ds, outcome)
@@ -187,26 +177,15 @@ def _forecast_rows(forecast_ds, level, outcome, places, months, identity) -> Opt
         if not asked:
             return None
     dataset_level = LEVELS[level]
-    entity_ids = places
-    iso3_of = None
-    if level == "country":
-        iso3_of = _iso3_of_country_code(identity)
-        if places is not None:
-            entity_ids = [iso3_of[p] for p in places]
     table = forecast_ds.summarize(
         features=[target],
         time_ids=asked,
-        entity_ids=entity_ids,
+        entity_ids=places,
         level=dataset_level,
         aggregate=dataset_level is not None,
         with_metadata=False,
     )
     table = to_consumer_columns(table).rename(columns=_one_outcome_names(outcome))
-    if level == "country":
-        code_of = {iso3: code for code, iso3 in iso3_of.items()}
-        index_months = table.index.get_level_values(0)
-        index_codes = [code_of[iso3] for iso3 in table.index.get_level_values(1)]
-        table.index = pd.MultiIndex.from_arrays([index_months, index_codes])
     table.index = table.index.set_names([_MONTH, PLACE_COLUMN[level]])
     return table
 
