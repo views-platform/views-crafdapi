@@ -159,6 +159,7 @@ def test_the_pinned_edition_is_at_least_the_floor():
     import tomllib
 
     version = tomllib.loads(_pinned_registry_text())["meta"]["version"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version), f"registry version {version!r} is not X.Y.Z"
     assert tuple(int(p) for p in version.split(".")) >= (1, 9, 0), (
         f"REGISTRY_PIN_TAG {REGISTRY_PIN_TAG} is registry edition {version}, below 1.9.0. "
         "ADR-044 needs the uniform-entitlement mode of contract §5.8, first in v1.9.0."
@@ -182,5 +183,39 @@ def test_the_readme_links_the_contract_at_the_pinned_tag_and_no_other():
     url = (f"https://github.com/views-platform/views-appwrite/blob/{REGISTRY_PIN_TAG}/"
            "docs/ADRs/platform/appwrite_seam_contract.md")
     assert url in readme
-    linked_tags = set(re.findall(r"views-appwrite/blob/(appwrite-seam-v[0-9.]+)/", readme))
-    assert linked_tags == {REGISTRY_PIN_TAG}, linked_tags
+    linked_refs = set(re.findall(r"views-appwrite/blob/([^/\s]+)/", readme))
+    assert linked_refs == {REGISTRY_PIN_TAG}, f"README links views-appwrite at {linked_refs}, never main or an old tag"
+
+
+def test_the_runbook_copies_the_registry_at_the_pinned_tag():
+    """The server's coordinates come from the registry the runbook copies; it must be the edition
+    CI binds, not the operator's checkout."""
+    runbook = (Path(__file__).resolve().parents[1] / "deployment" / "RELEASE_RUNBOOK.md").read_text()
+    shown = set(re.findall(r"git -C \.\./views-appwrite show ([^:\s]+):docs/ADRs/platform/coordinate_registry\.toml", runbook))
+    assert shown == {REGISTRY_PIN_TAG}, shown
+
+
+def test_the_metadata_query_sent_to_the_store_is_filtered_on_the_served_name():
+    """The binding is worthless if the query sent to the store does not carry the name."""
+    from unittest.mock import MagicMock
+
+    from views_crafdapi.managers.prediction.manager import PredictionStoreManager
+
+    # Built around its constructor and two name-mangled attributes: there is no lighter way in
+    # that still sends the real query, so a rename of those attributes breaks this test on purpose.
+    pm = PredictionStoreManager.__new__(PredictionStoreManager)
+    pm._require_consumer_name = lambda: CONSUMER_DOCUMENT_NAME
+    store = MagicMock()
+    store.metadata_manager.search_files_by_metadata.return_value.to_dict.return_value = {
+        "success": True, "data": {"documents": []}}
+    pm._PredictionStoreManager__appwrite_file_manager = store
+    pm._PredictionStoreManager__appwrite_file_manager_config = MagicMock()
+    pm.get_predictions_by_metadata(filters={"category": "historical"})
+    sent = store.metadata_manager.search_files_by_metadata.call_args.kwargs["filters"]
+    assert sent["name"] == CONSUMER_DOCUMENT_NAME, sent
+
+
+def test_production_builds_its_paths_from_the_served_name():
+    from views_crafdapi.managers.api import _service_paths
+
+    assert _service_paths().model_name == CONSUMER_DOCUMENT_NAME

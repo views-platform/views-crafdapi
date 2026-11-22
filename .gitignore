@@ -231,3 +231,6 @@ src/views_crafdapi/wandb/**/*.pyc
 # Golden test fixtures must be tracked even though *.parquet/*.zip are ignored:
 !tests/forecast/golden/
 !tests/forecast/golden/**
+
+# The risk register is a local working document, never committed (Simon, 2026-11-22).
+reports/technical_risk_register.md

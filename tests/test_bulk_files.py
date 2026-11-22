@@ -126,3 +126,125 @@ def test_a_file_name_never_comes_from_an_unknown_level_or_outcome(tmp_path, leve
     with pytest.raises(ValueError, match="unknown level or outcome"):
         store.get(_dataset(1, "fc1"), _dataset(2, "h1"), level, outcome, build)
     assert build.count == 0
+
+
+def test_two_different_deliveries_never_share_a_file_name(tmp_path):
+    """Ids may contain "_": ("a_b", "c") and ("a", "b_c") must still be two files."""
+    store, build = BulkFiles(tmp_path), _Builds()
+    one, _ = store.get(_dataset(1, "a_b"), _dataset(2, "c"), "admin1", "sb", build)
+    two, _ = store.get(_dataset(1, "a"), _dataset(2, "b_c"), "admin1", "sb", build)
+    assert one != two and build.count == 2
+
+
+def test_a_scratch_file_left_by_a_killed_build_is_removed_once_old(tmp_path):
+    import os
+    import time
+
+    store = BulkFiles(tmp_path)
+    fc, h = _dataset(1, "fc1"), _dataset(2, "h1")
+    store.get(fc, h, "admin1", "sb", _Builds())
+    old, fresh = tmp_path / "x1.parquet.tmp", tmp_path / "x2.parquet.tmp"
+    old.write_text("half")
+    fresh.write_text("half")
+    os.utime(old, (time.time() - 7200, time.time() - 7200))
+    store.remove_other_deliveries([(fc, h)])
+    assert not old.exists() and fresh.exists()       # a fresh one may be a running build
+
+
+def test_a_file_that_vanishes_during_clean_up_is_not_an_error(tmp_path, monkeypatch, caplog):
+    """Another build may rename its scratch file between listing and checking it."""
+    from pathlib import Path
+
+    store = BulkFiles(tmp_path)
+    fc, h = _dataset(1, "fc1"), _dataset(2, "h1")
+    store.get(fc, h, "admin1", "sb", _Builds())
+    (tmp_path / "gone.parquet.tmp").write_text("half")
+    real_stat = Path.stat
+
+    def vanishing(self, *a, **k):
+        if self.name == "gone.parquet.tmp":
+            raise FileNotFoundError(self)
+        return real_stat(self, *a, **k)
+
+    monkeypatch.setattr(Path, "stat", vanishing)
+    import logging
+    with caplog.at_level(logging.WARNING, logger="views_crafdapi.managers.bulk_files"):
+        store.remove_other_deliveries([(fc, h)])     # no error, and nothing to warn about
+    assert "could not remove" not in caplog.text
+
+
+def test_only_exactly_named_files_of_the_kept_delivery_survive(tmp_path):
+    """Ids may contain "_" and ".": a file whose name merely ENDS like a kept one is removed."""
+    store = BulkFiles(tmp_path)
+    fc, h = _dataset(1, "a"), _dataset(2, "b")
+    kept, _ = store.get(fc, h, "admin1", "sb", _Builds())
+    lookalike = tmp_path / "sb_admin1__x__a+b.parquet"
+    lookalike.write_text("other delivery")
+    store.remove_other_deliveries([(fc, h)])
+    assert kept.exists() and not lookalike.exists()
+
+
+def test_an_old_one_request_file_is_removed(tmp_path):
+    import os
+    import time
+
+    store = BulkFiles(tmp_path)
+    fc, h = _dataset(1, "fc1"), _dataset(2, "h1")
+    store.get(fc, h, "admin1", "sb", _Builds())
+    old = tmp_path / "tmpabc.once.parquet"
+    old.write_text("left by a killed request")
+    os.utime(old, (time.time() - 7200, time.time() - 7200))
+    store.remove_other_deliveries([(fc, h)])
+    assert not old.exists()
+
+
+def test_old_one_request_files_are_swept_even_when_no_delivery_has_ids(tmp_path):
+    """One-request files exist exactly when a delivery has no store ids; they must still go."""
+    import os
+    import time
+
+    store = BulkFiles(tmp_path)
+    kept, _ = store.get(_dataset(1, "fc1"), _dataset(2, "h1"), "admin1", "sb", _Builds())
+    once, _ = store.get(_dataset(1, None), _dataset(2, "h1"), "admin1", "sb", _Builds())
+    os.utime(once, (time.time() - 7200, time.time() - 7200))
+    store.remove_other_deliveries([(_dataset(1, None), _dataset(2, "h1"))])
+    assert not once.exists()
+    assert kept.exists()      # with nothing named to keep, no kept file is removed
+
+
+def test_a_file_that_cannot_be_removed_does_not_stop_the_rest(tmp_path, monkeypatch, caplog):
+    """One file the service may not delete (say owned by root) is logged; the sweep goes on."""
+    import logging
+    from pathlib import Path
+
+    store = BulkFiles(tmp_path)
+    fc, h = _dataset(1, "fc1"), _dataset(2, "h1")
+    store.get(fc, h, "admin1", "sb", _Builds())
+    (tmp_path / "a_stuck.parquet").write_text("old")
+    (tmp_path / "b_other.parquet").write_text("old")
+    real_unlink = Path.unlink
+
+    def stuck(self, *a, **k):
+        if self.name == "a_stuck.parquet":
+            raise PermissionError(self)
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(Path, "unlink", stuck)
+    with caplog.at_level(logging.WARNING, logger="views_crafdapi.managers.bulk_files"):
+        store.remove_other_deliveries([(fc, h)])
+    assert not (tmp_path / "b_other.parquet").exists()
+    assert "could not remove a_stuck.parquet" in caplog.text
+
+
+def test_a_kept_file_whose_id_ends_like_a_one_request_file_is_kept(tmp_path):
+    """Ids may contain ".": a history id ending in ".once" must not make its kept file look like
+    a one-request file."""
+    import os
+    import time
+
+    store = BulkFiles(tmp_path)
+    fc, h = _dataset(1, "fc1"), _dataset(2, "h1.once")
+    kept, _ = store.get(fc, h, "grid", "sb", _Builds())
+    os.utime(kept, (time.time() - 7200, time.time() - 7200))
+    store.remove_other_deliveries([(fc, h)])
+    assert kept.exists()

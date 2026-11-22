@@ -36,6 +36,8 @@
 - **Cache key parity:** the API-key hash is computed by the injected `api_key_hash_fn` (the same function `CrafdApiManager` uses for routes), so service-written and route-read cache entries always share a key.
 - **Return contract:** `get_latest_dataset` returns a **copy of the dataset this request selected** — warm, disk, a fresh wire ingest, or the last-good fallback — never whatever the warm cache happens to hold afterwards. The fallback leaves the warm cache empty by design (ADR-033 decision (i)), so a caller that re-read the cache got `None` on a cold worker and a different run on a warm one (C-356, #156). `get_latest_dataframe` is `get_latest_dataset(...).dataframe.copy()`; no route uses it, and it is kept as a test seam.
 
+- **`api_key_hash(key)`** (public, ADR-044): the hash a key's cache entries and disk slot are labelled with; the loader uses it to read the disk slot of the server key's own loads.
+
 ---
 
 ## 4. Inputs and Assumptions

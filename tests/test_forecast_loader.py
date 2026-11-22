@@ -50,7 +50,7 @@ class _Service:
     def served_forecast_entry(self):
         return {"written_by": "test"}
 
-    def _api_key_hash(self, key):
+    def api_key_hash(self, key):
         return "k" * 16
 
 
@@ -128,7 +128,7 @@ def test_a_new_delivery_is_loaded_and_older_bulk_files_removed_one_delivery_late
     served = loader.served()
 
     def pair(f, h):
-        return f"{f}_{h}.parquet"
+        return f"{f}+{h}.parquet"
 
     if changed == "forecast":
         assert served.forecast.source_file_id == "fc3"
@@ -240,15 +240,19 @@ def test_a_stopped_loader_loads_nothing(tmp_path):
     assert not loader.refresh() and service.loads == []
 
 
-@pytest.mark.parametrize("raw,expected", [(None, 5.0), ("10", 10.0), ("inf", 5.0), ("0", 5.0), ("1e9", 5.0), ("x", 5.0)])
-def test_the_check_interval_is_kept_between_one_and_sixty_minutes(monkeypatch, raw, expected):
+@pytest.mark.parametrize("raw,expected", [(None, 5.0), ("10", 10.0), ("1", 1.0), ("60", 60.0), ("0.9", 5.0),
+                                          ("60.1", 5.0), ("inf", 5.0), ("0", 5.0), ("1e9", 5.0), ("x", 5.0)])
+def test_the_check_interval_is_kept_between_one_and_sixty_minutes(monkeypatch, caplog, raw, expected):
     from views_crafdapi.managers.forecast_loader import check_minutes
 
     if raw is None:
         monkeypatch.delenv("CRAFDAPI_CHECK_MINUTES", raising=False)
     else:
         monkeypatch.setenv("CRAFDAPI_CHECK_MINUTES", raw)
-    assert check_minutes() == expected
+    with caplog.at_level(logging.WARNING, logger="views_crafdapi.managers.forecast_loader"):
+        assert check_minutes() == expected
+    ignored = raw not in (None, "10", "1", "60")
+    assert ("CRAFDAPI_CHECK_MINUTES" in caplog.text) == ignored   # a setting ignored is said so
 
 
 def test_read_server_key(monkeypatch, caplog):
@@ -348,3 +352,26 @@ def test_run_ends_promptly_after_a_stop(tmp_path):
 
     seen = asyncio.run(stop_after_first())
     assert len(calls) == seen   # no check after the stop
+
+
+def test_a_clean_up_failure_after_the_hand_over_is_not_a_failed_load(tmp_path):
+    loader, _, _, _ = _loader(tmp_path)
+
+    def broken(keep):
+        raise OSError("disk hiccup")
+
+    loader._bulk_files.remove_other_deliveries = broken
+    assert loader.refresh()
+    assert loader.failing_since() is None and loader.served() is not None
+
+
+def test_the_loader_reads_the_disk_slot_the_real_service_writes(tmp_path):
+    """The loader finds the server key's own loads under `DatasetService.api_key_hash`; the real
+    method must give the label the service writes its slot under."""
+    from views_crafdapi.managers.dataset_service import DatasetService
+
+    hash_fn = lambda key: "h-" + key   # noqa: E731
+    service = DatasetService(dataframe_cache={}, file_cache={}, disk_cache=None, prediction_bucket_id="b",
+                             configs_getter=lambda: {}, api_key_hash_fn=hash_fn,
+                             check_staleness_fn=lambda *a, **k: None)
+    assert service.api_key_hash("server-key") == "h-server-key"

@@ -303,10 +303,7 @@ class CrafdApiManager(APIManager):
         )
         # ADR-044: the forecast is loaded with the server's own read key, at start and when a new
         # delivery appears, never in a partner's request.
-        self._loader = ForecastLoader(
-            self._dataset_service, self._disk_cache, self._bulk_files,
-            read_server_key(), self._make_server_manager,
-        )
+        self._loader = self._make_loader(read_server_key())
 
         self.app = FastAPI(
             title="VIEWS-CRAF'd Conflict Forecast API",
@@ -332,6 +329,9 @@ class CrafdApiManager(APIManager):
         # Register routes
         self._register_routes()
 
+    # How long shutdown waits for a running load to stop before leaving without clearing caches.
+    _STOP_WAIT_SECONDS = 60
+
     @asynccontextmanager
     async def _lifespan(self, app: FastAPI):
         """Start the loader at start-up (ADR-044) and stop it at shutdown."""
@@ -341,13 +341,19 @@ class CrafdApiManager(APIManager):
 
         yield
 
-        # Stop a running load at its next step, and wait a little for it, so the caches are not
-        # cleared under it. A grid file being written finishes first (about 40 seconds).
+        # Stop a running load at its next step, and wait up to a minute for it (a grid file being
+        # written finishes first, about 40 seconds). The caches are cleared only once it stopped.
         self._loader.stop()
         try:
-            await asyncio.wait_for(loading, timeout=60)
+            await asyncio.wait_for(loading, timeout=self._STOP_WAIT_SECONDS)
         except asyncio.TimeoutError:
-            logger.warning("the forecast load did not stop within 60 seconds")
+            # The worker thread may still be writing the caches: leave them. (Whether the process
+            # then waits for that thread, or systemd kills it at its stop limit, is #236.)
+            logger.warning("CRAF'd API is shutting down; the forecast load did not stop within %s "
+                           "seconds, so the caches are left to it", self._STOP_WAIT_SECONDS)
+            return
+        except Exception as e:   # the load ended with an error: it no longer writes the caches
+            logger.error("the forecast load ended with an error at shutdown: %r", e)
         logger.info("CRAF'd API is shutting down...")
         self._manager_cache.clear()
         self._dataframe_cache.clear()
@@ -391,10 +397,7 @@ class CrafdApiManager(APIManager):
             check_staleness_fn=instance._check_staleness,
         )
         # Tests give the loader a stand-in key and store (`server_key` in the config).
-        instance._loader = ForecastLoader(
-            instance._dataset_service, instance._disk_cache, instance._bulk_files,
-            config.get("server_key"), instance._make_server_manager,
-        )
+        instance._loader = instance._make_loader(config.get("server_key"))
 
         return instance
 
@@ -550,6 +553,13 @@ class CrafdApiManager(APIManager):
                 )
         
         return self._manager_cache[api_key_hash]["prediction"]
+
+    def _make_loader(self, server_key: Optional[str]) -> ForecastLoader:
+        """The loader (ADR-044), built the same way by `__init__` and `from_config`."""
+        return ForecastLoader(
+            self._dataset_service, self._disk_cache, self._bulk_files,
+            server_key, self._make_server_manager,
+        )
 
     def _make_server_manager(self, server_key: str) -> PredictionStoreManager:
         """The store reader the loader uses, with the server's own key (ADR-044)."""
@@ -809,6 +819,11 @@ class CrafdApiManager(APIManager):
                 health["forecast_loaded"] = loaded is not None
                 if loaded is None:
                     health["status"] = "degraded"
+                health["history_loaded"] = bool(loaded and loaded.history is not None)
+                if loaded is not None and loaded.history is None:
+                    # The forecast is served, but every bulk file and every slice of past months
+                    # answers 503 until the recorded deaths load.
+                    health["status"] = "degraded"
                 if self._loader.failing_since() is not None:
                     # The data already loaded is still served; the newest delivery is not in it.
                     health["status"] = "degraded"
@@ -1039,6 +1054,11 @@ _fao_manager: Optional[CrafdApiManager] = None
 app: Optional[FastAPI] = None
 
 
+def _service_paths() -> APIPathManager:
+    """The service's paths, named by the store-document name it serves (seam_contract)."""
+    return APIPathManager(CONSUMER_DOCUMENT_NAME, validate=False)
+
+
 def create_app() -> FastAPI:
     """
     Factory function to create the FastAPI app for uvicorn workers.
@@ -1059,7 +1079,7 @@ def create_app() -> FastAPI:
         # CrafdDiskCacheManager (`None / "datasets"`). validate=False makes .cache a real
         # Path the disk-cache manager creates on demand. Regression-tested by
         # tests/test_create_app_boot.py (the from_config test seam did not cover this path).
-        model_path = APIPathManager(CONSUMER_DOCUMENT_NAME, validate=False)
+        model_path = _service_paths()
         _fao_manager = CrafdApiManager(model_path=model_path)
         app = _fao_manager.app
     return app

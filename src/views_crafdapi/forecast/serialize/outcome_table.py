@@ -22,6 +22,8 @@ float64, even when empty, and the table is checked (`summary_checks`) before it 
 
 from __future__ import annotations
 
+import logging
+import threading
 from typing import Optional
 
 import numpy as np
@@ -31,6 +33,8 @@ from views_crafdapi.forecast.serialize import schema
 from views_crafdapi.forecast.serialize.json_contract import to_consumer_columns
 from views_crafdapi.forecast.serialize.summary_checks import check_summaries
 from views_crafdapi.time import month_id_to_date
+
+logger = logging.getLogger(__name__)
 
 # The partner's level code -> the dataset's level name (`None` is the grid cell).
 LEVELS: dict[str, Optional[str]] = {"grid": None, "admin1": "gaul1", "country": "country"}
@@ -128,12 +132,53 @@ def _one_month_of_geography(forecast_ds) -> pd.DataFrame:
     return geo.iloc[start:stop]
 
 
+def _country_iso3(cells: pd.DataFrame) -> pd.Series:
+    """GAUL country code -> the ISO3 most of its cells carry (None on a tie or none at all)."""
+    iso3 = cells.groupby("country_code")["country_iso3"]
+    several = iso3.nunique() > 1
+    chosen = iso3.first()
+    if several.any():
+        disagreeing = cells[cells["country_code"].isin(several[several].index)]
+        resolved = disagreeing.groupby("country_code")["country_iso3"].agg(_most_cells_carry)
+        _warn_once(resolved)
+        chosen.loc[resolved.index] = resolved
+    return chosen
+
+
+def _most_cells_carry(iso3: pd.Series):
+    """The ISO3 most of a place's cells carry, or None on a tie."""
+    counts = iso3.dropna().value_counts()
+    if counts.empty or (len(counts) > 1 and counts.iloc[0] == counts.iloc[1]):
+        return None
+    return counts.index[0]
+
+
+# Disagreements already reported, so a geography's are logged once per process, not on every
+# request that builds an identity table. A lock: two requests may build one at the same time.
+_REPORTED_ISO3_DISAGREEMENTS: set = set()
+_REPORTED_LOCK = threading.Lock()
+
+
+def _warn_once(resolved: pd.Series) -> None:
+    """Log each disagreeing country with the code chosen for it (None on a tie), once."""
+    key = tuple(sorted((int(code), iso3) for code, iso3 in resolved.items()))
+    with _REPORTED_LOCK:
+        if key in _REPORTED_ISO3_DISAGREEMENTS:
+            return
+        _REPORTED_ISO3_DISAGREEMENTS.add(key)
+    logger.warning("%d countries whose cells carry more than one ISO3 code; each is served with "
+                   "the code most of its cells carry (None on a tie): %s",
+                   len(key), dict(key[:20]))
+
+
 def place_identity(forecast_ds, level: str) -> pd.DataFrame:
     """One row per place at `level`, indexed by the place id, carrying the place's names
     (and, for a grid cell, its latitude and longitude).
 
     Built from the forecast's per-cell geography. Fails loudly if one place id maps to two
-    different names: that is a broken geography table, not something to guess around.
+    different names: that is a broken geography table, not something to guess around. Two ISO3
+    codes for one place are resolved instead (see below), because a few border cells can carry a
+    neighbour's code.
     """
     geo = _one_month_of_geography(forecast_ds)
     ident = pd.DataFrame({_CELL: geo.index.get_level_values(_CELL)})
@@ -144,9 +189,22 @@ def place_identity(forecast_ds, level: str) -> pd.DataFrame:
         ident[code] = ident[code].astype("Int64")
     columns = PLACE_COLUMNS[level]
     place = PLACE_COLUMN[level]
-    # A place whose cells give its ISO3 on some rows and nothing on others has one ISO3, not two
-    # names: fill the gaps from the place's own value (#225).
-    ident["country_iso3"] = ident.groupby(place)["country_iso3"].transform("first")
+    # One ISO3 per COUNTRY (#225), the same at every level: the code most of the country's cells
+    # carry. Cells without one take the country's; a few border cells marked with a neighbour's
+    # ISO3 do not change it. A tie has no code we can trust: served empty. Disagreements are
+    # logged once per geography, not on every request. Refusing would fail every request at the
+    # level because of one country, the failure #225 removed.
+    ident["country_iso3"] = ident["country_iso3"].astype(object)
+    by_country = ident["country_code"].map(_country_iso3(ident))
+    no_country = ident["country_code"].isna()
+    if level == "grid":
+        # A cell without a GAUL country code keeps its own ISO3: there is no country to agree with.
+        ident["country_iso3"] = by_country.where(~no_country, ident["country_iso3"])
+    else:
+        # A region or "country" made of cells without a country code takes the first ISO3 its
+        # cells carry, as before #225, so one place never splits into two rows.
+        first_of_place = ident.groupby(place)["country_iso3"].transform("first")
+        ident["country_iso3"] = by_country.where(~no_country, first_of_place)
     ident = ident[columns].drop_duplicates()
     if ident[place].duplicated().any():
         bad = sorted(ident.loc[ident[place].duplicated(keep=False), place].unique().tolist())

@@ -130,4 +130,7 @@ def test_a_level_grouped_by_a_categorical_column_returns_only_the_units_asked_fo
     agg = ds.get_subset_dataframe(entity_ids=["AAA"], level="country", aggregate=True)
     assert set(agg.index.get_level_values("country_iso_a3")) == {"AAA"}
     out = ds.summarize(entity_ids=["AAA"], aggregate=True, level="country", with_metadata=False)
-    assert set(out.index.get_level_values("country_iso_a3")) == {"AAA"}
+    level_values = out.index.get_level_values("country_iso_a3")
+    assert set(level_values) == {"AAA"}
+    # A categorical result index would carry every category into a later groupby or `.loc`.
+    assert not isinstance(level_values.dtype, pd.CategoricalDtype)
