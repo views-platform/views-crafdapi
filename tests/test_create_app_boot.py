@@ -59,3 +59,68 @@ def test_booted_app_exposes_liveness_and_version(clean_boot):
     paths = {route.path for route in clean_boot.routes}
     assert "/ping" in paths
     assert "/version" in paths
+
+
+def test_building_the_app_leaves_the_stop_signals_to_uvicorn(monkeypatch, tmp_path):
+    """#236: a handler of our own replaced uvicorn's, so a stop skipped the lifespan shutdown."""
+    import signal
+
+    before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
+    (tmp_path / ".gitignore").write_text("apis/\n")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\nversion = '0'\n")
+    for var in _REQUIRED_ENV:
+        monkeypatch.setenv(var, "placeholder")
+    monkeypatch.delenv("APPWRITE_REGISTRY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(api_module, "app", None)
+    monkeypatch.setattr(api_module, "_fao_manager", None)
+    api_module.create_app()
+    assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)) == before
+    # A handler installed later, by the lifespan start-up, is caught by the real-SIGTERM test
+    # below: a test client runs the lifespan outside the main thread, where none can be installed.
+
+
+def test_a_real_sigterm_runs_the_lifespan_shutdown(tmp_path):
+    """The production start (uvicorn with the factory), stopped the way systemd stops it. The
+    lifespan shutdown must run: it stops the loader before the caches are cleared (ADR-044)."""
+    import os
+    import signal
+    import socket
+    import subprocess
+    import sys
+    import time
+
+    (tmp_path / ".gitignore").write_text("apis/\n")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\nversion = '0'\n")
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("APPWRITE_REGISTRY", "APPWRITE_CRAFDAPI_SERVER_API_KEY")}   # no real store
+    env.update({var: "placeholder" for var in _REQUIRED_ENV})
+    # The server process imports the same code this test imports, whichever environment runs it.
+    env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.dirname(api_module.__file__)))
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    log = tmp_path / "server.log"
+    with log.open("w") as out:
+        server = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "views_crafdapi.managers.api:create_app", "--factory",
+             "--host", "127.0.0.1", "--port", str(port), "--timeout-graceful-shutdown", "30"],
+            cwd=tmp_path, env=env, stdout=out, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + 60
+            while "Application startup complete" not in log.read_text():
+                assert server.poll() is None, log.read_text()
+                assert time.monotonic() < deadline, "the server did not start"
+                time.sleep(0.2)
+            server.send_signal(signal.SIGTERM)
+            server.wait(timeout=30)
+        finally:
+            if server.poll() is None:
+                server.kill()
+    text = log.read_text()
+    assert "Waiting for application shutdown" in text and "Cleared all caches" in text
+    assert "did not stop within" not in text      # the idle loader stopped at once
+    assert "Application shutdown complete" in text
+    assert server.returncode == -signal.SIGTERM   # ended by the signal, as systemd expects

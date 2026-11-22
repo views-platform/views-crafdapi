@@ -63,6 +63,38 @@ class TestShutdownPreservesDurableCache:
         assert len(mgr._file_cache) == 0
 
 
+    def test_the_lifespan_shutdown_keeps_disk_cache_and_clears_memory(self, tmp_path):
+        """The stop production uses (#236): uvicorn runs the lifespan shutdown, not `_shutdown()`."""
+        import asyncio
+
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        mgr = _manager_with_disk_cache(tmp_path)
+        mgr._disk_cache.write("hash1", "forecast", _dataset(), "file_1")
+        value_dir = mgr._disk_cache._value_dir("hash1", "forecast")
+
+        class IdleLoader:
+            def __init__(self):
+                self.stopped = asyncio.Event()
+
+            async def run(self, minutes):
+                await self.stopped.wait()
+
+            def stop(self):
+                self.stopped.set()
+
+        mgr._loader = IdleLoader()
+        with TestClient(FastAPI(lifespan=mgr._lifespan)):
+            mgr._manager_cache["k"] = {"x": 1}
+            mgr._dataframe_cache["k"] = {"x": 1}
+            mgr._file_cache["k"] = b"bytes"
+
+        assert value_dir.is_dir(), "the lifespan shutdown must not delete the durable disk cache"
+        assert mgr._disk_cache.read("hash1", "forecast") is not None
+        assert len(mgr._manager_cache) == len(mgr._dataframe_cache) == len(mgr._file_cache) == 0
+
+
 class TestDiskCacheSurvivesRestart:
 
     def test_fresh_manager_reads_prior_write(self, tmp_path):

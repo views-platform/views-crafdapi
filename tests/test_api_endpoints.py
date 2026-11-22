@@ -1277,3 +1277,32 @@ class TestTheLoaderRunsWithTheService:
         with TestClient(FastAPI(lifespan=mgr._lifespan)):
             mgr._file_cache["x"] = {"data": b"1"}
         assert "x" in mgr._file_cache
+
+
+def test_the_loader_is_stopped_before_the_caches_are_cleared(tmp_path):
+    """ADR-044: clearing the caches under a running load would pull data from under it."""
+    import asyncio
+
+    mgr = CrafdApiManager.from_config({}, cache_dir=tmp_path / "cache")
+    caches = {"file": mgr._file_cache, "dataframe": mgr._dataframe_cache, "manager": mgr._manager_cache}
+    seen = {}
+
+    class Loader:
+        def __init__(self):
+            self.stopped = asyncio.Event()
+
+        async def run(self, minutes):
+            await self.stopped.wait()
+            await asyncio.sleep(0.2)   # a load finishes its step after being asked to stop
+            seen["at_run_end"] = {name: dict(c) for name, c in caches.items()}
+
+        def stop(self):
+            self.stopped.set()
+
+    mgr._loader = Loader()
+    with TestClient(FastAPI(lifespan=mgr._lifespan)):
+        for name, cache in caches.items():
+            cache["x"] = name
+    # Still full when the load ended (the shutdown waited for it), all three empty afterwards.
+    assert seen["at_run_end"] == {name: {"x": name} for name in caches}
+    assert all(len(c) == 0 for c in caches.values())

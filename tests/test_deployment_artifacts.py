@@ -28,6 +28,22 @@ _BOOTSTRAP = (_ROOT / "deployment" / "bootstrap.sh").read_text()
 _FRESHNESS = (_ROOT / ".github" / "workflows" / "data-freshness.yml").read_text()
 
 
+def _exec_start(unit: str) -> str:
+    """The ExecStart command as systemd reads it: continued while a line ends in a backslash,
+    skipping comment lines (`#` or `;`) inside it."""
+    lines = unit.split("\n")
+    i = next(n for n, line in enumerate(lines) if line.startswith("ExecStart="))
+    parts, line = [], lines[i][len("ExecStart="):]
+    while True:
+        parts.append(line.rstrip().rstrip("\\"))
+        if not line.rstrip().endswith("\\"):
+            return " ".join(parts)
+        i += 1
+        while lines[i].lstrip().startswith(("#", ";")):
+            i += 1
+        line = lines[i]
+
+
 class TestSystemdUnit:
     def test_runs_as_the_service_account(self):
         assert "User=views-crafdapi-deploy" in _UNIT
@@ -36,12 +52,32 @@ class TestSystemdUnit:
         assert "ExecStartPre=" in _UNIT and "checkout-deploy-tag.sh" in _UNIT
 
     def test_serves_the_factory_app_on_localhost_8001(self):
-        assert "views_crafdapi.managers.api:create_app" in _UNIT
-        assert "--factory" in _UNIT
-        assert "--host 127.0.0.1" in _UNIT  # nginx upstream contract — never 0.0.0.0
+        command = _exec_start(_UNIT)
+        assert "views_crafdapi.managers.api:create_app" in command
+        assert "--factory" in command
+        # #236: open requests get a limited time, so the lifespan shutdown always runs, and
+        # systemd's stop limit covers the whole stop.
+        # The flag must be on the ExecStart command itself (continuation lines joined), not in a
+        # comment.
+        graceful = re.findall(r"--timeout-graceful-shutdown[ =](\S+)", command)
+        assert graceful == ["30"]
+        # systemd takes the last TimeoutStopSec line, so there must be exactly one, in seconds.
+        # systemd reads it only in the [Service] section; anywhere else it is ignored.
+        service = re.search(r"^\[Service\]$(.*?)(?=^\[|\Z)", _UNIT, re.M | re.S)[1]
+        stops = re.findall(r"^\s*TimeoutStopSec\s*=(.*)$", _UNIT, re.M)
+        assert len(stops) == 1 and stops[0].strip().isdigit()
+        assert re.search(r"^\s*TimeoutStopSec\s*=", service, re.M)
+        # Settings that would override that limit, or stop the service some way other than one
+        # SIGTERM to uvicorn (which runs the lifespan shutdown), must not be in the unit.
+        for setting in ("TimeoutSec", "KillSignal", "RestartKillSignal", "FinalKillSignal",
+                        "KillMode", "ExecStop", "SendSIGKILL", "SendSIGHUP"):
+            assert not re.search(rf"^\s*{setting}\s*=", _UNIT, re.M), setting
+        from views_crafdapi.managers.api import CrafdApiManager
+        assert int(stops[0]) >= int(graceful[0]) + CrafdApiManager._STOP_WAIT_SECONDS + 10
+        assert re.findall(r"--host[ =](\S+)", command) == ["127.0.0.1"]  # nginx upstream contract — never 0.0.0.0
         # Port 8001, NOT 8000: crafdapi co-hosts with faoapi (:8000) on the same box;
         # a shared port would make the two services' units collide (address in use).
-        assert "--port 8001" in _UNIT
+        assert re.findall(r"--port[ =](\S+)", command) == ["8001"]
 
     def test_self_heals_and_survives_reboot(self):
         assert "Restart=always" in _UNIT
