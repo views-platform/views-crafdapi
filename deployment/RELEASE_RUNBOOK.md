@@ -3,8 +3,10 @@
 *For the maintainer. crafdapi runs alone on its own server, as the `views-crafdapi` service on
 `127.0.0.1:8001`, behind nginx, at `https://crafdapi.viewsforecasting.org` (ADR-039).*
 
-This page covers five things:
-1. releasing a new version;
+This page covers six things:
+
+0. cutting a release (choosing the version, moving it to `main`, tagging it), on your own computer;
+1. releasing a new version onto the server;
 2. what to do when the API is down;
 3. what to do when it serves an old forecast;
 4. setting up a new server;
@@ -22,10 +24,166 @@ CRAF'd's own Appwrite project is still being built in views-postprocessing.)
 including `sudo` asking for your password, reads the rest of a pasted block as its answer. That has
 corrupted the deploy-tag file before.
 
+## 0. Cut a release (~30 min, on your own computer)
+
+A release is a version number that names one exact state of the code. Everything here happens on
+GitHub and on your own computer; nothing touches the server until section 1. Do the steps in
+order. If any check fails, stop. Before step 5, nothing has changed on `main` and the release can
+simply be abandoned. If step 6 fails after the merge in step 5, do not tag: `main` then holds an
+untagged merge, which is harmless (the server only ever runs tags). Do step 7 (merge `main` back
+into `development`) anyway, then fix the cause in `development` and cut the next PATCH number from
+step 1.
+
+How the branches work: all changes are merged into `development` first. `main` holds only what
+has been released. A release moves `development` into `main` in one merge, the tag is put on that
+merge, and then `main` is merged back into `development` so the two stay in step. Never commit to
+`main` directly, and merge into `main` only from `development`. Nothing on GitHub enforces this:
+`main` has no branch protection, so it rests on following these steps. (v0.7.0 went through a
+separate release branch; releases since use `development` itself.) An urgent fix takes the same
+path: a pull request into `development`, then a PATCH release.
+
+### Step 1. Check that `development` is ready
+
+- Every pull request meant for this release is merged into `development`, and the tests passed
+  on GitHub for the last of them (the green tick on the commit).
+- No pull request in the release is still a draft or waiting for a decision.
+- List what has changed since the last release; you need it in steps 2 and 4:
+
+```bash
+git fetch origin --tags
+git log --oneline --first-parent vPREV..origin/development
+```
+
+(`vPREV` is the newest existing tag; `git tag --sort=-v:refname | head -1` prints it.)
+
+### Step 2. Choose the version number
+
+The number is `0.MINOR.PATCH` (for example `0.7.0`).
+
+- **Raise MINOR, set PATCH to 0** (`0.7.0` → `0.8.0`) when a partner can see a difference: a route,
+  column, level or outcome added, removed or renamed, a change in what a column means, or a change
+  to the key a partner needs.
+- **Raise PATCH** (`0.7.0` → `0.7.1`) when partners see no difference: fixes, documentation,
+  monitoring, internal changes.
+- When unsure, raise MINOR. A number that promises too little breaks a partner by surprise.
+
+Never reuse a number that has been tagged before, even for a release that was abandoned.
+
+### Step 3. Bump the version, through a pull request into `development`
+
+On a new branch from `development`, change the version in two files:
+
+```bash
+git switch -c release/vX.Y.Z origin/development
+```
+
+Edit `pyproject.toml`: `version = "X.Y.Z"`. Then update the lock file to match, and check that
+only the two version lines changed:
+
+```bash
+uv lock
+git diff --stat
+```
+
+`git diff --stat` must list `pyproject.toml` and `uv.lock`, each with `2 +-` (one line removed, one added). If `uv.lock` shows
+more, `uv lock` changed other packages too: stop, undo it with
+`git checkout -- uv.lock pyproject.toml`, and ask before going on.
+
+Partner-visible changes are added to `docs/api/CHANGELOG.md` as they are merged. Check now that
+every one from step 1 is there, and add any that is missing; then `git diff --stat` also lists
+`docs/api/CHANGELOG.md`, and nothing else. Commit and push:
+
+```bash
+git commit -am "release(vX.Y.Z): bump version"
+git push -u origin release/vX.Y.Z
+```
+
+Open a pull request from `release/vX.Y.Z` into `development`. Merge it when its tests pass.
+
+### Step 4. Open the release pull request: `development` into `main`
+
+On GitHub, open a pull request with **base `main`** and **compare `development`**. Title:
+`release: vX.Y.Z to main`. In its description, write for your future self:
+
+- the list from step 1, in plain words;
+- whether partners see a difference (and so whether `docs/api/CHANGELOG.md` was updated);
+- anything the server needs for this release beyond section 1: a new key, a new setting, a
+  changed unit file, a first start that takes longer than usual.
+
+Read the pull request's list of changed files once. Everything in it should be something you
+recognise from step 1. Wait for the tests to pass.
+
+### Step 5. Merge it with a merge commit
+
+Merge with **"Create a merge commit"**. Do not choose "Squash and merge" or "Rebase and merge":
+both rewrite the commits, and then `main` and `development` disagree about history from that point
+on. Do not delete the `development` branch when GitHub offers it.
+
+### Step 6. Tag the merge on `main` and push the tag
+
+```bash
+git fetch origin
+git log --oneline -1 origin/main
+git show origin/main:pyproject.toml | grep '^version'
+```
+
+The first line must be the merge from step 5 (`Merge pull request #NNN from
+views-platform/development`). The second must print `version = "X.Y.Z"`.
+
+Make the tag on your own computer first, and check that the tagged code declares the same version
+as the tag, the way the server will:
+
+```bash
+git tag -a vX.Y.Z -m "vX.Y.Z" origin/main
+git switch --detach vX.Y.Z
+uv run pytest tests/test_version.py -q
+git switch -
+```
+
+The test must pass (not "skipped"). If it fails, delete the local tag (`git tag -d vX.Y.Z`), do
+not push it, and follow the failure path at the top of this section: step 7, then a new PATCH
+number. (The test's own failure text says to re-cut the tag; do not.) Only if it passes, push the
+tag:
+
+```bash
+git push origin vX.Y.Z
+```
+
+**Never move or re-create a tag once it is pushed.** The server may already have fetched it, and a
+re-made tag with the same name has caused a failed release before (the 2026-08-15 incident
+described in `scripts/checkout-deploy-tag.sh`). If a
+tagged release is wrong, release a new number. (The server's error message for a mismatch still
+suggests re-cutting the tag; do not.)
+
+### Step 7. Merge `main` back into `development`
+
+The merge from step 5 exists only on `main`. Bring it into `development` through a pull request,
+or the next release's pull request will fail its "behind" check:
+
+```bash
+git switch -c sync/main-after-vX.Y.Z origin/development
+git merge --no-ff --no-edit origin/main
+git push -u origin sync/main-after-vX.Y.Z
+```
+
+The merge must finish without conflicts (it only adds the release merge). Open a pull request from
+`sync/main-after-vX.Y.Z` into `development`, and merge it with a merge commit when its tests pass.
+
+### Step 8. Check that nothing was lost between the branches
+
+```bash
+git fetch origin
+git merge-base --is-ancestor origin/main origin/development && echo "main is inside development: good"
+```
+
+If it does not print the second half, stop and ask: `main` has a change that `development` lacks.
+
+The release is cut. Section 1 puts it on the server.
+
 ## 1. Release a new version (~10 min)
 
-The tag must already exist on GitHub (`git push origin vX.Y.Z`). Replace `vX.Y.Z` with it
-everywhere below, by hand. An unedited `vX.Y.Z` fails safely: no such tag exists.
+The tag must already exist on GitHub (section 0). Replace `vX.Y.Z` with it everywhere below, by
+hand. An unedited `vX.Y.Z` fails safely: no such tag exists.
 
 **ON THE BOX** (`ssh` first), as your own user. Write the version to deploy:
 
