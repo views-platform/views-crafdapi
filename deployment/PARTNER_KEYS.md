@@ -17,7 +17,7 @@ into it.**
 
 1. Log in to the Appwrite console and open CRAF'd's project.
 2. *Overview → API keys → Create API key.*
-3. **Name:** the organisation plus the month it was issued, for example `partner-ocha-2026-11`.
+3. **Name:** the organisation plus the month it was issued, for example `partner-example-2026-11`.
 4. **Expiration:** one year.
 5. **Scopes:** read-only, exactly these: `buckets.read`, `files.read`, `rows.read`.
 
@@ -55,7 +55,7 @@ What the partner does with the key after that is theirs to manage.
 
 1. One month before the old key expires, create, save and send a new key (steps 1-3).
 2. In the Appwrite console, rename the old key by putting `RETIRED-` in front of its name, for
-   example `RETIRED-partner-ocha-2026-11`. It keeps working until its expiry date, so the partner has
+   example `RETIRED-partner-example-2026-11`. It keeps working until its expiry date, so the partner has
    a month to switch.
 3. Do nothing else: the old key stops working on its own when it expires.
 

@@ -20,6 +20,8 @@ views-hydranet), and views-postprocessing (which may be renamed views-delivery) 
 into this API's storage. (As of 17 November 2026 that last step is not live yet: the delivery into
 CRAF'd's own Appwrite project is still being built in views-postprocessing.)
 
+**Before the first partner key is handed out,** work through `deployment/CRAFD_LAUNCH_READY_LIST.md`.
+
 **Paste one line at a time.** The hazard is not specific to `read`: any line that prompts,
 including `sudo` asking for your password, reads the rest of a pasted block as its answer. That has
 corrupted the deploy-tag file before.
@@ -367,14 +369,18 @@ Bitwarden.
 
 ## 5. The server's own read key (once per server, and once a year)
 
-The service reads the forecast with a key of its own, `crafdapi-server` (ADR-044). Partner keys
+The service reads the forecast with a key of its own (ADR-044, which calls it `crafdapi-server`; its
+console name is `server-` plus the month it was made, today `server-2026-11`). Partner keys
 only decide who gets in. Without the server key the service starts but serves nothing: every data
 request answers `503`.
 
 1. **Create it** in the Appwrite console, in CRAF'd's project: *Overview → API keys → Create API
-   key* (as in `PARTNER_KEYS.md`, section 1). Name: `crafdapi-server`. Expiry: one year, and not on 2027-10-29 (the day FAO's
+   key* (as in `PARTNER_KEYS.md`, section 1). Name: `server-` plus the year and month, for example
+   `server-2026-11`. Expiry: one year, and not on 2027-10-29 (the day FAO's
    server key expires), so the two never need renewing on the same day. Scopes: `files.read` and
-   `rows.read`, nothing else. Save it in Bitwarden under the same name.
+   `rows.read`, nothing else. Save it in Bitwarden under the same name. (`crafdapi-server` is this
+   key's role, the name ADR-040, ADR-044, the code and the registry use; `server-YYYY-MM` is the
+   console's name for the current one.)
 2. **Put it on the server.** **ON THE BOX**, copy the setup script over if it is not there
    (section 4, step 2). This line prompts for the key; paste it alone:
    ```bash
@@ -393,11 +399,13 @@ request answers `503`.
    Then read the service log. It must show the two requests the key's two scopes are for: a line
    `loader: store listing: newest forecast manifest ...` naming a manifest (not `NONE`), and
    `downloaded ...: N bytes` lines. If the listing says `NONE`, the key may lack `rows.read`; if a
-   download fails, it may lack `files.read`.
+   download fails, it may lack `files.read`. Before the project's first delivery `NONE` is
+   expected, so the two scopes can only be proven once a delivery has landed (ready list, B3).
    ```bash
    sudo journalctl -u views-crafdapi -n 100 | grep -E "store listing|downloaded"
    ```
-   Then run the full check as in section 1.
+   Then run the full check as in section 1 once a forecast has been delivered; before that every
+   data request answers `503` and the smoke test fails, which says nothing about the key.
 
 **Renewing it:** create a new key as in step 1, put it on the server as in step 2, restart, check,
 and only then delete the old key in the console.
