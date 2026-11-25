@@ -3,6 +3,13 @@
 Changes that affect partners: new or removed columns, outcomes or levels, and changes to the
 ensemble or the models it combines. Newest first.
 
+## 2026-11-25 (release 0.8.0)
+
+- **Only keys for CRAF'd's own project work.** The service now checks every key against CRAF'd's
+  own Appwrite project; keys issued earlier stop working, and VIEWS issues new ones.
+- **`/health` names the forecast run it serves** (`served_run`), and reports `degraded` also when
+  the forecast's age cannot be measured or the store cannot be reached.
+
 ## 2026-11-22
 
 - **Countries are added up by their GAUL country code,** the code partners use to name them,
