@@ -24,7 +24,8 @@ recorded deaths. `02` (section 2) maps the whole world for one month.
 
 > **`01` and `02` were rewritten for the bulk files and slices (#223)** and are stored without
 > outputs until they are run against the live service after the next release. They were run end to
-> end against a local copy of the new service on 2026-11-22.
+> end, all checks passing, against a local copy of the new service on 2026-11-25 (on the cached
+> forecast, with its own expected run and number of draws).
 
 | Notebook | Shows | Needs an API key? |
 |---|---|---|
@@ -45,9 +46,14 @@ recorded deaths. `02` (section 2) maps the whole world for one month.
 
 ## Prerequisites & running
 
+From any machine with `git` and [`uv`](https://docs.astral.sh/uv/) installed (the repository is
+public, so no GitHub login is needed):
+
 ```bash
-# from the repo root
+git clone https://github.com/views-platform/views-crafdapi.git
+cd views-crafdapi
 uv sync
+cp .env.example .env        # then set CRAFD_KEY to your key
 uv run --with jupyterlab jupyter lab notebooks/
 ```
 
@@ -55,11 +61,20 @@ uv run --with jupyterlab jupyter lab notebooks/
 only, so the default dev install stays lean. `uv sync` installs `ipykernel`, so the kernel also
 works from VS Code or any Jupyter you already have.
 
-For the live-API notebooks (`01`, `02`), copy the credential template and add your key:
+The live-API notebooks (`01`, `02`) read your key from `CRAFD_KEY` in `.env` (request one from
+the VIEWS team).
 
-```bash
-cp .env.example .env        # then set APPWRITE_DATASTORE_API_KEY (request one from the VIEWS team)
-```
+### The checks in `01`
+
+Section 4 of `01_quickstart.ipynb`, "Is the data right?", stops the notebook with a plain message if
+the served data is wrong: forecast months with gaps, empty or out-of-order summaries, totals that
+do not add up from grid cells to countries, or, when you name one, a forecast run other than the
+expected one. To check a release, set the run and its number of draws in `.env`, for example
+`CRAFD_EXPECTED_RUN=chrome_box_forecasting_20261112_210150` and `CRAFD_EXPECTED_DRAWS=1024`;
+unset, they are only shown. The checks read the grid bulk file (about 130 MB), so section 4 takes
+a minute or two. The same checks run in the post-deploy
+smoke test (`views_crafdapi.data_checks`). Whether the numbers are plausible is judged by eye in
+`02`, section 6: recorded deaths beside the forecast for the world, Nigeria and Ukraine.
 
 `02` additionally needs `geopandas` for the border overlay (installed by `uv sync`).
 `03_offline_demo.ipynb` needs no `.env` and no network.
@@ -102,7 +117,7 @@ so they keep working after a new delivery.
 
 ## Access, updates & citation
 
-- **Getting a key:** request an `APPWRITE_DATASTORE_API_KEY` from the VIEWS team
+- **Getting a key:** request a key (`CRAFD_KEY`) from the VIEWS team
   (<https://viewsforecasting.org> / your CRAF'd–VIEWS point of contact). Base URL:
   `https://crafdapi.viewsforecasting.org`.
 - **Which forecast am I looking at?** The API serves one forecast, the latest good one. A new one
