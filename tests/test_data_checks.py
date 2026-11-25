@@ -5,7 +5,8 @@ import pytest
 
 from views_crafdapi.data_checks import (
     DataCheckError, check_forecast_age, check_forecast_month_fits_its_date, check_forecast_summaries,
-    check_horizon, check_levels_add_up, check_months, check_newest_delivery_served,
+    check_bulk_file_complete, check_files_agree, check_horizon, check_levels_add_up, check_months,
+    check_newest_delivery_served,
 )
 
 MADE_IN = "2026-07"
@@ -303,3 +304,135 @@ class TestHorizon:
     def test_no_forecast_months_fails(self):
         with pytest.raises(DataCheckError, match="no forecast months"):
             check_horizon(pd.DataFrame({"month": ["2026-05"]}), MADE_IN)
+
+
+def _bulk(places=(1, 2, 3), recorded=("2026-05", "2026-06"), forecast=("2026-07", "2026-08")):
+    rows = [{"month": m, "admin1_code": p, "sb_actual": 1.0, "n_draws": np.nan} for m in recorded for p in places]
+    rows += [{"month": m, "admin1_code": p, "sb_actual": np.nan, "n_draws": 1024} for m in forecast for p in places]
+    return pd.DataFrame(rows)
+
+
+class TestBulkFileComplete:
+    def test_a_complete_file_passes(self):
+        assert "3 places in each of 4 months" in check_bulk_file_complete(_bulk(), "admin1", "sb", MADE_IN)
+
+    def test_a_row_without_its_place_fails(self):
+        table = _bulk()
+        table.loc[0, "admin1_code"] = np.nan
+        with pytest.raises(DataCheckError, match="1 rows do not name their place"):
+            check_bulk_file_complete(table, "admin1", "sb", MADE_IN)
+
+    def test_a_month_with_places_missing_fails(self):
+        table = _bulk()
+        table = table[~((table["month"] == "2026-08") & (table["admin1_code"] == 3))]
+        with pytest.raises(DataCheckError, match="different numbers of places: 2 in 2026-08"):
+            check_bulk_file_complete(table, "admin1", "sb", MADE_IN)
+
+    def test_a_place_repeated_in_a_month_fails(self):
+        """A month with one place twice and another missing has the right number of rows."""
+        table = _bulk()
+        table.loc[(table["month"] == "2026-08") & (table["admin1_code"] == 3), "admin1_code"] = 2
+        with pytest.raises(DataCheckError, match="1 rows repeat a place in a month"):
+            check_bulk_file_complete(table, "admin1", "sb", MADE_IN)
+
+    def test_a_place_swapped_for_another_in_one_month_fails(self):
+        table = _bulk()
+        table.loc[(table["month"] == "2026-08") & (table["admin1_code"] == 3), "admin1_code"] = 4
+        with pytest.raises(DataCheckError, match="the months hold different places \\(4 in all, 3 in each month\\)"):
+            check_bulk_file_complete(table, "admin1", "sb", MADE_IN)
+
+    def test_a_month_missing_fails(self):
+        table = _bulk(forecast=("2026-07", "2026-09"))
+        with pytest.raises(DataCheckError, match="admin1/sb: the forecast months have a gap"):
+            check_bulk_file_complete(table, "admin1", "sb", MADE_IN)
+
+    def test_a_gap_in_the_recorded_months_fails(self):
+        with pytest.raises(DataCheckError, match="admin1/sb: months missing between 2025-01 and 2026-06"):
+            check_bulk_file_complete(_bulk(recorded=("2025-01", "2026-06")), "admin1", "sb", MADE_IN)
+
+    def test_the_newest_recorded_month_without_deaths_fails(self):
+        table = _bulk()
+        table.loc[table["month"] == "2026-06", "sb_actual"] = np.nan
+        with pytest.raises(DataCheckError, match="recorded months with no recorded deaths: 2026-06"):
+            check_bulk_file_complete(table, "admin1", "sb", MADE_IN)
+
+    def test_a_row_without_a_month_fails(self):
+        table = _bulk()
+        table.loc[0, "month"] = None
+        with pytest.raises(DataCheckError, match="1 rows have no month"):
+            check_bulk_file_complete(table, "admin1", "sb", MADE_IN)
+
+    def test_no_recorded_months_fails(self):
+        with pytest.raises(DataCheckError, match="no recorded months before 2026-07"):
+            check_bulk_file_complete(_bulk(recorded=()), "admin1", "sb", MADE_IN)
+
+    def test_no_forecast_months_fails(self):
+        with pytest.raises(DataCheckError, match="no forecast months"):
+            check_bulk_file_complete(_bulk(forecast=()), "admin1", "sb", MADE_IN)
+
+    def test_a_forecast_month_without_draws_fails(self):
+        """The failure this check exists for: the last month downloads, but carries nothing."""
+        table = _bulk()
+        table.loc[table["month"] == "2026-08", "n_draws"] = 0
+        with pytest.raises(DataCheckError, match="forecast months with no usable draws in any row: 2026-08"):
+            check_bulk_file_complete(table, "admin1", "sb", MADE_IN)
+
+    def test_some_rows_without_draws_pass(self):
+        """A row with no usable draws is allowed (the data dictionary); a whole month is not."""
+        table = _bulk()
+        table.loc[(table["month"] == "2026-08") & (table["admin1_code"] == 1), "n_draws"] = 0
+        check_bulk_file_complete(table, "admin1", "sb", MADE_IN)
+
+    def test_a_recorded_month_without_deaths_fails(self):
+        table = _bulk()
+        table.loc[table["month"] == "2026-05", "sb_actual"] = np.nan
+        with pytest.raises(DataCheckError, match="recorded months with no recorded deaths: 2026-05"):
+            check_bulk_file_complete(table, "admin1", "sb", MADE_IN)
+
+    def test_a_missing_column_fails(self):
+        with pytest.raises(DataCheckError, match="columns missing from the file: n_draws"):
+            check_bulk_file_complete(_bulk().drop(columns=["n_draws"]), "admin1", "sb", MADE_IN)
+
+    def test_an_empty_file_fails(self):
+        with pytest.raises(DataCheckError, match="no rows"):
+            check_bulk_file_complete(_bulk().iloc[0:0], "admin1", "sb", MADE_IN)
+
+
+def _summary(made_in="2026-07", months=("2026-06", "2026-07"), places=3):
+    return {"made_in": made_in, "months": list(months), "places": places}
+
+
+class TestFilesAgree:
+    def test_agreeing_files_pass(self):
+        files = {(lv, o): _summary(places={"grid": 9, "admin1": 3}[lv]) for lv in ("grid", "admin1") for o in ("sb", "ns")}
+        assert "all 4 files" in check_files_agree(files)
+
+    def test_files_from_different_forecasts_fail(self):
+        files = {("admin1", "sb"): _summary(), ("admin1", "ns"): _summary(made_in="2026-08", months=("2026-07", "2026-08"))}
+        with pytest.raises(DataCheckError, match="different forecasts"):
+            check_files_agree(files)
+
+    def test_files_covering_different_months_fail(self):
+        files = {("admin1", "sb"): _summary(), ("admin1", "ns"): _summary(months=("2026-05", "2026-06", "2026-07"))}
+        with pytest.raises(DataCheckError, match="different months"):
+            check_files_agree(files)
+
+    def test_same_span_but_different_months_fail(self):
+        files = {("admin1", "sb"): _summary(months=("2026-05", "2026-06", "2026-07")),
+                 ("admin1", "ns"): _summary(months=("2026-05", "2026-05", "2026-07"))}
+        with pytest.raises(DataCheckError, match="different months"):
+            check_files_agree(files)
+
+    def test_one_level_with_different_place_counts_fails(self):
+        files = {("admin1", "sb"): _summary(), ("admin1", "ns"): _summary(places=2), ("grid", "sb"): _summary(places=9)}
+        with pytest.raises(DataCheckError, match="admin1 files have different numbers of places"):
+            check_files_agree(files)
+
+    def test_files_with_no_months_fail(self):
+        files = {("admin1", "sb"): _summary(months=()), ("admin1", "ns"): _summary(months=())}
+        with pytest.raises(DataCheckError, match="files with no months"):
+            check_files_agree(files)
+
+    def test_no_files_fails(self):
+        with pytest.raises(DataCheckError, match="no files"):
+            check_files_agree({})

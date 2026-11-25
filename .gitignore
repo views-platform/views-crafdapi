@@ -234,3 +234,6 @@ src/views_crafdapi/wandb/**/*.pyc
 
 # The risk register is a local working document, never committed (Simon, 2026-11-22).
 reports/technical_risk_register.md
+
+# Notebook 04 downloads the bulk files here; an interrupted download leaves a .part file.
+notebooks/data/

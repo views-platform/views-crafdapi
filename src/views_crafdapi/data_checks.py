@@ -26,6 +26,13 @@ Whether the data is current for today is checked from `/health` and the months (
 - the forecast's age is within the service's own limit;
 - the forecast's first month is the month of its date, or the month before;
 - the number of forecast months, if one is expected.
+
+Whether a downloaded bulk file is complete, and whether the nine files agree (notebook 04):
+- every row names its place, each place once a month, the same places every month, no month
+  missing, every forecast month has rows with usable draws and every recorded month has recorded
+  deaths;
+- the nine files have the same months and the same forecast month, and each level the same
+  number of places across its three outcomes.
 """
 from __future__ import annotations
 
@@ -238,3 +245,89 @@ def check_horizon(table: pd.DataFrame, made_in: str, expected_months: Optional[i
         raise DataCheckError(f"{len(forecast)} forecast months ({forecast[0]} to {forecast[-1]}), "
                              f"expected {expected_months}")
     return f"{len(forecast)} forecast months, {forecast[0]} to {forecast[-1]}"
+
+
+# The column that names a row's place, per level.
+PLACE_ID = {"grid": "priogrid_id", "admin1": "admin1_code", "country": "country_code"}
+
+
+def check_bulk_file_complete(table: pd.DataFrame, level: str, outcome: str, made_in: str) -> str:
+    """A bulk file carries values, not only the right shape: every row names its place, each place
+    appears once a month, every month has the same places, the months have no gaps and recorded
+    months end the month before `made_in` (`check_months`), every forecast month has rows with
+    usable draws, and every recorded month has recorded deaths. A file whose last months are
+    empty still downloads, parses and reports the right number of months; this is the check that
+    catches it. `table` needs `month`, the level's place id, `n_draws` and `{outcome}_actual`."""
+    place = PLACE_ID[level]
+    name = f"{level}/{outcome}"
+    missing = sorted({"month", place, "n_draws", f"{outcome}_actual"} - set(table.columns))
+    if missing:
+        raise DataCheckError(f"{name}: columns missing from the file: {', '.join(missing)}")
+    if table.empty:
+        raise DataCheckError(f"{name}: the file has no rows")
+    unnamed = int(table[place].isna().sum())
+    if unnamed:
+        raise DataCheckError(f"{name}: {unnamed:,} rows do not name their place ({place} empty)")
+    no_month = int(table["month"].isna().sum())
+    if no_month:
+        raise DataCheckError(f"{name}: {no_month:,} rows have no month")
+    month = table["month"].astype(str)
+    doubled = int(pd.DataFrame({"month": month, "place": table[place]}).duplicated().sum())
+    if doubled:
+        raise DataCheckError(f"{name}: {doubled:,} rows repeat a place in a month")
+    per_month = table.groupby(month)[place].nunique()
+    if per_month.nunique() != 1:
+        raise DataCheckError(f"{name}: months have different numbers of places: {per_month.min():,} in "
+                             f"{per_month.idxmin()}, {per_month.max():,} in {per_month.idxmax()}")
+    # No place twice in a month and the same count every month: the months hold the same places
+    # exactly when the file holds no more places in all than in one month.
+    if table[place].nunique() != per_month.iloc[0]:
+        raise DataCheckError(f"{name}: the months hold different places ({table[place].nunique():,} in all, "
+                             f"{per_month.iloc[0]:,} in each month)")
+    try:
+        check_months(pd.DataFrame({"month": month.unique()}), made_in)   # the months only, not 30 million rows
+    except DataCheckError as problem:
+        raise DataCheckError(f"{name}: {problem}") from None
+    all_months = sorted(month.unique())
+    for earlier, later in zip(all_months, all_months[1:]):   # check_months looks at forecast months only
+        if later != _month_after(earlier):
+            raise DataCheckError(f"{name}: months missing between {earlier} and {later}")
+    forecast = month >= made_in
+    if forecast.all():
+        raise DataCheckError(f"{name}: no recorded months before {made_in}")
+    with_draws = (table["n_draws"] > 0).groupby(month[forecast]).sum()
+    empty_forecast = sorted(m for m, n in with_draws.items() if n == 0)
+    if empty_forecast:
+        raise DataCheckError(f"{name}: forecast months with no usable draws in any row: {', '.join(empty_forecast[:6])}")
+    recorded = table.loc[~forecast, f"{outcome}_actual"].notna().groupby(month[~forecast]).sum()
+    empty_recorded = sorted(m for m, n in recorded.items() if n == 0)
+    if empty_recorded:
+        raise DataCheckError(f"{name}: recorded months with no recorded deaths: {', '.join(empty_recorded[:6])}")
+    return (f"{name}: {per_month.iloc[0]:,} places in each of {len(per_month)} months; "
+            f"every forecast month has draws and every recorded month has recorded deaths")
+
+
+def check_files_agree(files: Mapping[tuple, Mapping[str, Any]]) -> str:
+    """The bulk files of one download agree. `files` maps (level, outcome) to a summary with
+    `made_in`, `months` (a sorted list) and `places` (places per month). All files must have the
+    same forecast month and the same months, and each level the same number of places across its
+    outcomes. A mix means the files come from different forecasts."""
+    if not files:
+        raise DataCheckError("no files to compare")
+    made_in = {key: f["made_in"] for key, f in files.items()}
+    if len(set(made_in.values())) != 1:
+        raise DataCheckError(f"the files come from different forecasts: {dict(sorted(made_in.items()))}")
+    no_months = sorted(key for key, f in files.items() if not f["months"])
+    if no_months:
+        raise DataCheckError(f"files with no months: {no_months}")
+    if len({tuple(f["months"]) for f in files.values()}) != 1:
+        spans = {key: (f["months"][0], f["months"][-1], len(f["months"])) for key, f in files.items()}
+        raise DataCheckError(f"the files cover different months: {dict(sorted(spans.items()))}")
+    months = {key: (f["months"][0], f["months"][-1], len(f["months"])) for key, f in files.items()}
+    for level in sorted({lv for lv, _ in files}):
+        counts = {key: f["places"] for key, f in files.items() if key[0] == level}
+        if len(set(counts.values())) != 1:
+            raise DataCheckError(f"the {level} files have different numbers of places: {dict(sorted(counts.items()))}")
+    first, last, n = next(iter(months.values()))
+    return (f"all {len(files)} files: forecast made in {next(iter(made_in.values()))}, "
+            f"months {first} to {last} ({n}), the same places per level")
