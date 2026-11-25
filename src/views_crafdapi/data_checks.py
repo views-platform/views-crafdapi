@@ -19,10 +19,19 @@ What "right" means here is what can be checked from the served data alone:
 
 Whether the numbers are plausible (a map that looks like the conflicts we know) is for a person
 to judge; the notebooks draw the maps for that.
+
+Whether the data is current for today is checked from `/health` and the months (notebook 07):
+- the newest delivery is the one served: a forecast is loaded, no newer delivery failed to load,
+  and no fallback is served;
+- the forecast's age is within the service's own limit;
+- the forecast's first month is the month of its date, or the month before;
+- the number of forecast months, if one is expected.
 """
 from __future__ import annotations
 
-from typing import Mapping, Optional
+import re
+from datetime import datetime, timezone
+from typing import Any, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -147,3 +156,85 @@ def check_levels_add_up(by_level: Mapping[str, pd.DataFrame], column: str) -> st
                 raise DataCheckError(
                     f"{column} does not add up in {month}: {cells} {g:,.3f}, {level} {t:,.3f}")
     return f"{column} adds up from grid cells to admin-1 regions and to countries in all {len(months)} months"
+
+
+def check_newest_delivery_served(health: Mapping[str, Any]) -> str:
+    """From `/health`: a forecast is loaded, no newer delivery failed to load, and the service
+    does not serve an older forecast in place of the newest. Any of these means partners get an
+    older forecast than the newest delivered, with answers that look normal.
+
+    One serving state is not a failure, as on `/health` itself: `cached_unverified` (the last
+    forecast was served while the store could not be asked) once the store answers again. While
+    the store still cannot be asked, whether the forecast is the newest cannot be confirmed."""
+    if not health.get("forecast_loaded"):
+        raise DataCheckError("no forecast is loaded: every data request answers 503")
+    if health.get("forecast_loading"):
+        raise DataCheckError(f"a newer delivery is not served: {health['forecast_loading']}")
+    state = health.get("forecast_serving_state") or {}
+    run = health.get("served_run") or "not named"
+    if health.get("appwrite_connected") is False:
+        raise DataCheckError("whether the newest delivery is served cannot be confirmed: "
+                             "the service cannot reach its store")
+    if state.get("serving") == "cached_unverified":
+        if health.get("appwrite_connected"):
+            return (f"run {run} is served from the service's own copy; the store answers again, "
+                    "and the service checks it for a newer delivery within minutes")
+        raise DataCheckError("whether the newest delivery is served cannot be confirmed: "
+                             "the service cannot reach its store")
+    if state.get("degraded"):
+        raise DataCheckError(f"an older forecast is served in place of the newest: {state.get('reason') or 'no reason given'}")
+    return f"the newest delivery is served (run {run})"
+
+
+def check_forecast_age(health: Mapping[str, Any]) -> str:
+    """From `/health`'s `forecast_freshness`: the forecast's age is known and within the service's
+    own limit (`sla_days`). An unknown age fails: nothing then says the forecast is current."""
+    fr = health.get("forecast_freshness") or {}
+    age, limit = fr.get("age_days"), fr.get("sla_days")
+    if age is None or limit is None:
+        raise DataCheckError("the forecast's age is unknown: /health does not report it")
+    if fr.get("is_stale") or age > limit:   # is_stale is computed before /health rounds the age
+        raise DataCheckError(f"the forecast is {age:.1f} days old, more than the {limit:g}-day limit")
+    return f"the forecast is {age:.0f} days old, within the {limit:g}-day limit"
+
+
+def check_forecast_month_fits_its_date(made_in: str, dated: Optional[str]) -> str:
+    """The forecast's first month (`made_in`, ``2026-11``) is the month of the forecast's date, or
+    the month before. The date is `/health`'s `forecast_freshness.created_at` (ISO-8601): the
+    run's own date when the producer stamps one, otherwise when the delivery was stored. A forecast
+    is made once the previous month's recorded deaths arrive, and delivered then or in the
+    following month, so its first month is never more than a month before that date. A run made on
+    old months fails here; an old run delivered again keeps its old date and fails the age check.
+
+    With the age check, this bounds how old the months can be. It does not compare them with
+    today: between deliveries a current forecast's first month is legitimately one or two months
+    behind today's."""
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", str(made_in)):
+        raise DataCheckError(f"the forecast's first month cannot be read: {made_in!r}")
+    if not dated:
+        raise DataCheckError("the forecast's date is unknown: /health does not report it")
+    try:
+        stamp = datetime.fromisoformat(str(dated).replace("Z", "+00:00"))
+        if stamp.tzinfo is not None:
+            stamp = stamp.astimezone(timezone.utc)   # the month in UTC, as /health counts the age
+    except ValueError:
+        raise DataCheckError(f"the forecast's date cannot be read: {dated!r}") from None
+    month = f"{stamp.year}-{stamp.month:02d}"
+    lag = (stamp.year * 12 + stamp.month) - (int(made_in[:4]) * 12 + int(made_in[5:7]))
+    if lag < 0:
+        raise DataCheckError(f"the forecast starts in {made_in}, after its date ({month})")
+    if lag > 1:
+        raise DataCheckError(f"the forecast starts in {made_in}, but it is dated {month}, {lag} months later")
+    return f"the forecast starts in {made_in} and is dated {month}"
+
+
+def check_horizon(table: pd.DataFrame, made_in: str, expected_months: Optional[int] = None) -> str:
+    """The number of forecast months (from `made_in` on), and, if given, that it is
+    `expected_months`. A delivery cut short shows up here as a short horizon."""
+    forecast = sorted(m for m in table["month"].astype(str).unique() if m >= made_in)
+    if not forecast:
+        raise DataCheckError(f"no forecast months at or after {made_in}")
+    if expected_months is not None and len(forecast) != expected_months:
+        raise DataCheckError(f"{len(forecast)} forecast months ({forecast[0]} to {forecast[-1]}), "
+                             f"expected {expected_months}")
+    return f"{len(forecast)} forecast months, {forecast[0]} to {forecast[-1]}"
