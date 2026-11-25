@@ -105,6 +105,13 @@ def mock_databases():
 
 
 @pytest.fixture
+def mock_tables():
+    """Mock TablesDB service (Appwrite 1.8's Databases API; the metadata search reads through it)"""
+    with patch("views_crafdapi.managers.appwrite.manager.TablesDB") as mock:
+        yield mock.return_value
+
+
+@pytest.fixture
 def temp_cache_dir(tmp_path):
     """Create a temporary cache directory"""
     cache_dir = tmp_path / "cache"
@@ -297,14 +304,14 @@ class TestCacheManager:
             {"name": "test.txt", "$updatedAt": "2025-10-22T12:00:00.000Z"}
         )
         
-        cache_key = "bucket1_file123"
+        cache_key = "bucket1/file123"
         assert cache_key in manager.cache_metadata
         assert manager.cache_metadata[cache_key].filename == "test.txt"
 
     def test_validate_cache_valid(self, temp_cache_dir):
         manager = CacheManager(temp_cache_dir, timedelta(hours=24))
         
-        test_file = temp_cache_dir / "bucket1" / "test.txt"
+        test_file = temp_cache_dir / "bucket1" / "file123"
         test_file.parent.mkdir(parents=True)
         test_file.write_text("test content")
         
@@ -322,12 +329,12 @@ class TestCacheManager:
     def test_validate_cache_invalid_ttl(self, temp_cache_dir):
         manager = CacheManager(temp_cache_dir, timedelta(hours=1))
         
-        test_file = temp_cache_dir / "bucket1" / "test.txt"
+        test_file = temp_cache_dir / "bucket1" / "file123"
         test_file.parent.mkdir(parents=True)
         test_file.write_text("test content")
         
         # Fix: Use CacheMetadata object instead of dict
-        cache_key = "bucket1_file123"
+        cache_key = "bucket1/file123"
         manager.cache_metadata[cache_key] = CacheMetadata(
             bucket_id="bucket1",
             file_id="file123",
@@ -343,15 +350,15 @@ class TestCacheManager:
     def test_remove_from_cache(self, temp_cache_dir):
         manager = CacheManager(temp_cache_dir, timedelta(hours=24))
         
-        test_file = temp_cache_dir / "bucket1" / "test.txt"
+        test_file = temp_cache_dir / "bucket1" / "file123"
         test_file.parent.mkdir(parents=True)
         test_file.write_text("test content")
         
         manager.add_to_cache("bucket1", "file123", test_file)
-        assert "bucket1_file123" in manager.cache_metadata
+        assert "bucket1/file123" in manager.cache_metadata
         
         manager.remove_from_cache("bucket1", "file123")
-        assert "bucket1_file123" not in manager.cache_metadata
+        assert "bucket1/file123" not in manager.cache_metadata
         assert not test_file.exists()
 
     def test_clear_cache_all(self, temp_cache_dir):
@@ -359,7 +366,7 @@ class TestCacheManager:
         
         # Add multiple files
         for i in range(3):
-            test_file = temp_cache_dir / "bucket1" / f"test{i}.txt"
+            test_file = temp_cache_dir / "bucket1" / f"file{i}"
             test_file.parent.mkdir(parents=True, exist_ok=True)
             test_file.write_text(f"content {i}")
             manager.add_to_cache("bucket1", f"file{i}", test_file)
@@ -389,8 +396,8 @@ class TestCacheManager:
 # Test MetadataManager
 class TestMetadataManager:
     @pytest.fixture
-    def metadata_manager(self, mock_databases, api_key_config):
-        return MetadataManager(mock_databases, api_key_config)
+    def metadata_manager(self, mock_databases, api_key_config, mock_tables):
+        return MetadataManager(mock_databases, api_key_config, mock_tables)
 
     def test_create_database_if_not_exists_new(self, metadata_manager, mock_databases, monkeypatch):
         monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
@@ -426,9 +433,9 @@ class TestMetadataManager:
         assert metadata_manager._infer_attribute_type([1, 2, 3]) == ("integer", True)
         assert metadata_manager._infer_attribute_type("2025-10-22T12:00:00") == ("datetime", False)
 
-    def test_search_files_by_metadata(self, metadata_manager, mock_databases):
-        mock_databases.list_documents.return_value = _sdk_result(
-            documents=[_sdk_result(fileId="file123", filename="test.txt")],
+    def test_search_files_by_metadata(self, metadata_manager, mock_tables):
+        mock_tables.list_rows.return_value = _sdk_result(
+            rows=[_sdk_result(fileId="file123", filename="test.txt")],
             total=1,
         )
         
@@ -440,20 +447,20 @@ class TestMetadataManager:
         assert result.data["total"] == 1
         assert len(result.data["documents"]) == 1
 
-    def test_search_files_by_metadata_paginates_beyond_default_page(self, metadata_manager, mock_databases):
+    def test_search_files_by_metadata_paginates_beyond_default_page(self, metadata_manager, mock_tables):
         """#287: a run with more artifacts than one Appwrite page (108 shards) must enumerate
         ALL matching documents, not just the default first page. Without pagination the resolver
         saw 25/108 shards → "83 missing" → the entire global wire run was refused (ingest_failed).
-        list_documents is called with limit+offset until a short page ends the loop."""
+        list_rows is called with limit+offset until a short page ends the loop."""
         page1 = _sdk_result(
-            documents=[_sdk_result(fileId=f"f{i}", filename=f"shard_{i}") for i in range(100)],
+            rows=[_sdk_result(fileId=f"f{i}", filename=f"shard_{i}") for i in range(100)],
             total=108,
         )
         page2 = _sdk_result(
-            documents=[_sdk_result(fileId=f"f{i}", filename=f"shard_{i}") for i in range(100, 108)],
+            rows=[_sdk_result(fileId=f"f{i}", filename=f"shard_{i}") for i in range(100, 108)],
             total=108,
         )
-        mock_databases.list_documents.side_effect = [page1, page2]
+        mock_tables.list_rows.side_effect = [page1, page2]
 
         result = metadata_manager.search_files_by_metadata(
             filters={"type": "sampled_forecast_shard"}
@@ -461,7 +468,7 @@ class TestMetadataManager:
 
         assert result.success
         assert len(result.data["documents"]) == 108  # not truncated to a single 100-doc page
-        assert mock_databases.list_documents.call_count == 2  # looped past the first full page
+        assert mock_tables.list_rows.call_count == 2  # looped past the first full page
 
 
 # Test AppWriteFileManager
@@ -773,32 +780,18 @@ class TestAppWriteFileManager:
         file_manager.databases.delete_document.assert_not_called()
         assert not result.success
 
-    def test_clear_cache(self, file_manager):
-        file_manager.cache_manager.clear_cache = Mock(
-            return_value=OperationResult(
-                success=True,
-                data={"deleted_files": 5, "deleted_bytes": 1000}
-            )
-        )
-        
-        result = file_manager.clear_cache()
-        
-        assert result.success
-        assert result.data["deleted_files"] == 5
+    @pytest.mark.parametrize("code", [401, 403, 404])
+    def test_get_file_failure_carries_the_store_status(self, file_manager, code):
+        # The file routes answer 401 from 401/403 and 404 from anything else (ADR-027 §4),
+        # so the status must be the store's own, not a constant.
+        file_manager.storage.get_file.side_effect = AppwriteException("refused", code, "t")
+        result = file_manager.get_file("b", "f")
+        assert (result.success, result.status) == (False, code)
 
-    def test_get_cache_stats(self, file_manager):
-        file_manager.cache_manager.get_stats = Mock(
-            return_value={
-                "total_files": 10,
-                "total_size_bytes": 5000,
-                "total_size_mb": 0.005,
-            }
-        )
-        
-        stats = file_manager.get_cache_stats()
-
-        assert stats["total_files"] == 10
-        assert stats["total_size_mb"] == 0.005
+    def test_get_file_unexpected_error_has_no_store_status(self, file_manager):
+        file_manager.storage.get_file.side_effect = RuntimeError("boom")
+        result = file_manager.get_file("b", "f")
+        assert (result.success, result.status) == (False, None)
 
     def test_download_file_nonexistent_returns_failure(self, file_manager):
         file_manager.storage.get_file_download.side_effect = AppwriteException(
@@ -921,21 +914,20 @@ class TestErrorHandling:
         assert not result.success
         assert result.code == "storage_internal"
 
-    def test_download_file_io_error(self, file_manager):
+    def test_download_file_io_error(self, file_manager, tmp_path):
+        """A failure while writing the cache file itself answers IO_ERROR."""
         file_manager.storage.get_file_download.return_value = b"content"
         file_manager.get_file = Mock(
             return_value=OperationResult(
                 success=True,
-                data={"name": "test.txt", "$updatedAt": "2026-01-01T00:00:00Z"}
+                data={"name": "test.txt", "$updatedAt": "2026-01-01T00:00:00Z",
+                      "sizeOriginal": len(b"content")}
             )
         )
-        file_manager.cache_manager._get_cache_path = Mock(
-            return_value=Path("/nonexistent/dir/file.txt")
-        )
-
-        result = file_manager.download_file(
-            "bucket1", "file123", use_cache=False
-        )
+        file_manager.cache_manager._get_cache_path = Mock(return_value=tmp_path / "file123")
+        with patch("views_crafdapi.managers.appwrite.manager.os.fsync",
+                   side_effect=OSError("disk full")):
+            result = file_manager.download_file("bucket1", "file123", use_cache=False)
 
         assert not result.success
         assert result.code == "IO_ERROR"
@@ -981,7 +973,7 @@ class TestAppwriteEnvVarValidation:
 
     _ALL_ENV = {
         "APPWRITE_ENDPOINT": "https://cloud.appwrite.io/v1",
-        "APPWRITE_DATASTORE_PROJECT_ID": "proj_123",
+        "APPWRITE_CRAFD_PROJECT_ID": "proj_123",
         "APPWRITE_CRAFD_BUCKET_ID": "bucket_123",
         "APPWRITE_CRAFD_BUCKET_NAME": "my_bucket",
         "APPWRITE_CRAFD_COLLECTION_ID": "coll_123",
@@ -1028,7 +1020,10 @@ class TestAppwriteEnvVarValidation:
         from views_crafdapi.managers.api import CrafdApiManager
         with patch.object(CrafdApiManager, "__init__", lambda self: None):
             mgr = CrafdApiManager()
-        with patch("os.getenv", side_effect=self._getenv()):
+        # The shared project's id is in the server env too (registry_to_env emits every row);
+        # it must never be the project crafdapi talks to (þing 04 D3).
+        shared = {"APPWRITE_DATASTORE_PROJECT_ID": "shared_project"}
+        with patch("os.getenv", side_effect=self._getenv(shared)):
             config = mgr._create_appwrite_config("test_key")
         assert config.endpoint == "https://cloud.appwrite.io/v1"
         assert config.project_id == "proj_123"
@@ -1184,7 +1179,7 @@ class TestProvisioningGate:
         `_create_attribute_by_type` uses, but reached the SDK with no provisioning check —
         so backfilling attributes onto an *existing* collection bypassed þing-01 #276."""
         monkeypatch.delenv("CRAFDAPI_ALLOW_PROVISIONING", raising=False)
-        manager = MetadataManager(mock_databases, api_key_config)
+        manager = MetadataManager(mock_databases, api_key_config, Mock())
 
         with pytest.raises(ProvisioningDisabledError, match=r"attribute 'fileId'"):
             manager._create_single_attribute(
@@ -1207,7 +1202,7 @@ class TestProvisioningGate:
         mock_databases.create_collection.return_value = _sdk_result(
             **{"$id": "coll", "name": "coll"}
         )
-        manager = MetadataManager(mock_databases, api_key_config)
+        manager = MetadataManager(mock_databases, api_key_config, Mock())
 
         manager.create_metadata_collection_if_not_exists(
             collection_name="coll", collection_id="coll", database_id="db"
@@ -1233,3 +1228,191 @@ class TestCredentialRedaction:
         # this is exactly how api.py keys the cache — a sha256 prefix, never the raw key
         digest = hashlib.sha256(raw.encode()).hexdigest()[:16]
         assert raw not in digest and len(digest) == 16
+
+
+class TestAFailedCallKeepsItsHttpStatus:
+    """C-233 (#158). The SDK raises `AppwriteException` for every failure — an HTTP error, a
+    network error or a timeout. Keeping its HTTP status on the result is what lets a caller tell
+    "not authorised" (401/403) from "unreachable" (0/None/5xx) instead of reading all of them as
+    "nothing found"."""
+
+    def test_a_failed_search_carries_the_status_and_type(self, mock_databases, mock_tables, api_key_config):
+        mock_tables.list_rows.side_effect = AppwriteException(
+            "Service unavailable", 503, "general_server_error"
+        )
+        result = MetadataManager(mock_databases, api_key_config, mock_tables).search_files_by_metadata(
+            filters={"type": "sampled_forecast_manifest"}
+        )
+        assert result.success is False
+        assert result.status == 503 and result.code == "general_server_error"
+        assert result.to_dict()["status"] == 503
+
+    def test_a_failed_bucket_listing_carries_the_status(self, file_manager):
+        file_manager.storage.list_buckets.side_effect = AppwriteException(
+            "The current user is not authorized", 401, "general_unauthorized_scope"
+        )
+        result = file_manager.list_buckets(limit=1)
+        assert result.success is False and result.status == 401
+
+    def test_a_success_has_no_status(self):
+        assert OperationResult(success=True).status is None
+
+
+    def test_a_failed_download_carries_the_status(self, file_manager):
+        file_manager.storage.get_file_download.side_effect = AppwriteException(
+            "The current user is not authorized", 401, "user_unauthorized"
+        )
+        file_manager.get_file = Mock(return_value=OperationResult(success=False, error="x"))
+        result = file_manager.download_file("bucket1", "f1", use_cache=False, validate_cache=False)
+        assert result.success is False and result.status == 401
+
+
+# ── C-288 (#169): a cached download is written atomically and checked against its declared size ──
+class TestCachedDownloadIsCompleteOrAbsent:
+    BODY = b"PAR1" + b"x" * 96
+
+    def _manager(self, file_manager, tmp_path, *, size_original, body=None):
+        from views_crafdapi.managers.appwrite.results import OperationResult
+
+        file_manager.cache_manager = CacheManager(tmp_path, timedelta(hours=24))
+        file_manager.get_file = Mock(return_value=OperationResult(success=True, data={
+            "name": "shard.parquet", "$updatedAt": "2020-01-01T00:00:00.000Z",
+            "sizeOriginal": size_original,
+        }))
+        file_manager.storage.get_file_download = Mock(return_value=body or self.BODY)
+        return file_manager
+
+    def test_a_short_body_is_refused_and_nothing_is_cached(self, file_manager, tmp_path):
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY) + 10)
+        out = mgr.download_file("b", "f")
+        assert not out.success and "declares" in out.error
+        assert out.code == "DOWNLOAD_INCOMPLETE"   # the code /download maps to 502
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.NOT_FOUND
+        assert not (tmp_path / "b").exists() or list((tmp_path / "b").iterdir()) == []
+
+    def test_a_body_longer_than_declared_is_refused_too(self, file_manager, tmp_path):
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY) - 1)
+        out = mgr.download_file("b", "f")
+        assert not out.success and out.code == "DOWNLOAD_INCOMPLETE"
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.NOT_FOUND
+
+    def test_each_write_has_its_own_temp_file(self, file_manager, tmp_path, monkeypatch):
+        """Two requests downloading the same file at once must not write into one temp file."""
+        import os
+
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        real_replace, sources = os.replace, []
+        monkeypatch.setattr(os, "replace", lambda src, dst: (sources.append(Path(src).name),
+                                                             real_replace(src, dst)))
+        for _ in range(2):
+            mgr.cache_manager.cache_metadata.clear()
+            assert mgr.download_file("b", "f").success
+        file_writes = [s for s in sources if s.startswith("f.tmp-")]  # not the index file
+        assert len(file_writes) == 2 and len(set(file_writes)) == 2, sources
+
+    def test_a_crash_mid_write_leaves_no_file_at_the_cache_path(self, file_manager, tmp_path, monkeypatch):
+        import os
+
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        monkeypatch.setattr(os, "replace", Mock(side_effect=OSError("killed")))
+        assert not mgr.download_file("b", "f").success
+        assert list((tmp_path / "b").iterdir()) == []  # neither the target nor a stray temp
+
+    def test_a_crash_mid_rewrite_keeps_the_previous_copy_whole(self, file_manager, tmp_path, monkeypatch):
+        """Atomic means the old file survives a failed replacement intact; an in-place write
+        would already have truncated it."""
+        import os
+
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        assert mgr.download_file("b", "f").success
+        path = Path(mgr.cache_manager.get_cached_file_path("b", "f").data["cache_path"])
+        mgr.storage.get_file_download = Mock(return_value=b"N" * len(self.BODY))
+        mgr.cache_manager.cache_metadata.clear()  # force a re-download
+        monkeypatch.setattr(os, "replace", Mock(side_effect=OSError("killed")))
+        assert not mgr.download_file("b", "f").success
+        assert path.read_bytes() == self.BODY
+        assert sorted(p.name for p in path.parent.iterdir()) == [path.name]
+
+    def test_get_cached_file_path_refuses_a_wrong_size_copy(self, file_manager, tmp_path):
+        """What `/cached` relies on: the path lookup itself names an incomplete copy."""
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        assert mgr.download_file("b", "f").success
+        path = Path(mgr.cache_manager.get_cached_file_path("b", "f").data["cache_path"])
+        path.write_bytes(self.BODY[:10])
+        out = mgr.cache_manager.get_cached_file_path("b", "f")
+        assert not out.success and out.code == "CACHE_FILE_WRONG_SIZE"
+        assert "is 10 bytes, a whole copy is 100" in out.error
+        path.write_bytes(self.BODY + b"!")   # longer is not the file either
+        assert mgr.cache_manager.get_cached_file_path("b", "f").code == "CACHE_FILE_WRONG_SIZE"
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.INVALID_SIZE
+
+    def test_a_truncated_cached_file_is_invalid_and_refetched(self, file_manager, tmp_path):
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        assert mgr.download_file("b", "f").success
+        path = Path(mgr.cache_manager.get_cached_file_path("b", "f").data["cache_path"])
+        path.write_bytes(self.BODY[:10])  # torn by an earlier, non-atomic writer
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.INVALID_SIZE
+        out = mgr.download_file("b", "f")
+        assert out.success and not out.data["from_cache"] and out.data["file_bytes"] == self.BODY
+        assert path.read_bytes() == self.BODY
+
+    def test_a_deserialized_manifest_is_checked_against_what_was_cached(self, file_manager, tmp_path):
+        """The SDK hands a JSON file back as a dict; its re-serialised bytes need not match
+        `sizeOriginal`, so the download is not refused on it — but the cached copy is still
+        checked, against the size recorded when it was written."""
+        mgr = self._manager(file_manager, tmp_path, size_original=9999, body={"run_id": "r"})
+        out = mgr.download_file("b", "f")
+        assert out.success and out.data["file_bytes"] == b'{"run_id": "r"}'
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.VALID
+        path = Path(mgr.cache_manager.get_cached_file_path("b", "f").data["cache_path"])
+        path.write_bytes(b'{"run_')
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.INVALID_SIZE
+
+    def test_an_entry_is_checked_against_its_recorded_size(self, temp_cache_dir):
+        """A whole cached copy is valid; one torn since (a write killed mid-way) is caught."""
+        manager = CacheManager(temp_cache_dir, timedelta(hours=24))
+        f = temp_cache_dir / "bucket1" / "file1"
+        f.parent.mkdir(parents=True)
+        f.write_text("old contents")
+        manager.add_to_cache("bucket1", "file1", f)
+        assert manager.validate_cache("bucket1", "file1") == CacheValidationResult.VALID
+        f.write_text("old")
+        assert manager.validate_cache("bucket1", "file1") == CacheValidationResult.INVALID_SIZE
+
+    def test_an_entry_cached_under_its_store_name_is_a_miss(self, temp_cache_dir):
+        """#216: entries written before the cache was named by file id point to the store name.
+        They are never read; the file is downloaded again and cached under its id."""
+        manager = CacheManager(temp_cache_dir, timedelta(hours=24))
+        f = temp_cache_dir / "bucket1" / "old.txt"
+        f.parent.mkdir(parents=True)
+        f.write_text("old contents")
+        manager.add_to_cache("bucket1", "file1", f)
+        assert manager.validate_cache("bucket1", "file1") == CacheValidationResult.NOT_FOUND
+
+    def test_a_file_removed_mid_check_is_a_miss_not_an_error(self, temp_cache_dir, monkeypatch):
+        """A concurrent clear can unlink the file between lookups; that is NOT_FOUND / missing."""
+        manager = CacheManager(temp_cache_dir, timedelta(hours=24))
+        f = temp_cache_dir / "bucket1" / "x.txt"
+        f.parent.mkdir(parents=True)
+        f.write_text("x")
+        manager.add_to_cache("bucket1", "file1", f)
+        f.unlink()
+        assert manager.validate_cache("bucket1", "file1") == CacheValidationResult.NOT_FOUND
+        assert manager.get_cached_file_path("bucket1", "file1").code == "CACHE_FILE_MISSING"
+
+    def test_a_download_whose_size_cannot_be_checked_is_served_but_not_cached(
+        self, file_manager, tmp_path
+    ):
+        """If the metadata lookup fails there is no declared size: the body is returned, but not
+        cached, because a cached entry is trusted on every later read."""
+        from views_crafdapi.managers.appwrite.results import OperationResult
+
+        mgr = self._manager(file_manager, tmp_path, size_original=len(self.BODY))
+        mgr.get_file = Mock(return_value=OperationResult(success=False, error="blip"))
+        out = mgr.download_file("b", "f")
+        assert out.success and out.data["file_bytes"] == self.BODY
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.NOT_FOUND
+        save = tmp_path / "out.bin"
+        assert mgr.download_file("b", "f", save_path=str(save)).success
+        assert save.read_bytes() == self.BODY
+        assert mgr.cache_manager.validate_cache("b", "f") == CacheValidationResult.NOT_FOUND

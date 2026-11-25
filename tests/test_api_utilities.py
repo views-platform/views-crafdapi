@@ -3,60 +3,14 @@
 import numpy as np
 import pandas as pd
 import pytest
-from fastapi import HTTPException
 
 from views_crafdapi.managers.serialization import (
     convert_numpy_types,
     dataframe_to_dict,
     flatten_numeric_list_columns,
-    parse_list_param,
-    parse_string_list_param,
 )
 
 pytestmark = pytest.mark.layer2_data
-
-
-class TestParseListParam:
-
-    def test_valid_comma_separated(self):
-        assert parse_list_param("530,531,532") == [530, 531, 532]
-
-    def test_none_returns_none(self):
-        assert parse_list_param(None) is None
-
-    def test_empty_representations(self):
-        for empty in ("", "[]", "null", "None"):
-            assert parse_list_param(empty) is None
-
-    def test_single_value(self):
-        assert parse_list_param("530") == [530]
-
-    def test_whitespace_handling(self):
-        assert parse_list_param(" 530 , 531 ") == [530, 531]
-
-    def test_non_integer_raises_422(self):
-        with pytest.raises(HTTPException) as exc_info:
-            parse_list_param("abc")
-        assert exc_info.value.status_code == 422
-
-
-class TestParseStringListParam:
-
-    def test_valid_comma_separated(self):
-        assert parse_string_list_param("pred_sb,pred_ns") == ["pred_sb", "pred_ns"]
-
-    def test_none_returns_none(self):
-        assert parse_string_list_param(None) is None
-
-    def test_empty_representations(self):
-        for empty in ("", "[]", "null", "None"):
-            assert parse_string_list_param(empty) is None
-
-    def test_single_value(self):
-        assert parse_string_list_param("pred_sb") == ["pred_sb"]
-
-    def test_whitespace_handling(self):
-        assert parse_string_list_param(" pred_sb , pred_ns ") == ["pred_sb", "pred_ns"]
 
 
 class TestConvertNumpyTypes:

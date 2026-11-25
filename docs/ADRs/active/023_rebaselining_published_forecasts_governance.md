@@ -110,7 +110,7 @@ This ADR governs **changing the published numbers**. It does not govern *which a
 ## Validation & Monitoring
 
 - The gate is enforced at PR review for `development` → `main`. A re-baselining PR without the four artifacts is not merged.
-- When the methodology version is wired into `PredictionProvenance`, `GET /provenance/{category}` exposes it; a mismatch between the deployed version and the expected one is observable.
+- When the methodology version is wired into `PredictionProvenance`, `GET /provenance/{category}` exposes it; a mismatch between the deployed version and the expected one is observable. (2026-11-20: `/provenance` was removed, #207; no route exposes the version now. How partners learn of a change is open in the service specification, Open item 2.)
 
 ---
 

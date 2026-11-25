@@ -5,7 +5,13 @@ These tests prove the 'dead code' diagnosis is wrong. The shim is:
 1. Tested as expected behavior by existing test suites
 2. Documented as a contract guarantee in CICs
 3. Present in two independent classes/methods
-4. Referenced in api.py (not covered by the original test)
+4. Referenced by the serving layer (not covered by the original test)
+
+C-274 (2026-10-16): probe 4 used to read `managers/api.py` only; the reference moved to
+`managers/dataset_service.py` and the probe xpassed against an empty file. It now reads the
+whole `managers/` package. A fifth probe — "the ForecastDataset CIC should not promise
+`priogrid_gid` if the shim is dead code" — was removed: `_GridDataset.md` now documents the shim
+as permanent, which answers it, and under `strict=False` its xpass reported nothing.
 """
 import re
 from pathlib import Path
@@ -14,8 +20,9 @@ import pytest
 
 pytestmark = pytest.mark.xfail(
     strict=False,
-    reason="documents open priogrid concerns C-61..C-65 (register entries; the bare '#79' this once cited resolves to an unrelated issue in this repo and has been dropped)",
+    reason="documents open priogrid concerns C-61..C-65 (register entries)",
 )
+# The reason once cited a bare '#79'; in this repo that resolves to an unrelated issue (C-241).
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_ROOT = REPO_ROOT / "src"
@@ -24,16 +31,19 @@ DOCS_ROOT = REPO_ROOT / "docs"
 
 class TestP1_MigrationTestCoverageGap:
     """test_priogrid_gid_shim_removed only greps handlers.py, but
-    priogrid_gid also appears in managers/api.py."""
+    the serving layer also references priogrid_gid."""
 
-    def test_api_py_also_references_priogrid_gid(self):
-        """api.py:587 has priogrid_gid in the index exclusion set.
-        The migration test misses this file entirely."""
-        api_py = SRC_ROOT / "views_crafdapi" / "managers" / "api.py"
-        source = api_py.read_text()
-        refs = re.findall(r"priogrid_gid", source)
-        assert len(refs) == 0, (
-            f"managers/api.py has {len(refs)} priogrid_gid reference(s) "
+    def test_serving_layer_also_references_priogrid_gid(self):
+        """`managers/dataset_service.py` lists priogrid_gid in its index exclusion sets
+        (it moved there from api.py). The migration test misses this package entirely."""
+        managers = SRC_ROOT / "views_crafdapi" / "managers"
+        refs = {
+            str(f.relative_to(SRC_ROOT)): len(re.findall(r"priogrid_gid", f.read_text()))
+            for f in managers.rglob("*.py")
+        }
+        refs = {f: n for f, n in refs.items() if n}
+        assert not refs, (
+            f"managers/ references priogrid_gid ({refs}), "
             "not covered by test_priogrid_gid_shim_removed (which only checks handlers.py)"
         )
 
@@ -107,17 +117,4 @@ class TestP4_CICDocumentsShimAsContract:
         assert len(guarantees) == 0, (
             f"_GridDataset CIC mentions priogrid_gid {len(guarantees)} time(s) as a "
             "documented guarantee. Removing the shim violates the contract."
-        )
-
-    def test_fao_pgm_cic_does_not_guarantee_priogrid_gid(self):
-        """The ForecastDataset CIC should not document priogrid_gid acceptance
-        if it is truly dead code to be removed."""
-        cic = DOCS_ROOT / "CICs" / "ForecastDataset.md"
-        if not cic.exists():
-            pytest.skip("CIC not found")
-        content = cic.read_text()
-        guarantees = re.findall(r"priogrid_gid", content)
-        assert len(guarantees) == 0, (
-            f"ForecastDataset CIC mentions priogrid_gid {len(guarantees)} time(s) as "
-            "accepted input. Removing the shim violates the contract."
         )

@@ -6,12 +6,16 @@ and that failures in the check never block data serving.
 
 import time
 
-import pandas as pd
 import pytest
 from unittest.mock import MagicMock
 
 from views_crafdapi.managers.api import CrafdApiManager, StalenessResult
 from views_crafdapi.managers.prediction import PredictionFileMetadata, PredictionStoreManager
+from views_crafdapi.data.handlers import ForecastDataset
+from tests.conftest import make_fao_df
+
+# A real warm entry: every production writer sets `data` and `dataset` together (#156).
+_WARM = ForecastDataset(make_fao_df())
 
 pytestmark = pytest.mark.layer4_infra
 
@@ -110,10 +114,10 @@ class TestStalenessDoesNotBlockResponse:
         old_timestamp = time.time() - (48 * 3600)
         mgr._dataframe_cache[api_key_hash] = {
             "historical": {
-                "data": pd.DataFrame({"v": [1, 2, 3]}),
+                "data": _WARM.dataframe,
                 "file_id": "stale_file",
                 "timestamp": old_timestamp,
-                "dataset": None,
+                "dataset": _WARM,
             },
             "forecast": {"data": None, "file_id": None, "timestamp": None, "dataset": None},
         }
@@ -121,7 +125,7 @@ class TestStalenessDoesNotBlockResponse:
 
         result = mgr._get_latest_dataframe(MagicMock(), "test-key", "historical")
         assert result is not None
-        assert len(result) == 3
+        assert len(result) == len(_WARM.dataframe)
 
     def test_staleness_check_exception_does_not_crash_response(self, tmp_path):
         """Any exception in _check_staleness must be caught — CIC Sec 6 guarantees non-blocking."""
@@ -130,10 +134,10 @@ class TestStalenessDoesNotBlockResponse:
 
         mgr._dataframe_cache[api_key_hash] = {
             "historical": {
-                "data": pd.DataFrame({"v": [1, 2, 3]}),
+                "data": _WARM.dataframe,
                 "file_id": "file_1",
                 "timestamp": time.time() - 3600,
-                "dataset": None,
+                "dataset": _WARM,
             },
             "forecast": {"data": None, "file_id": None, "timestamp": None, "dataset": None},
         }
@@ -143,4 +147,4 @@ class TestStalenessDoesNotBlockResponse:
 
         result = mgr._get_latest_dataframe(MagicMock(), "test-key", "historical")
         assert result is not None
-        assert len(result) == 3
+        assert len(result) == len(_WARM.dataframe)

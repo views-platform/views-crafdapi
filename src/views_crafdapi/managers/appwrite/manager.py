@@ -6,13 +6,16 @@ from typing import List, Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime, timedelta
 import json
+import os
 import shutil
+import uuid
 import logging
 import hashlib
 
 from appwrite.client import Client
 from appwrite.services.storage import Storage
 from appwrite.services.databases import Databases
+from appwrite.services.tables_db import TablesDB
 from appwrite.services.users import Users
 from appwrite.input_file import InputFile
 from appwrite.id import ID
@@ -50,9 +53,10 @@ class AppWriteFileManager:
         self.storage = Storage(self.client)
         self.users = Users(self.client)
         self.databases = Databases(self.client)
+        self.tables = TablesDB(self.client)
 
         # Initialize managers
-        self.metadata_manager = MetadataManager(self.databases, config)
+        self.metadata_manager = MetadataManager(self.databases, config, self.tables)
         self.cache_manager = self._setup_cache()
 
     def _inject_timeout(self, timeout_seconds: int) -> None:
@@ -795,6 +799,21 @@ class AppWriteFileManager:
             # Download from remote
             file_bytes = self.storage.get_file_download(bucket_id, file_id)
 
+            # C-288 (#169): a body whose length differs from the store's declared size is a
+            # cut-off (or corrupted) download, not the file. Only bytes received as bytes can be
+            # compared: a deserialized manifest (below) is re-encoded and need not match.
+            received_as_bytes = isinstance(file_bytes, (bytes, bytearray))
+            declared_size = None
+            if received_as_bytes and file_metadata:
+                declared_size = file_metadata.get("sizeOriginal")
+                if declared_size is not None and len(file_bytes) != declared_size:
+                    return OperationResult(
+                        success=False,
+                        error=(f"Download failed: received {len(file_bytes)} bytes, the store "
+                               f"declares {declared_size} for {file_id}"),
+                        code="DOWNLOAD_INCOMPLETE",
+                    )
+
             # #287 follow-up: the Appwrite SDK auto-deserializes a JSON file (the run manifest)
             # to a dict — not bytes — so the cache write (and callers expecting bytes) blow up
             # with "a bytes-like object is required, not 'dict'". This is the FIRST download in
@@ -806,15 +825,49 @@ class AppWriteFileManager:
             elif isinstance(file_bytes, str):
                 file_bytes = file_bytes.encode("utf-8")
 
-            # Determine filename for caching
-            filename = file_metadata.get("name", file_id) if file_metadata else file_id
-            cache_path = self.cache_manager._get_cache_path(
-                bucket_id, file_id, filename
-            )
+            # Some downloads are served but not cached:
+            # - C-288: the size could not be checked (the metadata lookup failed), and a cached
+            #   entry is trusted on every later read;
+            # - #216: the ids are not usable as a cache file name, or the folder cannot be made.
+            cache_path = None
+            if received_as_bytes and declared_size is None:
+                reason = "file metadata unavailable, so its size cannot be checked"
+            else:
+                try:
+                    cache_path = self.cache_manager._get_cache_path(bucket_id, file_id)
+                    cache_path.parent.mkdir(exist_ok=True)
+                    reason = None
+                except (ValueError, OSError) as e:
+                    cache_path = None
+                    reason = f"no usable cache file ({e})"
+            if cache_path is None:
+                logger.warning("Serving %s/%s without caching it: %s", bucket_id, file_id, reason)
+                if save_path:
+                    Path(save_path).write_bytes(file_bytes)
+                    return OperationResult(
+                        success=True,
+                        data={"save_path": save_path, "from_cache": False},
+                        code="SAVED_FROM_REMOTE",
+                    )
+                return OperationResult(
+                    success=True,
+                    data={"file_bytes": file_bytes, "from_cache": False},
+                    code="RETURNED_FROM_REMOTE",
+                )
 
-            # Save to cache
-            with open(cache_path, "wb") as f:
-                f.write(file_bytes)
+            # Save to cache atomically (C-288, the pattern of `disk_cache._write_meta`): a kill
+            # mid-write leaves the previous file or none at the cache path, never a torn one that
+            # the next read would trust.
+            tmp = cache_path.with_name(f"{cache_path.name}.tmp-{uuid.uuid4().hex}")
+            try:
+                with open(tmp, "wb") as f:
+                    f.write(file_bytes)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, cache_path)
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
 
             self.cache_manager.add_to_cache(
                 bucket_id, file_id, cache_path, file_metadata
@@ -837,7 +890,7 @@ class AppWriteFileManager:
 
         except AppwriteException as e:
             return OperationResult(
-                success=False, error=f"Download failed: {e.message}", code=e.type
+                success=False, error=f"Download failed: {e.message}", code=e.type, status=e.code
             )
         except IOError as e:
             return OperationResult(
@@ -915,7 +968,7 @@ class AppWriteFileManager:
 
         except AppwriteException as e:
             return OperationResult(
-                success=False, error=f"Get file failed: {e.message}", code=e.type
+                success=False, error=f"Get file failed: {e.message}", code=e.type, status=e.code
             )
         except Exception as e:
             return OperationResult(
@@ -962,7 +1015,8 @@ class AppWriteFileManager:
 
         except AppwriteException as e:
             return OperationResult(
-                success=False, error=f"List buckets failed: {e.message}", code=e.type
+                success=False, error=f"List buckets failed: {e.message}", code=e.type,
+                status=e.code,
             )
         except Exception as e:
             return OperationResult(
@@ -1043,14 +1097,6 @@ class AppWriteFileManager:
             return OperationResult(success=True, data=_as_dict(user_prefs), code="API_KEY")
         except AppwriteException as e:
             return OperationResult(success=False, error=e.message, code=e.type)
-
-    def clear_cache(
-        self, bucket_id: str = None, older_than_hours: int = None
-    ) -> OperationResult:
-        return self.cache_manager.clear_cache(bucket_id, older_than_hours)
-
-    def get_cache_stats(self) -> Dict[str, Any]:
-        return self.cache_manager.get_stats()
 
     def debug_collection_attributes(
         self, collection_id: str = None, database_id: str = None

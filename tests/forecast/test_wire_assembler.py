@@ -57,8 +57,8 @@ def test_assembler_byte_identical_to_whole_run(with_nan_geo, tmp_path):
         assert np.array_equal(cand._sample_store[var], ref._sample_store[var], equal_nan=True), var
     assert cand.geo_metadata.equals(ref.geo_metadata)  # incl. NaN GAUL rows
     # The real contract: served HDI/MAP identical across cell-level + aggregate levels.
-    for kw in ({}, {"aggregate": True, "level": "country"}, {"aggregate": True, "level": "gaul2"}):
-        assert ref.calculate_hdi_map(**kw).equals(cand.calculate_hdi_map(**kw)), kw
+    for kw in ({}, {"aggregate": True, "level": "country"}, {"aggregate": True, "level": "gaul1"}):
+        assert ref.summarize(**kw).equals(cand.summarize(**kw)), kw
 
 
 def test_assembler_refuses_non_rectangular_run(tmp_path):
@@ -121,7 +121,7 @@ def test_assembler_column_order_tracks_whole_run_not_month_one(tmp_path):
     assert list(cand.targets) == ["pred_lr_ged_ns", "pred_lr_ged_sb"]  # the crafted global order
     for var in ref.targets:
         assert np.array_equal(cand._sample_store[var], ref._sample_store[var], equal_nan=True), var
-    assert ref.calculate_hdi_map().equals(cand.calculate_hdi_map())
+    assert ref.summarize().equals(cand.summarize())
 
 
 def test_staging_dir_unique_and_discardable(tmp_path):

@@ -54,7 +54,7 @@ Use this checklist when bootstrapping a new project from base_docs templates.
 
 ## Risk Register
 
-- [x] Technical risk register exists at `reports/technical_risk_register.md`
+- [x] Technical risk register exists at `reports/technical_risk_register.md` (local, untracked since 2026-11-22)
 - [x] ADR-010 governs the risk register
 
 ---

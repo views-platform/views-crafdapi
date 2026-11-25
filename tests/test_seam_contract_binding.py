@@ -11,6 +11,7 @@ environment plumbing (fetch the registry at the pinned tag via ``git show``; FAI
 CI, a silent skip there would re-open the invisible-delivery hole — ADR-016 §6).
 """
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -124,7 +125,7 @@ def test_the_config_carries_the_path_manager_so_the_name_filter_actually_applies
 
     env = {
         "APPWRITE_ENDPOINT": "https://example.invalid/v1",
-        "APPWRITE_DATASTORE_PROJECT_ID": "proj",
+        "APPWRITE_CRAFD_PROJECT_ID": "proj",
         "APPWRITE_CRAFD_BUCKET_ID": "bucket",
         "APPWRITE_CRAFD_BUCKET_NAME": "bucket-name",
         "APPWRITE_CRAFD_COLLECTION_ID": "coll",
@@ -148,3 +149,73 @@ def test_the_config_carries_the_path_manager_so_the_name_filter_actually_applies
         "query runs unscoped across the collection"
     )
     assert config.path_manager.model_name == CONSUMER_DOCUMENT_NAME
+
+
+def test_the_pinned_edition_is_at_least_the_floor():
+    """ADR-044 serves every partner one loaded copy, which the storage contract allows only from
+    appwrite-seam-v1.9.0 (§5.8, "uniform entitlement"). A lower pin passes the binding above,
+    because the UNCRAFD row exists from v1.5.2, so the floor is checked on its own. The floor is
+    written here, not read from the code it checks, so one edit cannot lower both."""
+    import tomllib
+
+    version = tomllib.loads(_pinned_registry_text())["meta"]["version"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version), f"registry version {version!r} is not X.Y.Z"
+    assert tuple(int(p) for p in version.split(".")) >= (1, 9, 0), (
+        f"REGISTRY_PIN_TAG {REGISTRY_PIN_TAG} is registry edition {version}, below 1.9.0. "
+        "ADR-044 needs the uniform-entitlement mode of contract §5.8, first in v1.9.0."
+    )
+
+
+def test_the_pin_is_a_published_tag_not_a_branch():
+    """A branch moves; the contract is referenced only at a published tag."""
+    assert re.fullmatch(r"appwrite-seam-v\d+\.\d+\.\d+", REGISTRY_PIN_TAG), REGISTRY_PIN_TAG
+
+
+def test_the_bound_name_and_row_are_crafds():
+    """Both sides of the binding come from production code, so a swap of both (say to FAO's row
+    and name) would still agree. The values themselves are pinned here."""
+    assert (CONSUMER_DOCUMENT_NAME, REGISTRY_CONTRACT_KEY) == ("un_crafd", "UNCRAFD_CONSUMER_DOCUMENT_NAME")
+
+
+def test_the_readme_links_the_contract_at_the_pinned_tag_and_no_other():
+    """The README's contract link and the CI pin are one tag; they drifted apart before (C-250)."""
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    url = (f"https://github.com/views-platform/views-appwrite/blob/{REGISTRY_PIN_TAG}/"
+           "docs/ADRs/platform/appwrite_seam_contract.md")
+    assert url in readme
+    linked_refs = set(re.findall(r"views-appwrite/blob/([^/\s]+)/", readme))
+    assert linked_refs == {REGISTRY_PIN_TAG}, f"README links views-appwrite at {linked_refs}, never main or an old tag"
+
+
+def test_the_runbook_copies_the_registry_at_the_pinned_tag():
+    """The server's coordinates come from the registry the runbook copies; it must be the edition
+    CI binds, not the operator's checkout."""
+    runbook = (Path(__file__).resolve().parents[1] / "deployment" / "RELEASE_RUNBOOK.md").read_text()
+    shown = set(re.findall(r"git -C \.\./views-appwrite show ([^:\s]+):docs/ADRs/platform/coordinate_registry\.toml", runbook))
+    assert shown == {REGISTRY_PIN_TAG}, shown
+
+
+def test_the_metadata_query_sent_to_the_store_is_filtered_on_the_served_name():
+    """The binding is worthless if the query sent to the store does not carry the name."""
+    from unittest.mock import MagicMock
+
+    from views_crafdapi.managers.prediction.manager import PredictionStoreManager
+
+    # Built around its constructor and two name-mangled attributes: there is no lighter way in
+    # that still sends the real query, so a rename of those attributes breaks this test on purpose.
+    pm = PredictionStoreManager.__new__(PredictionStoreManager)
+    pm._require_consumer_name = lambda: CONSUMER_DOCUMENT_NAME
+    store = MagicMock()
+    store.metadata_manager.search_files_by_metadata.return_value.to_dict.return_value = {
+        "success": True, "data": {"documents": []}}
+    pm._PredictionStoreManager__appwrite_file_manager = store
+    pm._PredictionStoreManager__appwrite_file_manager_config = MagicMock()
+    pm.get_predictions_by_metadata(filters={"category": "historical"})
+    sent = store.metadata_manager.search_files_by_metadata.call_args.kwargs["filters"]
+    assert sent["name"] == CONSUMER_DOCUMENT_NAME, sent
+
+
+def test_production_builds_its_paths_from_the_served_name():
+    from views_crafdapi.managers.api import _service_paths
+
+    assert _service_paths().model_name == CONSUMER_DOCUMENT_NAME

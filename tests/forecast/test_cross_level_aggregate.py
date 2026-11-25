@@ -20,8 +20,8 @@ pytestmark = pytest.mark.layer2_data
 
 # ── geography ───────────────────────────────────────────────────────────────────
 def test_levels_vocabulary():
-    assert LEVELS["country"] == "country_iso_a3"
-    assert LEVELS["gaul0"] == "admin1_gaul0_code"
+    # The specification's levels above the grid cell: country and admin 1, nothing else.
+    assert LEVELS == {"country": "admin1_gaul0_code", "gaul1": "admin1_gaul1_code"}
 
 
 def test_build_mapping_integer_level_passes_codes_through():

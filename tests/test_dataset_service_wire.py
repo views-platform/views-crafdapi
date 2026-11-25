@@ -128,6 +128,25 @@ def test_forecast_no_manifest_fails_visible_but_historical_still_legacy():
     mgr.get_latest_provenance.assert_called_once()
 
 
+def test_a_history_downloaded_directly_carries_its_store_file_id():
+    """The bulk files are named by the store's file id of the history (#203). A history loaded
+    without it would get a file built for every request, never kept."""
+    df = make_fao_df()
+    buf = io.BytesIO()
+    df.to_parquet(buf)
+    svc = _service()
+    mgr = MagicMock()
+    prov = MagicMock(file_id="legacy_1", source="datafactory", methodology_version="v1",
+                     file_hash="h", created_at="2026", filename="legacy.parquet")
+    prov.to_dict.return_value = {"file_id": "legacy_1", "source": "datafactory"}
+    mgr.get_latest_provenance.return_value = prov
+    mgr.get_latest_file_id.return_value = "legacy_1"
+    mgr.download_prediction.return_value = MagicMock(success=True, data={"file_bytes": buf.getvalue()})
+    assert svc.get_latest_dataset(mgr, "key", "historical").source_file_id == "legacy_1"
+    # The warm path hands out a copy of the same loaded dataset, and keeps the id.
+    assert svc.get_latest_dataset(mgr, "key", "historical").source_file_id == "legacy_1"
+
+
 def _legacy_manager_with_manifest(run, *, manifest_bytes=None):
     """A manager that returns a manifest whose run cannot be served (e.g. a malformed/corrupt
     manifest) AND has a working legacy path — to prove fail-safe fallback."""
@@ -239,6 +258,33 @@ def test_bad_shard_hash_fails_visible_not_legacy():
     mgr.get_latest_provenance.assert_not_called()
 
 
+@pytest.mark.parametrize("drop", ["shard", "sidecar"])
+def test_a_missing_hash_fails_visible_like_a_wrong_one(drop):
+    """C-234: a manifest that pins no sha256 for an artifact verifies nothing, so the run is
+    Refused → 503 like a mismatched hash, never served unverified. It is refused from the manifest
+    alone, before any shard or sidecar is fetched."""
+    run = make_wire_run()
+    manifest = dict(run.manifest)
+    if drop == "shard":
+        shard = dict(manifest["shards"][0])
+        shard.pop("sha256")
+        manifest["shards"] = [shard]
+    else:
+        sidecar = dict(manifest["sidecar"])
+        sidecar.pop("sha256")
+        manifest["sidecar"] = sidecar
+    mgr, _ = _legacy_manager_with_manifest(run, manifest_bytes=json.dumps(manifest).encode())
+    svc = _service()
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataframe(mgr, "key", "forecast")
+    assert e.value.status_code == 503
+    assert svc.forecast_serving_state()["reason"] == "manifest_unhashed"
+    fetched = [c.args[0] for c in mgr.download_prediction.call_args_list]
+    assert fetched == ["mani_1"], "only the manifest may be fetched before the refusal"
+    mgr.resolve_artifact_file_ids.assert_not_called()
+    mgr.get_latest_provenance.assert_not_called()
+
+
 def test_incomplete_run_fails_visible_not_legacy():
     """§5.2: a run whose shard has fewer cells than the manifest declares → Refused → 503, not legacy."""
     run = make_wire_run()
@@ -288,6 +334,11 @@ def test_historical_never_takes_the_wire_path():
 
 # --- S5 (#207): cache re-key on the run-manifest fileId -----------------------------------------
 
+def _recent(days_ago: float = 1.0) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+
+
 def _rekey_manager(runs_by_fileid, *, with_legacy=False):
     """A store manager that serves whichever manifest ``state['current']`` names — a fileId key
     of ``runs_by_fileid`` (a `MultiShardRun`), ``None`` (no manifest), or the string ``"RAISE"``
@@ -295,17 +346,23 @@ def _rekey_manager(runs_by_fileid, *, with_legacy=False):
     run, a quarantine-to-nothing, or an Appwrite blip. Optionally also serves a legacy fallback."""
     from tests.conftest import make_fao_df
 
-    state = {"current": None}
+    state = {"current": None, "created_at": _recent()}
     mgr = MagicMock()
 
     def latest_manifest():
         cur = state["current"]
         if cur == "RAISE":
-            raise RuntimeError("appwrite blip")
+            # What an Appwrite outage actually raises since #158 — not a bare RuntimeError, which
+            # since #160 is a bug or a deployment error and is no longer served around.
+            from views_crafdapi.managers.prediction import MetadataLookupError
+            raise MetadataLookupError("appwrite blip", status=503)
         if cur is None:
             return None
         run = runs_by_fileid[cur]
-        return dict(run.manifest_doc, fileId=cur)  # patch the fileId to this run's identity
+        # Patch the fileId to this run's identity. `$createdAt` is an Appwrite system attribute
+        # every real document carries; it is what bounds an unverified serve by the SLA (#158).
+        stamp = {"$createdAt": state["created_at"]} if state["created_at"] else {}
+        return dict(run.manifest_doc, fileId=cur, **stamp)
 
     mgr.get_latest_manifest.side_effect = latest_manifest
 
@@ -418,6 +475,7 @@ def test_zero_manifest_forecast_fails_visible_not_legacy():
 
     run_a = make_multi_shard_run(run_id="run_a")
     mgr, state, _ = _rekey_manager({"mani_a": run_a}, with_legacy=True)
+    state["created_at"] = None  # no datable last-good: the premise of this test
     svc = _service()
 
     state["current"] = "mani_a"
@@ -612,6 +670,7 @@ def test_disk_wire_entry_manifest_vanishes_fails_visible_not_legacy(tmp_path):
 
     run_a = make_multi_shard_run(run_id="run_a")
     mgr, state, _ = _rekey_manager({"mani_a": run_a}, with_legacy=True)
+    state["created_at"] = None  # no datable last-good: the premise of this test
     svc = _service_real_disk(tmp_path)
 
     state["current"] = "mani_a"
@@ -787,3 +846,97 @@ def test_an_unidentifiable_run_does_not_destroy_the_last_good_entry(tmp_path):
         f"the refused run replaced the last-good entry (disk holds "
         f"{still['provenance']['run_id']!r})"
     )
+
+
+# --- C-233 (#158): a manifest-lookup outage is served from cache, flagged degraded ----------------
+
+def test_metadata_outage_on_warm_worker_serves_warm_flagged_degraded():
+    """With the outage now reaching the blip path (it used to be coerced into "no manifest"), the
+    warm run is served — but /health must say so: the cache could not be checked against the
+    store, so the run being served is unverified, not healthy."""
+    from tests.forecast._wire_fixtures import make_multi_shard_run
+
+    run_a = make_multi_shard_run(run_id="run_a")
+    mgr, state, _ = _rekey_manager({"mani_a": run_a})
+    svc = _service()
+    state["current"] = "mani_a"
+    svc.get_latest_dataframe(mgr, "key", "forecast")
+    assert svc.forecast_serving_state() == {"degraded": False}
+
+    state["current"] = "RAISE"
+    svc.get_latest_dataframe(mgr, "key", "forecast")
+    st = svc.forecast_serving_state()
+    assert st["degraded"] is True and st["reason"] == "manifest_lookup_error"
+    assert st["serving"] == "cached_unverified"
+
+
+def test_metadata_outage_on_cold_worker_serves_disk_flagged_degraded(tmp_path):
+    """The same on a cold worker: the disk entry is served, and flagged."""
+    from tests.forecast._wire_fixtures import make_multi_shard_run
+
+    run_a = make_multi_shard_run(run_id="run_a")
+    mgr, state, _ = _rekey_manager({"mani_a": run_a})
+    state["current"] = "mani_a"
+    _service(cache_dir=tmp_path).get_latest_dataframe(mgr, "key", "forecast")
+
+    state["current"] = "RAISE"
+    cold = _service(cache_dir=tmp_path)
+    cold.get_latest_dataframe(mgr, "key", "forecast")
+    st = cold.forecast_serving_state()
+    assert st["degraded"] is True and st["reason"] == "manifest_lookup_error"
+
+
+@pytest.mark.parametrize("gate", ["quarantined", "past_sla"])
+def test_an_unverified_cached_serve_honours_the_operator_and_the_sla(monkeypatch, gate):
+    """#158 review: during a manifest-lookup outage the cached run is served unverified — but with
+    the same two bounds the last-good fallback has. The operator's quarantine list is local (an
+    env var) and needs no store to read, and a run past the freshness SLA is never served on a
+    fallback. Either way: refuse, and fail visible."""
+    from fastapi import HTTPException
+    from tests.forecast._wire_fixtures import make_multi_shard_run
+    from views_crafdapi.managers.prediction import quarantine
+
+    run_a = make_multi_shard_run(run_id="run_a")
+    mgr, state, _ = _rekey_manager({"mani_a": run_a})
+    if gate == "past_sla":
+        state["created_at"] = _recent(days_ago=200)
+    svc = _service()
+    state["current"] = "mani_a"
+    svc.get_latest_dataframe(mgr, "key", "forecast")          # warm, verified
+
+    if gate == "quarantined":
+        monkeypatch.setenv(quarantine.QUARANTINED_FILE_IDS_ENV, "mani_a")
+    state["current"] = "RAISE"
+    with pytest.raises(HTTPException) as e:
+        svc.get_latest_dataframe(mgr, "key", "forecast")
+    assert e.value.status_code == 503
+
+
+def test_a_configuration_error_is_not_served_around_as_a_lookup_blip():
+    """#160 review: only a store failure is a blip. A missing collection config raises
+    RuntimeError ("a deployment error, not an outage", #158); serving the cache as
+    `cached_unverified` would send the operator looking for an unreachable store."""
+    from tests.forecast._wire_fixtures import make_multi_shard_run
+
+    run_a = make_multi_shard_run(run_id="run_a")
+    mgr, state, _ = _rekey_manager({"mani_a": run_a})
+    svc = _service()
+    state["current"] = "mani_a"
+    svc.get_latest_dataframe(mgr, "key", "forecast")                  # warm
+
+    mgr.get_latest_manifest.side_effect = RuntimeError("metadata collection is not configured")
+    with pytest.raises(RuntimeError):
+        svc.get_latest_dataframe(mgr, "key", "forecast")
+    assert (svc.forecast_serving_state() or {}).get("serving") != "cached_unverified"
+
+
+def test_a_download_logs_its_size(caplog):
+    """With the server key, this line is what proves the key may read files (files.read)."""
+    import logging
+
+    svc = _service()
+    mgr = MagicMock()
+    mgr.download_prediction.return_value = MagicMock(success=True, data={"file_bytes": b"x" * 42})
+    with caplog.at_level(logging.INFO, logger="views_crafdapi.managers.dataset_service"):
+        svc._download_file_bytes(mgr, "file_9", 0.0)
+    assert "downloaded file_9: 42 bytes" in caplog.text

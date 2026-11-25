@@ -1,6 +1,6 @@
 # ADR-033: Fail-Visible Forecast Selection and Serving
 
-**Status:** Active (ratified 2026-07-28, S7/#252 — against the shipped S1–S6 behaviour)
+**Status:** Active (ratified 2026-07-28, S7/#252 — against the shipped S1–S6 behaviour); amended 2026-10-16 — §6a, the composed degraded-serving policy (epic #154); amended 2026-10-17 — §6a rule 8, integrity hashes are mandatory (#166); amended 2026-11-20 — §5, `GET /provenance/forecast` removed (#207, service specification). `/health` still reports the freshness verdict, the serving state with its refusal reason, and the build that wrote the served forecast. No route reports the served run's id any more.
 **Deciders:** Simon (maintainer)
 **Records:** the decisions of Epic #244, from the 2026-07-27 expert-code-review of the run-0 non-serving incident (#243).
 
@@ -54,20 +54,53 @@ A configurable freshness threshold on the served artifact's age. Past it, `/heal
 When no current forecast is servable (nothing promoted per §2/§3, or the last-good is past the freshness SLA), the data endpoints return **HTTP 200 with an explicit `stale`/`unavailable` flag + machine-readable freshness metadata**, with `/health` red and an alarm; a **hard error (503)** is reserved for "no prior forecast at all." **This depends on FAO's consumption pattern and is surfaced to FAO as a decision point in Pre-Release Note 07;** it is locked on their reply. Touches the API surface — see ADR-026 amendment.
 
 **Observability surface — delivered (S3/S4/S7).** The single decision (Rationale §"one decision, many surfaces") is exposed on two endpoints, independent of the still-pending §5 *data-endpoint* HTTP-status choice:
-- **`GET /provenance/forecast`** reports the full **served** decision: `{artifact_id, mode ("wire"/"legacy"), status (producer-declared maturity), freshness (verdict vs the SLA), serving_state, refusal_reason?}`. It is sourced from the run actually being served (`DatasetService.served_forecast_provenance()` / `forecast_serving_state()`), which is authoritative — it may differ from the store's newest record; `refusal_reason` appears only while a bounded grace fallback (§6) is active.
+- ~~**`GET /provenance/forecast`**~~ (removed 2026-11-20, #207) reported the full **served** decision: `{artifact_id, mode ("wire"/"legacy"), status (producer-declared maturity), freshness (verdict vs the SLA), serving_state, refusal_reason?}`. It is sourced from the run actually being served (`DatasetService.served_forecast_provenance()` / `forecast_serving_state()`), which is authoritative — it may differ from the store's newest record; `refusal_reason` appears only while a bounded grace fallback (§6) is active.
 - **`/health`** is `status:"degraded"` (HTTP 200 — *service* up, *data* not) when either the served forecast is past the freshness SLA (§4) **or** a grace fallback is active (§6, the newest run was refused); a WARNING is logged. `status:"degraded"` is the external monitor's page condition (ADR-032 §2a). HTTP 503 on `/health` remains reserved for Appwrite being unreachable (a genuine service outage). `GET /version` carries `served_contract_version` (§7).
+  > **Amendment, 2026-11-22 (#248):** `/health` also degrades when the forecast's age cannot be measured and when the store probe fails other than with a refused key (including an unreachable store, while the key's check is remembered; otherwise the key check answers 503 `Metadata store unavailable`). The full list is in `deployment/MONITORING.md` section 4.
 
 ### 6. Bounded, alarmed fallback (settles D-24)
 
 Fallback to the last-good forecast is permitted **only within the freshness SLA and loudly** (health degraded + alarm); past the SLA it fails visible. This keeps the anti-500 goal (no fleet-wide 500 during a producer upload window) without unbounded silent fallback.
 
-**Delivered (S4/#249).** When the newest run is `Refused` (§2), `DatasetService._serve_last_good_within_sla` reads the last-good **manifested** run persisted on disk (a failed ingest discards only its staging dir, §4.6, so the prior value-dir is intact) and serves it **only if** its `created_at` (from the manifest `$createdAt`, uploaded last per vpp ADR-013 §11.4) is positively within the freshness SLA — stale *or* unknown-age ⇒ fail visible (503). It never falls back to the legacy artifact (that was C-170). The fallback does **not** repopulate the warm cache, so every request re-evaluates the newest run (decision (i)) and recovery is immediate. A degraded serving-state (`{degraded, reason, fallback_available, file_id, age_days, sla_days}`) is surfaced on `/health` (flips `status:"degraded"`) and `/provenance` (`serving_state`), and a WARNING is logged — the alarm. The flag clears on the next normal serve (warm hit, disk hit, wire `Served`, or transition-mode legacy).
+**Delivered (S4/#249).** When the newest run is `Refused` (§2), `DatasetService._serve_last_good_within_sla` reads the last-good **manifested** run persisted on disk (a failed ingest discards only its staging dir, §4.6, so the prior value-dir is intact) and serves it **only if** its `created_at` (from the manifest `$createdAt`, uploaded last per vpp ADR-013 §11.4) is positively within the freshness SLA — stale *or* unknown-age ⇒ fail visible (503). It never falls back to the legacy artifact (that was C-170). The fallback does **not** repopulate the warm cache, so every request re-evaluates the newest run (decision (i)) and recovery is immediate. A degraded serving-state (`{degraded, reason, fallback_available, file_id, age_days, sla_days}`) is surfaced on `/health` (flips `status:"degraded"`) and `/provenance` (`serving_state`), and a WARNING is logged — the alarm. The flag clears on the next normal serve (warm hit, disk hit, or wire `Served`; the transition-mode legacy serve was retired in S1/#264).
+
+### 6a. The composed policy (amended 2026-10-16, epic #154)
+
+§2–§6 each decided one path. What a request actually receives is their composition, and until epic #154 that composition was written down nowhere. The code comments described a lookup-blip policy that could not run (a failed metadata search returned an empty list, so an outage read as "no manifest"), the fallback crashed on a freshly restarted worker, and its bound was the disk-cache TTL rather than the SLA. This section states the composition once. Every `reason` the code can emit is listed here; a new one is an amendment to this section.
+
+**The five outcomes of a forecast request.**
+
+| Outcome | When | HTTP | `/health` | `serving_state` |
+|---|---|---|---|---|
+| **Served** | the cached or freshly ingested run matches the current manifest | 200 | healthy (unless past the SLA, §4) | `{degraded: false}` |
+| **Served, unverified** | the manifest lookup failed; the cached run is not withdrawn by the operator and is within the SLA | 200 | degraded — unless `/health`'s own store probe succeeds again, when the flag describes a past response | `serving: "cached_unverified"`, `reason: "manifest_lookup_error"` |
+| **Served, last good** (§6) | the newest run is `Refused`, or there is no manifest (`NoRun`); the last-good manifested run is not withdrawn by the operator and is within the SLA | 200 | degraded | `serving: "last_good_manifested"`, `reason: <the refusal>` |
+| **Refused, unavailable** | nothing above applies, or the metadata store could not be asked and nothing is servable | 503 | degraded | `fallback_available: false` |
+| **Refused, not authorised** | the store refused a lookup or download for this key (401/403) | 401 | 401 | — (nothing is served) |
+
+**The reasons.** `no_manifest` (no manifested run exists, or every manifest is quarantined); `manifest_lookup_error` (the manifest lookup failed — an outage, not an absence); `artifact_lookup_error` (the shard/sidecar lookup failed); `ingest_failed` (an integrity, capacity, parse or download failure while assembling the run); `schema_capability_mismatch` (§7); `manifest_unhashed` (the manifest pins no `sha256` for a shard or the sidecar, rule 8); `unidentifiable` (§3); `manifest_malformed` (the manifest document has no file id). `refusal_reason` on `/provenance` appears only when something was refused — never for `cached_unverified`.
+
+**The rules the table rests on.**
+
+1. **A lookup error is never "no run".** A failed metadata search raises `MetadataLookupError` (carrying the HTTP status); only a search that succeeded and matched nothing is an absence (C-233).
+2. **An authorisation failure is never served around.** A 401/403 from a metadata lookup or an artifact download ends the request with 401 at every handler, before any cache tier or the fallback (C-268; ADR-027 §4). Key validation answers 401 only for 401/403 and 503 for everything else.
+3. **Both degraded serves have the same two bounds:** the run is not withdrawn by the operator (the C-71 quarantine blocklist and approval allowlist — environment variables, readable without the store) and is positively within the freshness SLA (unknown age counts as no).
+4. **The SLA bounds the fallback; the disk TTL does not.** An expired disk entry is a miss that stays on disk, and the fallback reads it with the TTL waived (C-360; ADR-011 amended). A crashed cache write can only produce a miss, never one run under another's identity (C-361).
+5. **The route returns the run selection chose.** `get_latest_dataset` returns the dataset selected on this request; nothing re-reads the warm cache afterwards. The fallback still never fills the warm cache — decision (i) stands (C-356).
+6. **No response carries the store's own error text** (C-264) — including `/health`, whose freshness error and 503 are generic.
+7. **Only a store failure is a lookup blip.** A configuration error or a bug in a lookup is not served around as `cached_unverified`; it surfaces.
+8. **Integrity hashes are mandatory** (amended 2026-10-17, #166, C-234). A manifest that pins no `sha256` for a shard or the sidecar verifies nothing, so its run is `Refused("manifest_unhashed")` from the manifest alone, before anything is fetched, and the request takes the same path as any other refusal (last good, or 503). A pinned hash that does not match is `ingest_failed`, as before. Preflight agrees: an unhashed artifact fails its content-hash gate. The unstamped `contract_version` pass (§7) is a different rule and is unchanged.
+
+**What this does not cover.** A key whose storage scope alone is narrowed keeps getting what its cache holds; ~~`/files/*/cached` still answers a revoked key~~ (closed 2026-11-11: route removed, C-269); the in-memory artifact-bytes cache is shared across keys (ADR-027 §4, register C-268, C-269). `/historical` follows rules 1, 2 and 6 but has no manifest, so it has no unverified or last-good serve.
+
+**Supersedes in §5:** "HTTP 503 on `/health` remains reserved for Appwrite being unreachable" — `/health` also answers **401** for a key the store refuses. And `mode` on `/provenance/forecast` is never `"legacy"`: it is `"wire"`, or `null` on a worker that has not served a forecast yet (the record then comes from the store). The legacy forecast path was retired in S1/#264.
 
 ### 7. Deploy/serve capability gate (D4)
 
 The run manifest **declares the contract/schema version it requires** (extending the existing `contract_version`); the consumer `Refused(schema_capability_mismatch)`s a run it can only render in a degraded/old schema rather than serving it degraded, and a startup/deploy assertion surfaces the built served-schema capability at `/version`. *(Recorded as the maintainer's recommendation for momentum; mechanical; cross-repo via vpp ADR-013.)*
 
 **Delivered (S5/#250).** `forecast/contract.py` is the single source of the build's capability (`SERVED_CONTRACT_VERSION = "1.5"`) and the compatibility rule (`can_render_contract`): a stamped `contract_version` renders iff it shares the served MAJOR and its MINOR ≤ served MINOR; a newer minor / different major / unparseable version is refused. `_load_wire_run` applies the gate **right after parsing the manifest — before any shard fetch** — so an unrenderable run is `Refused("schema_capability_mismatch")` cheaply (→ 503 / S4 grace, never a degraded serve). `GET /version` exposes `served_contract_version` so deploy↔delivered skew is remotely diagnosable. **Transition-safe:** an *unstamped* (empty) version is surfaced-not-gated (the producer does not yet stamp it everywhere — cross-repo vpp ADR-013 / views-postprocessing#133); tighten to fail-closed once stamping is guaranteed.
+
 
 ### 8. The manifest-declared-metadata contract (cross-repo)
 

@@ -1,28 +1,21 @@
 #!/usr/bin/env bash
-# One-time server bootstrap for the production deployment model (epic #184, S3).
-# Pattern: views-datafactory's Hetzner setup, adapted for an always-on API.
+# Sets up a new server for crafdapi, once. The steps around it (the domain, nginx, the
+# certificate, starting the service) are in deployment/RELEASE_RUNBOOK.md, section 4.
 #
-# Run in THREE parts, in order, from an admin (sudo-capable) account on the box.
-# Part 2 PAUSES for one browser step (registering the deploy key on GitHub).
-# This script only PREPARES — the actual traffic cutover is a separate, explicit
-# runbook step (deployment/RELEASE_RUNBOOK.md), with the old unit kept as rollback.
-#
-# Usage:
-#   bash bootstrap.sh part1     # create the service account + deploy key
-#   bash bootstrap.sh part2     # (after GitHub step) clone, build env, credentials
-#   bash bootstrap.sh part3     # install the systemd unit (does NOT switch traffic)
+# Run the three parts in order, from your own sudo account on the server:
+#   bash bootstrap.sh part1     # create the service account and its GitHub deploy key
+#   bash bootstrap.sh part2     # (after adding the key on GitHub) get the code, build, write the settings file
+#   bash bootstrap.sh part3     # install the systemd service (does not start it)
 set -euo pipefail
 
 SVC_USER="views-crafdapi-deploy"
 SVC_HOME="/home/${SVC_USER}"
 REPO_SSH="git@github.com:views-platform/views-crafdapi.git"
 REPO_DIR="${SVC_HOME}/views-crafdapi"
-# þing-01 #275 / PLATFORM-001 D2: coordinates come from the OWNED, versioned registry
-# (read, never copied), the key from an operator-provided secret slot. The retired copy-chain
-# origin — a personal laptop dotenv grepped for credentials — is gone. Override the registry
-# path with APPWRITE_REGISTRY if the pinned checkout lives elsewhere on the box.
-APPWRITE_REGISTRY="${APPWRITE_REGISTRY:-${SVC_HOME}/views-appwrite/docs/ADRs/platform/coordinate_registry.toml}"
-RELEASE_TAG="${RELEASE_TAG:-v0.1.0}"
+# The Appwrite coordinates (project, bucket, table ids) are read from the views-appwrite
+# registry, copied to /tmp first (RELEASE_RUNBOOK.md, section 4). Set APPWRITE_REGISTRY if it is elsewhere.
+APPWRITE_REGISTRY="${APPWRITE_REGISTRY:-/tmp/coordinate_registry.toml}"
+RELEASE_TAG="${RELEASE_TAG:-}"  # required by part2, e.g. RELEASE_TAG=v0.7.0
 
 part1() {
     echo "== Part 1: service account + deploy key =="
@@ -52,7 +45,16 @@ part1() {
 }
 
 part2() {
-    echo "== Part 2: clone, toolchain, environment, credentials =="
+    echo "== Part 2: clone, toolchain, environment, settings =="
+    [ -n "${RELEASE_TAG}" ] || { echo "FATAL: say which version to install, e.g. RELEASE_TAG=v0.7.0 bash bootstrap.sh part2" >&2; exit 1; }
+    # Settings: the coordinates are read from the registry. No key goes into this file: the
+    # service's own read key has its own file (`serverkey` below, ADR-044), and partner keys are
+    # only checked, never stored (#263: the shared project's reader key is gone).
+    [ -f "${APPWRITE_REGISTRY}" ] || {
+        echo "FATAL: the views-appwrite registry was not found at ${APPWRITE_REGISTRY}" >&2
+        echo "  Put a copy of coordinate_registry.toml on the server and set APPWRITE_REGISTRY to it." >&2
+        exit 1
+    }
     sudo -u "$SVC_USER" bash -c "
         set -euo pipefail
         if [ ! -d '${REPO_DIR}/.git' ]; then
@@ -60,7 +62,7 @@ part2() {
         fi
         cd '${REPO_DIR}'
         git fetch --tags --quiet origin
-        # uv (same toolchain as views-datafactory)
+        # uv, the Python package manager
         if ! command -v uv >/dev/null && [ ! -x \"\$HOME/.local/bin/uv\" ]; then
             curl -LsSf https://astral.sh/uv/install.sh | sh
         fi
@@ -68,100 +70,75 @@ part2() {
         echo '${RELEASE_TAG}' > \"\$HOME/.views-crafdapi-deploy-tag\"
         bash scripts/checkout-deploy-tag.sh
     "
-    # Credentials (þing-01 #275 / PLATFORM-001 D2): coordinates are READ from the owned registry
-    # (never copied from anyone's .env — the retired copy-chain); the ONE secret comes from an
-    # OPERATOR-PROVIDED environment slot, never from a .env, never echoed to a log.
-    : "${APPWRITE_DATASTORE_API_KEY:?FATAL #275: the operator must provide APPWRITE_DATASTORE_API_KEY in the environment (secret slot, PLATFORM-001 §5) — it is NEVER sourced from a .env}"
-    [ -f "${APPWRITE_REGISTRY}" ] || {
-        echo "FATAL #275: coordinate registry not found at ${APPWRITE_REGISTRY}"
-        echo "  PLATFORM-001 A3 must be present first (migration order: registry lands -> re-point)."
-        echo "  Set APPWRITE_REGISTRY to a pinned views-appwrite checkout of coordinate_registry.toml,"
-        echo "  or (ADR-035 Decision 2) a copy of the versioned registry file placed on the box."
-        exit 1
-    }
-    # Record WHICH registry version built this box (crafdapi#34 finding 4 / ADR-035): a copied
-    # registry file is otherwise indistinguishable from a stale one, and the contract has moved
-    # several versions in days. Read [meta].version with the venv's tomllib — never grep, a
-    # commented key looks identical to a live one (register C-57). Stamped into the env below so
-    # "which registry built this box?" is grep-able, not folkloric.
-    #
-    # The venv lives in ${SVC_USER}'s 0750 home, which this admin account cannot traverse — so the
-    # two Python invocations run AS ${SVC_USER} (`sudo -u`), the venv's owner. The registry copy in
-    # /tmp is world-readable, so ${SVC_USER} can read it. (This is the bug crafdapi's first real run
-    # of the registry bootstrap surfaced: faoapi never hit it because its env was hand-built.)
+    # Record which registry version built this server, so it can be looked up later. The Python
+    # runs as the service account, because only it can read the venv in its home.
     _reg_version="$(sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" - "${APPWRITE_REGISTRY}" <<'PY' 2>/dev/null || echo unknown
 import sys, tomllib
 with open(sys.argv[1], "rb") as fh:
     print(tomllib.load(fh).get("meta", {}).get("version", "unknown"))
 PY
 )"
-    echo "building ${SVC_HOME}/.env.crafdapi: coordinates from ${APPWRITE_REGISTRY} (registry version ${_reg_version}), secret from operator slot"
-    # Emit the registry-version stamp, then the non-secret coordinates (emitted AS ${SVC_USER} —
-    # see above), then append the operator secret. The pipe to `sudo tee >/dev/null` writes the file
-    # root-owned WITHOUT echoing the key value to the terminal.
-    # Build into a private temp file and MOVE it into place only once the content is known
-    # good. Writing `sudo tee` straight at the live path truncated it BEFORE knowing whether
-    # registry_to_env.py would succeed: under `set -euo pipefail` a registry the service user
-    # cannot read, malformed TOML, or a missing coordinate value aborted the function with the
-    # live file already emptied and the chown/chmod below never reached — leaving a root-owned
-    # 0644 one-line file and a Restart=always unit looping on _validate_appwrite_env, with the
-    # previously working credentials destroyed. Re-running part2 is exactly what the runbook
-    # tells an operator to do when a step fails, so this was reachable on the recovery path.
+    echo "building ${SVC_HOME}/.env.crafdapi: coordinates from ${APPWRITE_REGISTRY} (registry version ${_reg_version})"
+    # Build the settings file in a temporary file, private (0600), and move it into place only
+    # when it is complete. If anything fails, the old file is left untouched and a running
+    # service keeps working.
     _tmp_env="$(sudo mktemp "${SVC_HOME}/.env.crafdapi.XXXXXX")"
-    # 0600 before a secret is written, not after: the old ordering left the key at root's
-    # umask (0644) for the window between `tee` and `chmod`.
     sudo chmod 600 "$_tmp_env"
     if ! {
-        printf 'APPWRITE_REGISTRY_VERSION=%s\n' "${_reg_version}"
+        printf 'APPWRITE_REGISTRY_VERSION=%s\n' "${_reg_version}" &&
         sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}"
-        printf 'APPWRITE_DATASTORE_API_KEY=%s\n' "${APPWRITE_DATASTORE_API_KEY}"
     } | sudo tee "$_tmp_env" >/dev/null; then
         sudo rm -f "$_tmp_env"
-        echo "FATAL: could not build the credentials file (registry read or secret emit failed)." >&2
+        echo "FATAL: could not build the settings file (registry read failed)." >&2
         echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
         return 1
     fi
     N=$(sudo grep -c '^APPWRITE_' "$_tmp_env")
     if [ "$N" -lt 9 ]; then
         sudo rm -f "$_tmp_env"
-        echo "FATAL: built credentials file has only ${N} APPWRITE_ lines (expected >= 9)." >&2
+        echo "FATAL: built settings file has only ${N} APPWRITE_ lines (expected >= 9)." >&2
+        echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
+        return 1
+    fi
+    # Every setting the code needs must have a value, or the service would install and then fail
+    # at every start. The check prints names only, never values.
+    if ! _absent="$(sudo cat "$_tmp_env" | sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/check_required_env.py")"; then
+        sudo rm -f "$_tmp_env"
+        echo "FATAL: the registry at ${APPWRITE_REGISTRY} (version ${_reg_version}) gives no value for: ${_absent:-<the check could not run>}" >&2
+        echo "       Deploy against a registry edition that carries them." >&2
         echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
         return 1
     fi
     sudo chown "${SVC_USER}:${SVC_USER}" "$_tmp_env"
-    # Same filesystem, so this is atomic: readers see the old file or the new one, never a
-    # half-written one.
     sudo mv "$_tmp_env" "${SVC_HOME}/.env.crafdapi"
-    echo "credentials file written (${N} APPWRITE_ lines: 1 registry-version stamp + registry coordinates + 1 operator secret; values not displayed)"
-    # The >= 9 floor above is deliberately unchanged, but note what it now counts: the
-    # ADR-035 registry-version stamp is itself an APPWRITE_ line, so the effective
-    # requirement is 8 real coordinates + the stamp, one looser than when the floor was
-    # chosen. Tightening it means recounting what the registry actually emits.
+    echo "settings file written (${N} APPWRITE_ lines: 1 registry-version stamp + registry coordinates)"
     echo "Then run:  bash bootstrap.sh part3"
 }
 
+serverkey() {
+    echo "== The server's read key (crafdapi-server, ADR-044) =="
+    # The key comes from the environment, where you put it with `read -rs`; it is never shown.
+    # It goes into a file of its own, private to the service account, apart from .env.crafdapi.
+    : "${APPWRITE_CRAFDAPI_SERVER_API_KEY:?FATAL: put the server key in the environment first (RELEASE_RUNBOOK.md, section 5)}"
+    _tmp_key="$(sudo mktemp "${SVC_HOME}/.env.crafdapi-server-key.XXXXXX")"
+    sudo chmod 600 "$_tmp_key"
+    printf 'APPWRITE_CRAFDAPI_SERVER_API_KEY=%s\n' "${APPWRITE_CRAFDAPI_SERVER_API_KEY}" | sudo tee "$_tmp_key" >/dev/null
+    sudo chown "${SVC_USER}:${SVC_USER}" "$_tmp_key"
+    sudo mv "$_tmp_key" "${SVC_HOME}/.env.crafdapi-server-key"
+    echo "server key file written (value not displayed). Restart the service to use it."
+}
+
 part3() {
-    echo "== Part 3: install the new systemd unit (no traffic switch yet) =="
-    # Preserve the interim (June recovery) unit as the rollback path.
-    if [ -f /etc/systemd/system/views-crafdapi.service ] && \
-       ! grep -q "views-crafdapi-deploy" /etc/systemd/system/views-crafdapi.service; then
-        sudo cp /etc/systemd/system/views-crafdapi.service /etc/systemd/system/views-crafdapi-legacy.service
-        echo "old unit preserved as views-crafdapi-legacy.service (rollback path)"
-        # NOTE: this branch is guarded on an EXISTING unit, so on a greenfield install it
-        # never runs and no -legacy unit is ever created. Any later message pointing an
-        # operator at views-crafdapi-legacy.service as a rollback is therefore only valid
-        # when this branch fired. The real rollback is the deploy-tag file (RELEASE_RUNBOOK).
-    fi
+    echo "== Part 3: install the systemd service (it is not started yet) =="
     sudo cp "${REPO_DIR}/deployment/views-crafdapi.service" /etc/systemd/system/views-crafdapi.service
     sudo systemctl daemon-reload
-    echo "unit installed. Traffic cutover is the NEXT runbook step (deliberate, reversible):"
-    echo "  sudo systemctl restart views-crafdapi     # now runs the new model"
-    echo "  rollback: sudo cp views-crafdapi-legacy -> views-crafdapi, daemon-reload, restart"
+    echo "service installed. Next: nginx and the certificate, then start it (RELEASE_RUNBOOK.md, section 4)."
 }
 
 case "${1:-}" in
     part1) part1 ;;
     part2) part2 ;;
     part3) part3 ;;
-    *) echo "usage: bash bootstrap.sh {part1|part2|part3}" >&2; exit 1 ;;
+    serverkey) serverkey ;;
+    *) echo "usage: bash bootstrap.sh {part1|part2|part3|serverkey}" >&2; exit 1 ;;
 esac

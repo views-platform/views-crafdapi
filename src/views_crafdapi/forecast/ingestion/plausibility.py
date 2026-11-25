@@ -20,20 +20,40 @@ _COORD_BOUNDS = (("pg_xcoord", -180.0, 180.0), ("pg_ycoord", -90.0, 90.0))
 _NO_COUNTRY_SENTINEL = "-99"
 
 
-def assert_prediction_samples_plausible(var_name: str, samples) -> None:
+# Rows checked at a time. The disk-cache read runs this over a memmapped `(N, S)` float32
+# block of ~1.2 GB per target (C-277), so it must never materialise the whole block, let alone
+# a float64 copy of it. 65,536 rows x 128 samples is ~32 MB of float32 per chunk.
+_CHUNK_ROWS = 65_536
+
+
+def assert_prediction_samples_plausible(var_name: str, samples, chunk_rows: int = _CHUNK_ROWS) -> None:
     """Every posterior sample of one prediction variable must be finite and non-negative.
 
-    ``samples``: an ``(N, S)`` (or ``(S,)``) float array. Raises ``ValueError`` on violation.
+    ``samples``: an ``(N, S)``, ``(S,)`` or scalar array, possibly a memmap; empty passes. Checked ``chunk_rows`` rows
+    at a time, in its own float dtype (a non-float input is cast per chunk). Raises
+    ``ValueError`` on violation.
+
+    Measured on the delivered run (3 targets x 2,330,712 x 128 float32, 3.5 GB, #168): 2.3 s from
+    a cold page cache, 0.8 s warm, no anonymous memory beyond one chunk.
     """
-    arr = np.asarray(samples, dtype=np.float64)
-    if not np.isfinite(arr).all():
-        n_bad = int((~np.isfinite(arr)).sum())
+    arr = np.atleast_1d(np.asarray(samples))
+    n_nonfinite, minimum = 0, np.inf
+    for start in range(0, len(arr), chunk_rows):
+        block = arr[start:start + chunk_rows]
+        if block.dtype.kind != "f":
+            block = block.astype(np.float64)
+        finite = np.isfinite(block)
+        if not finite.all():
+            n_nonfinite += int((~finite).sum())
+        elif n_nonfinite == 0 and block.size:
+            minimum = min(minimum, float(block.min()))
+    if n_nonfinite:
         raise ValueError(
-            f"{var_name}: {n_bad} non-finite prediction sample(s) (NaN/Inf) — implausible (C-72)"
+            f"{var_name}: {n_nonfinite} non-finite prediction sample(s) (NaN/Inf) — implausible (C-72)"
         )
-    if (arr < 0).any():
+    if minimum < 0:
         raise ValueError(
-            f"{var_name}: negative prediction sample(s) (min {float(arr.min()):.4g}) — "
+            f"{var_name}: negative prediction sample(s) (min {minimum:.4g}) — "
             f"fatality predictions cannot be negative (C-72)"
         )
 

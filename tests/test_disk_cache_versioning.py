@@ -124,8 +124,8 @@ class TestCacheSchemaAutoDerivation:
         meta_path = cache._meta_path("testhash", "forecast")
         meta = json.loads(meta_path.read_text())
         written_fields = sorted(k for k in meta if k != "schema_version")
-        from views_crafdapi.managers.disk_cache import _META_FIELDS
-        assert tuple(written_fields) == tuple(sorted(_META_FIELDS))
+        from views_crafdapi.managers.disk_cache import _META_FIELDS, _OPTIONAL_META_FIELDS
+        assert tuple(written_fields) == tuple(sorted(_META_FIELDS + _OPTIONAL_META_FIELDS))
 
 
 class TestConcurrentDiskCacheAccess:
@@ -181,17 +181,22 @@ class TestConcurrentDiskCacheAccess:
         assert result is not None
         assert result["file_id"] in ("initial", "updated")
 
-    def test_lock_timeout_degrades_gracefully(self, tmp_path):
-        """Simulate held lock — reader returns None (fallback), not crash."""
+    def test_lock_timeout_degrades_gracefully(self, tmp_path, caplog):
+        """Simulate held lock — reader returns None (fallback), not crash. Contention is not
+        corruption, so it is not logged at error (C-261 made unloadable slots error-level)."""
+        import logging
         from unittest.mock import patch
 
         cache = CrafdDiskCacheManager(tmp_path)
         cache.write("lock_key", "forecast", _make_dataset(), "file_1")
 
         with patch.object(filelock.FileLock, "acquire", side_effect=filelock.Timeout("lock_key")):
-            result = cache.read("lock_key", "forecast")
+            with caplog.at_level(logging.WARNING, logger="views_crafdapi.managers.disk_cache"):
+                result = cache.read("lock_key", "forecast")
 
         assert result is None, "Lock timeout must return None, not crash"
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+        assert any("held by another worker" in r.getMessage() for r in caplog.records)
 
     def test_check_file_id_after_concurrent_write(self, tmp_path):
         """Staleness detection after overwrites."""
@@ -221,4 +226,117 @@ class TestCrafdApiManagerDiskCacheIntegration:
         assert result is not None
         assert result["file_id"] == "fid_1"
         # the reconstructed dataset serves byte-identical HDI/MAP
-        assert ds.calculate_hdi_map().equals(result["dataset"].calculate_hdi_map())
+        assert ds.summarize().equals(result["dataset"].summarize())
+
+
+class TestTtlExpiryIsAMissNotADeletion:
+    """C-360 (#157). The disk TTL used to *delete* an expired slot on read. The last-good fallback
+    reads that same slot and is bounded by the freshness SLA (ADR-033 §6), not by the TTL. The
+    deletion cut the 45-day grace window to the 24.5-day TTL twice over: the fallback's own read
+    deleted the slot, and with no manifest the normal disk-tier read deleted it first. Expiry is
+    now a miss that leaves the slot in place."""
+
+    def _expired(self, tmp_path):
+        cache = CrafdDiskCacheManager(tmp_path, ttl_seconds=60)
+        cache.write("testhash", "forecast", _make_dataset(), "file_123")
+        meta_path = cache._meta_path("testhash", "forecast")
+        meta = json.loads(meta_path.read_text())
+        meta["timestamp"] = time.time() - 3600
+        meta_path.write_text(json.dumps(meta))
+        return cache
+
+    def test_an_expired_slot_is_a_miss_and_stays_on_disk(self, tmp_path):
+        cache = self._expired(tmp_path)
+        assert cache.read("testhash", "forecast") is None
+        assert cache._value_dir("testhash", "forecast").is_dir()
+        assert cache._meta_path("testhash", "forecast").exists()
+
+    def test_the_ttl_can_be_waived_for_a_reader_bounded_by_something_else(self, tmp_path):
+        cache = self._expired(tmp_path)
+        hit = cache.read("testhash", "forecast", enforce_ttl=False)
+        assert hit is not None and hit["file_id"] == "file_123"
+
+    def test_a_slot_missing_a_metadata_column_is_a_logged_miss(self, tmp_path, caplog):
+        """C-261 (#167): an old-schema geo table is never served short. The read is a miss
+        (the caller rebuilds from source) and logged at error, not a quiet warning."""
+        import logging
+
+        import pandas as pd
+
+        cache = CrafdDiskCacheManager(tmp_path)
+        cache.write("testhash", "forecast", _make_dataset(), "file_123")
+        geo_path = cache._value_dir("testhash", "forecast") / "geo.parquet"
+        pd.read_parquet(geo_path).drop(columns=["admin2_gaul2_name"]).to_parquet(geo_path)
+        with caplog.at_level(logging.ERROR, logger="views_crafdapi.managers.disk_cache"):
+            assert cache.read("testhash", "forecast") is None
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert errors and "admin2_gaul2_name" in errors[0].getMessage()
+        assert errors[0].exc_info is not None, "the traceback must reach the log"
+
+    def test_a_schema_mismatch_still_deletes_the_slot(self, tmp_path):
+        cache = CrafdDiskCacheManager(tmp_path)
+        cache.write("testhash", "forecast", _make_dataset(), "file_123")
+        meta_path = cache._meta_path("testhash", "forecast")
+        meta = json.loads(meta_path.read_text())
+        meta["schema_version"] = 0
+        meta_path.write_text(json.dumps(meta))
+
+        assert cache.read("testhash", "forecast", enforce_ttl=False) is None
+        assert not cache._value_dir("testhash", "forecast").exists()   # unloadable: removed
+        assert not meta_path.exists()
+
+
+class TestTheSlotNamesTheBuildThatWroteIt:
+    """C-282 (#170): `written_by` is recorded by both writers and returned by `read`, so /health
+    can report it. It is the writer's version, never the reader's."""
+
+    def test_write_records_the_writing_build(self, tmp_path, monkeypatch):
+        import views_crafdapi.managers.disk_cache as disk_cache
+
+        cache = CrafdDiskCacheManager(tmp_path)
+        monkeypatch.setattr(disk_cache, "_RUNNING_VERSION", "0.6.9")
+        cache.write("testhash", "forecast", _make_dataset(), "file_123", source_kind="wire")
+        monkeypatch.undo()
+        assert cache.read("testhash", "forecast")["written_by"] == "0.6.9"
+
+    def test_write_value_dir_records_the_writing_build(self, tmp_path, monkeypatch):
+        import views_crafdapi.managers.disk_cache as disk_cache
+
+        cache = CrafdDiskCacheManager(tmp_path)
+        staging = cache.staging_dir("testhash", "forecast")
+        dataset = _make_dataset()
+        dataset.to_value(staging)
+        monkeypatch.setattr(disk_cache, "_RUNNING_VERSION", "0.6.9")
+        assert cache.write_value_dir("testhash", "forecast", staging, "file_123",
+                                     rows=len(dataset.dataframe))
+        monkeypatch.undo()
+        assert cache.read("testhash", "forecast")["written_by"] == "0.6.9"
+
+    def test_a_slot_from_before_written_by_is_still_served(self, tmp_path):
+        """Adding the field must not invalidate existing slots: that would delete the last-good
+        copy on deploy. An older meta without it reads as written_by None."""
+        cache = CrafdDiskCacheManager(tmp_path)
+        cache.write("testhash", "forecast", _make_dataset(), "file_123", source_kind="wire")
+        meta_path = cache._meta_path("testhash", "forecast")
+        meta = json.loads(meta_path.read_text())
+        del meta["written_by"]
+        # The schema version a pre-#170 build stamped: the fingerprint without `written_by`.
+        import hashlib
+
+        from views_crafdapi.data.value_format import _VALUE_SCHEMA_VERSION
+        from views_crafdapi.managers.disk_cache import _META_FIELDS
+        before = f"{_META_FIELDS}|{_VALUE_SCHEMA_VERSION}"
+        meta["schema_version"] = int(hashlib.sha256(before.encode()).hexdigest()[:8], 16)
+        meta_path.write_text(json.dumps(meta))
+        out = cache.read("testhash", "forecast")
+        assert out is not None and out["written_by"] is None
+
+    def test_the_version_is_the_running_code_not_the_checkout(self, tmp_path, monkeypatch):
+        """A deploy changes the checkout before the restart. A slot written by the old process in
+        between must carry the old process's version, fixed when it started."""
+        import views_crafdapi.managers.disk_cache as disk_cache
+
+        monkeypatch.setattr(disk_cache, "installed_version", lambda: "9.9.9")  # the new checkout
+        cache = CrafdDiskCacheManager(tmp_path)
+        cache.write("testhash", "forecast", _make_dataset(), "file_123", source_kind="wire")
+        assert cache.read("testhash", "forecast")["written_by"] == disk_cache._RUNNING_VERSION != "9.9.9"

@@ -14,25 +14,26 @@ Run explicitly:
 """
 
 import os
-import tempfile
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from tests.conftest import new_tmp_file
+
 
 # All 9 vars required (not 6 like test_integration_appwrite_write.py) because
 # the HTTP path calls _validate_appwrite_env() which demands all 8 + we need
 # the API key for the X-API-Key header.
 REQUIRED_ENV_VARS = [
     "APPWRITE_ENDPOINT",
-    "APPWRITE_DATASTORE_PROJECT_ID",
+    "APPWRITE_CRAFD_PROJECT_ID",
     "APPWRITE_CRAFD_BUCKET_ID",
     "APPWRITE_CRAFD_BUCKET_NAME",
     "APPWRITE_CRAFD_COLLECTION_ID",
     "APPWRITE_CRAFD_COLLECTION_NAME",
     "APPWRITE_METADATA_DATABASE_ID",
     "APPWRITE_METADATA_DATABASE_NAME",
-    "APPWRITE_DATASTORE_API_KEY",
+    "CRAFD_KEY",
 ]
 
 _missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
@@ -56,8 +57,8 @@ def appwrite_config():
 
     kwargs = dict(
         endpoint=os.getenv("APPWRITE_ENDPOINT"),
-        project_id=os.getenv("APPWRITE_DATASTORE_PROJECT_ID"),
-        credentials=os.getenv("APPWRITE_DATASTORE_API_KEY"),
+        project_id=os.getenv("APPWRITE_CRAFD_PROJECT_ID"),
+        credentials=os.getenv("CRAFD_KEY"),
         auth_method="api_key",
         cache_ttl_hours=24,
         bucket_id=os.getenv("APPWRITE_CRAFD_BUCKET_ID"),
@@ -102,7 +103,7 @@ def integration_client(tmp_path_factory):
     from fastapi.testclient import TestClient
     from views_crafdapi.managers.api import CrafdApiManager
 
-    api_key = os.environ["APPWRITE_DATASTORE_API_KEY"]
+    api_key = os.environ["CRAFD_KEY"]
     cache_dir = tmp_path_factory.mktemp("http_integ_cache")
 
     mgr = CrafdApiManager.from_config(
@@ -123,7 +124,7 @@ def test_forecast_file(prediction_manager, file_manager, bucket_id):
     from tests.conftest import make_fao_df
 
     df = make_fao_df(n_cells=4, n_months=2, n_samples=10)
-    tmp = Path(tempfile.mktemp(suffix=".parquet"))
+    tmp = Path(new_tmp_file(".parquet"))
     df.to_parquet(tmp)
     file_id = None
     try:
@@ -154,17 +155,6 @@ def test_forecast_file(prediction_manager, file_manager, bucket_id):
 # ============================================================
 
 
-class TestRootEndpointLive:
-
-    def test_root_returns_catalog(self, integration_client):
-        client, _ = integration_client
-        resp = client.get("/")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "endpoints" in body
-        assert "message" in body
-
-
 class TestHealthEndpointLive:
 
     def test_health_with_real_credentials(self, integration_client):
@@ -176,18 +166,6 @@ class TestHealthEndpointLive:
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "healthy"
-
-
-class TestFileListingLive:
-
-    def test_list_files_returns_structure(self, integration_client, bucket_id):
-        client, api_key = integration_client
-        resp = client.get(f"/files/{bucket_id}", headers={"X-API-Key": api_key})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert isinstance(body["files"], list)
-        assert isinstance(body["total"], int)
-        assert body["total"] >= 0
 
 
 class TestAuthErrorLive:
@@ -203,58 +181,22 @@ class TestAuthErrorLive:
 # ============================================================
 
 
-class TestDataSubsetLive:
+class TestSliceLive:
+    """The slice through HTTP against the real store: auth → download → parse →
+    ForecastDataset → summary → serialize. One test per level; above the grid cell the
+    samples are summed first, then summarised."""
 
-    def test_forecast_subset_through_http(self, integration_client, test_forecast_file):
-        """Full pipeline: HTTP → auth → _get_latest_dataset → download from
-        Appwrite → parquet parse → ForecastDataset → get_subset_dataframe →
-        dataframe_to_dict → convert_numpy_types → JSON response."""
+    @pytest.mark.parametrize("level", ["grid", "admin1", "country"])
+    def test_a_slice_through_http(self, integration_client, test_forecast_file, level):
         client, api_key = integration_client
-        resp = client.get(
-            "/pg/data/forecast/subset",
-            params={"force_refresh": "true"},
-            headers={"X-API-Key": api_key},
-        )
-        assert resp.status_code == 200
+        headers = {"X-API-Key": api_key}
+        # A whole real forecast is too large for one slice (413), so ask for one month. The
+        # months served are named in the refusal of a month that cannot exist.
+        detail = client.get(f"/slice/{level}/sb", params={"months": "1900-01"}, headers=headers).json()["detail"]
+        last_month = detail.rsplit(" to ", 1)[1].strip()
+        resp = client.get(f"/slice/{level}/sb", params={"months": last_month, "columns": "sb_map"}, headers=headers)
+        assert resp.status_code == 200, resp.text
         body = resp.json()
-        assert body["success"] is True
-        assert body["data"]["category"] == "forecast"
-        assert body["data"]["level"] == "pg"
-        assert len(body["data"]["dataframe"]) > 0
-
-
-class TestHdiMapLive:
-
-    def test_forecast_hdi_map_through_http(self, integration_client, test_forecast_file):
-        """Statistical pipeline through HTTP: auth → download → parse →
-        ForecastDataset → PosteriorDistributionAnalyzer → HDI/MAP → serialize."""
-        client, api_key = integration_client
-        resp = client.get(
-            "/pg/analysis/forecast/hdi-map",
-            params={"force_refresh": "true"},
-            headers={"X-API-Key": api_key},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert "hdi_map" in body["data"]
-        columns = body["data"]["columns"]
-        assert any("_map" in col for col in columns)
-
-
-class TestAggregationLive:
-
-    def test_country_aggregation_through_http(self, integration_client, test_forecast_file):
-        """Aggregation pipeline through HTTP: auth → download → parse →
-        ForecastDataset → _aggregate_distributions → _elementwise_sum →
-        serialize."""
-        client, api_key = integration_client
-        resp = client.get(
-            "/country/data/forecast/subset",
-            params={"aggregate": "true"},
-            headers={"X-API-Key": api_key},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        assert body["data"]["level"] == "country"
+        assert body["level"] == level and body["outcome"] == "sb"
+        assert len(body["rows"]) > 0
+        assert body["columns"][-1] == "sb_map" and "month" in body["columns"]

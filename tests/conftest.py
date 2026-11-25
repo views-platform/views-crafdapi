@@ -1,3 +1,5 @@
+import tempfile
+import os
 import io
 
 import numpy as np
@@ -97,3 +99,25 @@ def parquet_bytes():
     buf = io.BytesIO()
     df.to_parquet(buf)
     return buf.getvalue()
+
+
+def new_tmp_file(suffix: str) -> str:
+    """A new, empty temporary file, created safely; the caller deletes it.
+
+    Not ``tempfile.mktemp``, which returns a name without creating the file, so another process
+    could create it first (#218, CodeQL py/insecure-temporary-file).
+    """
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    return path
+
+
+def start_loader(mgr, key, store):
+    """Load the forecast as the service does at start (ADR-044): with `key` as the server's key
+    and `store` as the store it reads. Fails the test if nothing could be loaded."""
+    from views_crafdapi.managers.forecast_loader import ForecastLoader
+
+    mgr._loader = ForecastLoader(mgr._dataset_service, mgr._disk_cache, mgr._bulk_files,
+                                 key, lambda _key: store)
+    assert mgr._loader.refresh(), "the loader could not load the stand-in forecast"
+    return mgr._loader

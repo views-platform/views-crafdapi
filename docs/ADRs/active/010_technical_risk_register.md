@@ -12,7 +12,7 @@ The views-faoapi repository serves critical conflict forecast data to the UN FAO
 
 ## Decision
 
-We adopt a technical risk register at `reports/technical_risk_register.md` with tiered severity (1-4), actionable triggers, and deduplication rules. Risks are registered via the `register-risk` skill and reviewed/prioritized via the `review-rr` skill.
+We adopt a technical risk register at `reports/technical_risk_register.md` (since 2026-11-22 a local working document, ignored by git and never committed: Simon's decision; it lives on the maintainer's machine) with tiered severity (1-4), actionable triggers, and deduplication rules. Risks are registered via the `register-risk` skill and reviewed/prioritized via the `review-rr` skill.
 
 ## Consequences
 

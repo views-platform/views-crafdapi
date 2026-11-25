@@ -18,6 +18,11 @@ production deploy (epic #12 / S11), when the drift was discovered.
 
 ### The intended mechanism (PLATFORM-001 D2 / þing-01 #275)
 
+> **Pin in force (note 2026-10-16, register C-250; updated 2026-11-22, #231):**
+> `seam_contract.REGISTRY_PIN_TAG`, which is `appwrite-seam-v1.9.0` today. It may not go below
+> v1.9.0: ADR-044 needs that edition's §5.8 "uniform entitlement" mode, and a test enforces it. The `v1.4.4` links below are the edition current when this ADR was written,
+> kept as history. Follow the constant, not this page.
+
 Coordinates are **read from the owned, versioned registry** —
 `views-appwrite/docs/ADRs/platform/coordinate_registry.toml` — and the **one secret is supplied by
 the operator** in the environment, never sourced from a `.env`. This retired an earlier "copy-chain"
@@ -71,6 +76,11 @@ lines in total (crafd's 8 plus faoapi's `UNFAO_*`/`PROD_FORECASTS_*`, which craf
 `bootstrap.sh part2` then appends the operator secret. Note: `registry_to_env.py` requires
 `tomllib` (Python ≥3.11); the box venv (3.13) satisfies this, but a run under a system Python 3.10
 fails with `ModuleNotFoundError: tomllib` — always run it via the repo venv.
+
+*2026-11-11 (þing 04 D3): crafdapi now reads `APPWRITE_CRAFD_PROJECT_ID` (CRAF'd's own project) in
+place of `APPWRITE_DATASTORE_PROJECT_ID`. The verification above was true of the registry then; a
+registry edition without the new row now fails `bootstrap.sh part2`, which checks the built file
+against the deployed code's required names before installing it.*
 
 ---
 
@@ -139,7 +149,8 @@ fails with `ModuleNotFoundError: tomllib` — always run it via the repo venv.
   [contract](https://github.com/views-platform/views-appwrite/blob/appwrite-seam-v1.4.4/docs/ADRs/platform/appwrite_seam_contract.md)
   ·
   [registry](https://github.com/views-platform/views-appwrite/blob/appwrite-seam-v1.4.4/docs/ADRs/platform/coordinate_registry.toml)
-  — the cross-repo source of truth for coordinates and the secret-slot discipline. The platform-level
+  — the cross-repo source of truth for coordinates and the secret-slot discipline. *(Historical pin;
+  the one in force is `seam_contract.REGISTRY_PIN_TAG` — see the "Pin in force" note above.)* The platform-level
   *principled* ADR (the repo-agnostic clone playbook this concrete ADR realizes) is proposed in
   **views-appwrite#54**; when it lands at a tag, this ADR should cite it by that pin.
 - **Review:** views-crafdapi#34 (this ADR) and views-faoapi#360 (the faoapi divergence measurement).

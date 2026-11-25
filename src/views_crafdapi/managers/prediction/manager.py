@@ -26,6 +26,27 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
+class MetadataLookupError(Exception):
+    """A metadata search failed — distinct from a search that found nothing (C-233, #158).
+
+    The pinned SDK raises the same `AppwriteException` for an HTTP error, a network error and a
+    timeout. Returning `[]` for all of them made an outage, a revoked key and "no documents" look
+    identical, so the serving path reported an outage as "no manifest". ``status`` is the HTTP
+    status (401/403 not authorised; 0/None no response; 5xx server-side); ``appwrite_type`` is
+    Appwrite's error type string.
+    """
+
+    def __init__(self, message: str, *, status: Optional[int] = None,
+                 appwrite_type: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.status = status
+        self.appwrite_type = appwrite_type
+
+    @property
+    def is_unauthorized(self) -> bool:
+        return self.status in (401, 403)
+
+
 class PredictionStoreManager:
     def __init__(self, appwrite_file_manager_config: AppwriteConfig):
         self.model_path = appwrite_file_manager_config.path_manager
@@ -131,10 +152,9 @@ class PredictionStoreManager:
         Returns:
             List of prediction metadata documents, sorted by creation date (newest first)
         """
-        # Start with model name filter if available
-        if filters is None:
-            filters = {}
-        
+        # A copy: the name filter and the §11.4 pin below must not leak into the caller's dict
+        # (C-359), where a second, typed query reusing it would inherit `type="model"`.
+        filters = dict(filters or {})
         filters["name"] = self._require_consumer_name()
 
         # ADR-013 §11.4 (Hop-B transition guard): a category selection that names no
@@ -146,20 +166,34 @@ class PredictionStoreManager:
 
         logger.info(f"Searching for predictions with filters: {filters}")
         
-        search_result = (
-            self.__appwrite_file_manager.metadata_manager.search_files_by_metadata(
-                filters=filters if filters else None,
-                collection_name=self.__appwrite_file_manager_config.collection_name,  
-                collection_id=self.__appwrite_file_manager_config.collection_id,      
-                database_id=self.__appwrite_file_manager_config.database_id,          
-            ).to_dict()
-        )
+        try:
+            search_result = (
+                self.__appwrite_file_manager.metadata_manager.search_files_by_metadata(
+                    filters=filters if filters else None,
+                    collection_name=self.__appwrite_file_manager_config.collection_name,
+                    collection_id=self.__appwrite_file_manager_config.collection_id,
+                    database_id=self.__appwrite_file_manager_config.database_id,
+                ).to_dict()
+            )
+        except Exception as e:
+            # The search catches only `AppwriteException`; an SDK edge case (a malformed error
+            # body, a missing header) escapes as something else. It is still a failed lookup.
+            logger.error(f"Search raised with filters {filters}: {e!r}")
+            raise MetadataLookupError(f"metadata search raised {type(e).__name__}") from e
         if not search_result.get("success", False):
-            logger.warning(f"Search failed with filters: {filters}")
             error_msg = search_result.get("error", "Unknown error")
-            logger.error(f"Search error: {error_msg}")
-            return []
-        
+            if search_result.get("code") == "MISSING_CONFIG":
+                # A deployment error, not an outage: say so, rather than send the operator
+                # looking for an unreachable store.
+                raise RuntimeError(f"metadata collection is not configured: {error_msg}")
+            logger.error(f"Search failed with filters {filters}: {error_msg}")
+            # An error, not an empty answer (C-233, #158): "the store could not be asked" and
+            # "the store has nothing" must stay distinguishable to every caller.
+            raise MetadataLookupError(
+                error_msg, status=search_result.get("status"),
+                appwrite_type=search_result.get("code"),
+            )
+
         documents = search_result.get("data", {}).get("documents", [])
         logger.info(f"Found {len(documents)} prediction files")
 
@@ -258,22 +292,6 @@ class PredictionStoreManager:
             return None
         return self._provenance_from(files_list[0])
 
-    def get_latest_manifest_provenance(self) -> Optional[PredictionProvenance]:
-        """#60: the lineage record of the newest *manifested wire run*, or ``None``.
-
-        `get_latest_provenance({"category": "forecast"})` cannot answer this. That query names
-        no `type`, so the §11.4 transition guard pins it to the legacy type — correctly, since
-        it exists to stop a legacy selection resolving a wire artifact. `crafd_bucket` holds no
-        legacy documents, so the pinned query matches nothing and a caller that stops there
-        concludes "no forecast" about a bucket that is serving one.
-
-        This goes through `get_latest_manifest`, whose `type` is explicit, so the guard leaves
-        it alone. Store-side and therefore worker-independent — unlike
-        `DatasetService.served_forecast_provenance()`, which is `None` until *this* worker has
-        served a forecast."""
-        doc = self.get_latest_manifest()
-        return self._provenance_from(doc) if doc else None
-
     @staticmethod
     def _provenance_from(doc: Dict[str, Any]) -> Optional[PredictionProvenance]:
         """Build the lineage record for one store document. The record shape is owned here and
@@ -299,7 +317,8 @@ class PredictionStoreManager:
         """ADR-013 §4.3 (S2/#204): resolve the newest Sampled-Forecast Wire Contract *run
         manifest* (``type="sampled_forecast_manifest"``, ``category="forecast"``). Returns
         the manifest store document (``fileId`` + ``filename`` + metadata) or ``None`` when
-        no manifested run exists — in which case the caller falls back to the legacy path.
+        no manifested run exists — in which case the caller serves the last-good manifested run
+        within the SLA, or a 503 (ADR-033 §6a); never a legacy artifact (S1/#264).
 
         The explicit ``type`` means the §11.4 transition guard leaves this query untouched
         (it only pins type-*less* category selections). Quarantine/approval and newest-wins

@@ -89,7 +89,7 @@ Fetches and caches the latest prediction dataset.
 **Caching Behavior:**
 - Results cached by (api_key_hash, category)
 - Cache expires after 1 hour
-- `force_refresh=True` bypasses cache
+- `force_refresh=True` bypasses cache (internal only: no route offers it, #206)
 
 ##### `_register_routes`
 
@@ -97,99 +97,12 @@ Fetches and caches the latest prediction dataset.
 def _register_routes(self) -> None
 ```
 
-Registers all API routes dynamically based on configured levels.
-
----
-
-### Utility Functions
-
-#### `parse_list_param`
-
-```python
-def parse_list_param(
-    param: Optional[str],
-    element_type: type = int
-) -> Optional[List]
-```
-
-Parses comma-separated query parameters.
-
-```python
-parse_list_param("410,411,412", int)  # [410, 411, 412]
-parse_list_param("SOM,ETH,KEN", str)  # ["SOM", "ETH", "KEN"]
-```
-
-#### `convert_numpy_types`
-
-```python
-def convert_numpy_types(obj: Any) -> Any
-```
-
-Recursively converts NumPy types to JSON-serializable Python types.
-
-**Handles:**
-- `np.integer` → `int`
-- `np.floating` → `float` (NaN/Inf → `None`)
-- `np.ndarray` → `list`
-- `np.bool_` → `bool`
-
-#### `flatten_numeric_list_columns`
-
-```python
-def flatten_numeric_list_columns(df: pd.DataFrame) -> pd.DataFrame
-```
-
-Flattens single-element lists/arrays in numeric columns.
-
-```python
-# Input: [1.5] → Output: 1.5
-# Input: [1.5, 2.0] → Output: [1.5, 2.0] (unchanged)
-```
-
-#### `dataframe_to_dict`
-
-```python
-def dataframe_to_dict(df: pd.DataFrame) -> dict
-```
-
-Converts DataFrame to JSON-serializable dictionary.
-
-**Process:**
-1. Reset index
-2. Flatten single-element arrays
-3. Convert NumPy types
-4. Return as dict with "records" orientation
-
-#### `create_app`
-
-```python
-def create_app() -> FastAPI
-```
-
-Factory function for creating the FastAPI application instance.
-
-**Used for multi-worker deployment:**
-```bash
-uvicorn views_crafdapi.managers.api:app --workers 4
-```
-
----
-
-### Route Registration
-
-Routes are dynamically registered for each geographic level:
-
-```python
-LEVELS = ["pg", "country", "gaul0", "gaul1", "gaul2"]
-CATEGORIES = ["historical", "forecast"]
-```
-
-**Generated Routes:**
-
-| Template | Example |
-|----------|---------|
-| `/{level}/data/{category}/subset` | `/country/data/forecast/subset` |
-| `/{level}/analysis/{category}/hdi-map` | `/gaul1/analysis/historical/hdi-map` |
+Registers the service's routes: `/ping`, `/version`, `/health`, one bulk route,
+`/bulk/{level}/{outcome}` (built by `forecast/serialize/bulk_file.py`, kept by `bulk_files.py`), and one
+slice route, `/slice/{level}/{outcome}`, for every level (`grid`, `admin1`, `country`) and every
+outcome. The slice takes four options (`places`, `months`, `columns`; the outcome is in the path)
+and builds its table with `forecast/serialize/outcome_table.py`. No partner request can force a
+reload (`force_refresh` is internal).
 
 ---
 
@@ -634,7 +547,7 @@ from views_crafdapi.managers.appwrite import (
 )
 
 config = AppwriteConfig(
-    endpoint="https://cloud.appwrite.io/v1",
+    endpoint="https://fra.cloud.appwrite.io/v1",
     project_id="your_project",
     bucket_id="predictions"
 )
@@ -702,6 +615,5 @@ else:
 
 ## See Also
 
-- [Main README](../../README.md) - API overview and endpoints
+- [Main README](../../../README.md) - API overview and endpoints
 - [Data README](../data/README.md) - Dataset handlers and statistics
-- [WandB README](../wandb/README.md) - Monitoring utilities

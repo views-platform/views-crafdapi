@@ -1,6 +1,8 @@
 # ADR-027: Authentication and Per-API-Key Isolation
 
-**Status:** Accepted
+**Status:** Amended (2026-11-21, ADR-044): §1 is superseded as well. The caller's key now only decides who gets in, checked with Appwrite and remembered for one minute; the service reads storage with its own key, and all partners are served one loaded copy. Earlier amendment (2026-11-18). §2–§3 (a separate copy of the data per key) are superseded: every partner sees the same forecast (service specification; ADR-040), and the per-key copies go with #208. §1 (the caller's key is passed to Appwrite) stays true until #208 decides whether the server has a key of its own.
+
+> Earlier status: Accepted — amended 2026-10-16 (§4: what revocation does and does not reach, #159)
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** ADR-026 (API surface), ADR-011 (caching strategy), ADR-013 (environment-variable validation), ADR-016 (concurrency safety), ADR-009 (boundary contracts), the live auth path in `src/views_crafdapi/managers/api.py` + `managers/appwrite/`
@@ -39,6 +41,14 @@ A request authenticated with key *A* can only reach the `A`-partitioned managers
 ### 4. Transport security and key hygiene are deployment responsibilities
 
 The key travels in a header and therefore **must be carried over TLS** — the deployment terminates HTTPS (ADR-022). Key rotation, scoping, and revocation are Appwrite-side operations (an operator narrows a key's bucket scopes or revokes it in Appwrite; faoapi inherits the change on the next authenticated call). faoapi's only obligation is to not leak the key (Decision 2).
+
+**Amended 2026-10-16 (#159, register C-268).** "Inherits the change on the next authenticated call" did not hold. Managers are cached without revalidation (ADR-011 §3), so a revoked key is only ever seen as a 401/403 from the store's metadata calls — and those were coerced to "no results" and served around as lookup blips, from cache or from the last-good fallback, for as long as the fallback's SLA allowed. Now:
+
+- A metadata lookup the store refuses (401/403) ends the request with **401**, and nothing is served from the warm cache, the disk or the fallback. So does a refused artifact download. Every forecast request looks up the manifest and every historical one the latest file, so **a key revoked or disabled in Appwrite** — which refuses every call — is refused on its **next request** on every data route, `/data/forecast/bulk`, both `/provenance` routes and `/health`. (2026-11-21: those routes are now `/slice/{level}/{outcome}`, `/bulk/{level}/{outcome}` and `/health`; `/provenance` was removed in #207. The same holds for them; `TestARevokedKeyIsRefusedOnItsNextRequest` covers the slice and bulk routes.)
+- Key validation (`_validate_api_key`) answers 401 only when the store refuses the key (401/403). Anything else — no response, 429, a timeout, a wrong endpoint or project, 5xx — is **503**: it says nothing about the key, and no longer tells a caller their key is wrong during an Appwrite outage.
+- No response carries the store's own error text, and a configuration error answers a fixed 500 (C-264).
+- **Not covered — partial descoping.** A key whose *storage* scope is narrowed but whose *database* scope is kept still passes the per-request metadata lookups, so a run already in the warm or disk cache keeps being served to it; only a fresh download is refused. Detecting that needs a storage check per request, which this does not add. To cut such a key off now, revoke it outright, or restart the service.
+- ~~**Not covered — `/files/{bucket_id}/{file_id}/cached`** serves bytes from the local file cache and falls back to the file id for a name when `get_file` fails, so it still answers a revoked key (register C-268 remainder, C-269).~~ **Closed 2026-11-11:** the route was removed, with `/cache/stats` and `DELETE /cache`, and `/health` stopped reporting the shared cache (þing 04 D7, before the first partner key). `/files/*/info` and `/files/*/download` now answer a refused key with 401 rather than 404. Every route that serves data asks the store with the caller's key first.
 
 ### 5. Scope
 

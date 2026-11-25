@@ -6,13 +6,15 @@ resurrecting object-dtype sample cells (C-148). This is the gate that must be gr
 before the disk cache is rewritten onto the value format. Synthetic data only.
 """
 import os
-import tempfile
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from tests.conftest import make_fao_df
 from views_crafdapi.data.handlers import ForecastDataset
+from tests.conftest import new_tmp_file
+
 
 pytestmark = pytest.mark.layer2_data
 
@@ -37,7 +39,7 @@ def _ragged_wire_dataset(with_nan_geo):
         vals = np.ones((len(units_), s), dtype=np.float32) * (7.0 if target == "lr_ged_sb" else 9.0)
         header = {"contract_version": "1.5", "sample_count": s, "target": target, "time_id": month,
                   "id_semantics": {"time": "views_month_id", "unit": "priogrid_id"}}
-        p = tempfile.mktemp(suffix=".parquet")
+        p = new_tmp_file(".parquet")
         arrow.save(p, values=vals, time=np.full(len(units_), month, dtype=np.int64),
                    unit=units_, level="pgm", metadata=header)
         b = open(p, "rb").read()
@@ -75,14 +77,14 @@ def test_wire_ragged_value_roundtrip_store_geo_and_hdi_identical(with_nan_geo, t
         assert np.array_equal(out._sample_store[var], ds._sample_store[var], equal_nan=True)
     # NaN GAUL geography must survive the geo.parquet round-trip
     assert out.geo_metadata.equals(ds.geo_metadata)
-    for level in [None, "country", "gaul0", "gaul1", "gaul2"]:
+    for level in [None, "country", "gaul1"]:
         kw = {"aggregate": True, "level": level} if level is not None else {}
-        assert ds.calculate_hdi_map(**kw).equals(out.calculate_hdi_map(**kw)), f"hdi diverges (level={level})"
+        assert ds.summarize(**kw).equals(out.summarize(**kw)), f"hdi diverges (level={level})"
 
 # (n_cells, n_months, n_samples, seed) — even/odd S, varied grid (matches the parity corpus).
 _CORPUS = [(4, 2, 64, 1), (4, 2, 65, 2), (3, 3, 100, 3), (4, 1, 257, 4), (2, 2, 2, 5)]
 
-_LEVELS = [None, "country", "gaul0", "gaul1", "gaul2"]
+_LEVELS = [None, "country", "gaul1"]
 
 
 def _make_feature_df(n_cells=4, n_months=2, seed=7):
@@ -127,13 +129,13 @@ def test_prediction_value_roundtrip_serves_identical_hdi_map(
 
     for with_metadata in (True, False):
         # cell-level (no aggregation)
-        a = ds.calculate_hdi_map(with_metadata=with_metadata)
-        b = out.calculate_hdi_map(with_metadata=with_metadata)
+        a = ds.summarize(with_metadata=with_metadata)
+        b = out.summarize(with_metadata=with_metadata)
         assert a.equals(b), f"cell-level hdi diverges (with_metadata={with_metadata})"
         # aggregated to each geographic level
         for level in [lv for lv in _LEVELS if lv is not None]:
-            a = ds.calculate_hdi_map(aggregate=True, level=level, with_metadata=with_metadata)
-            b = out.calculate_hdi_map(aggregate=True, level=level, with_metadata=with_metadata)
+            a = ds.summarize(aggregate=True, level=level, with_metadata=with_metadata)
+            b = out.summarize(aggregate=True, level=level, with_metadata=with_metadata)
             assert a.equals(b), f"aggregated hdi diverges (level={level}, meta={with_metadata})"
 
 
@@ -184,3 +186,15 @@ def test_value_dir_has_no_pickle(tmp_path):
     written = {p.suffix for p in (tmp_path / "v").rglob("*") if p.is_file()}
     assert ".pkl" not in written and ".pickle" not in written
     assert {".json", ".parquet", ".npz", ".npy"} & written
+
+
+@pytest.mark.parametrize("dropped", ForecastDataset._METADATA_COLS)
+def test_a_value_dir_missing_a_metadata_column_is_refused_not_served_short(dropped, tmp_path):
+    """C-261 (#167): `__init__` refuses a frame without the 9 metadata columns; `from_value` must
+    refuse a value-dir whose geo table lacks one, rather than serve output with that column gone."""
+    ds = ForecastDataset(make_fao_df(seed=3))
+    ds.to_value(tmp_path / "v")
+    geo_path = tmp_path / "v" / "geo.parquet"
+    pd.read_parquet(geo_path).drop(columns=[dropped]).to_parquet(geo_path)
+    with pytest.raises(ValueError, match=rf"geo\.parquet is missing metadata columns \[.{dropped}.\]"):
+        ForecastDataset.from_value(tmp_path / "v")

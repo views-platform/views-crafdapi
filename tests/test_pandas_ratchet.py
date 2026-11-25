@@ -24,6 +24,10 @@ _IMPORT_RE = re.compile(r"^\s*(?:import pandas\b|from pandas\b|import pandas as\
 _ALLOWED = frozenset({
     # top-level edges
     "client.py", "plotting.py",
+    # #262: the client-side checks on served tables (as a partner downloads them), used by the
+    # notebooks and the post-deploy smoke test. Client edge, like client.py; nothing in the
+    # service imports them.
+    "data_checks.py", "smoke.py",
     # the spine — target for removal across S3–S8
     "data/handlers/grid_dataset.py",
     "data/handlers/forecast_dataset.py",
@@ -43,7 +47,8 @@ _ALLOWED = frozenset({
     "forecast/ingestion/plausibility.py",
     # forecast SERIALIZE seam (emit JSON)
     "forecast/serialize/json_contract.py",
-    "forecast/serialize/bulk_parquet.py",  # S6 (#222): the ADR-025 bulk artifact (serialize seam)
+    "forecast/serialize/outcome_table.py",  # #204/#206: the served table per outcome and level (serialize seam)
+    "forecast/serialize/summary_checks.py",  # #204: checks a served table before it leaves (serialize seam)
     # forecast GEOGRAPHY (inherently scalar/tabular metadata table)
     "forecast/geography/level_mapping.py",
     "forecast/geography/metadata_table.py",

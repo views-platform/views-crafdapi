@@ -1,202 +1,162 @@
-# CRAF'd Forecast API — Reference
+# CRAF'd forecast API: partner guide
 
-Consolidated reference for the `views-crafdapi` HTTP service: data scopes, authentication, the endpoint catalogue, query parameters, the response envelope, and usage examples. This document is the human-readable companion to the auto-generated OpenAPI schema and to the governing ADRs.
+This API gives partner organisations a forecast made by an ensemble of models from the VIEWS
+conflict forecasting system. For each outcome it forecasts, you also get the historical
+observations of that same outcome, the records the models were trained on: for example, recorded
+state-based violence deaths alongside the state-based violence forecast. You do not get the other
+data the models use as inputs.
 
-- **Resource model & surface:** [ADR-026](../ADRs/active/026_api_surface_and_resource_model.md)
-- **Authentication:** [ADR-027](../ADRs/active/027_authentication_and_per_key_isolation.md)
-- **Where the data comes from:** [ADR-028](../ADRs/active/028_terminal_consumer_boundary.md)
-- **Numerical scale (raw counts):** [ADR-024](../ADRs/active/024_raw_count_serving_contract.md)
-- **Output schema & column naming:** [ADR-025](../ADRs/active/025_fao_output_schema_and_naming.md)
-- **Column definitions (analyst-facing):** [data_dictionary.md](data_dictionary.md) — what every served column means + the three naming conventions
-- **Live OpenAPI:** `GET /openapi.json` · interactive docs at `GET /docs` (Swagger UI) and `GET /redoc`
+**An experimental API.** This is not the VIEWS public forecast; that one is published on the VIEWS
+website and public API. This API is more experimental by design. The benefit is more features
+sooner: today, global coverage and measures of uncertainty; soon, impact models; and in general
+newer models. The cost is more frequent change: which ensemble is used, and which models it
+combines, will change more often than in the public forecast. We will be as open and as early as we
+can about each change.
 
-> The interactive `/docs` page is generated from the running service and is always authoritative for exact parameter types. This file gives the conceptual map and stable examples.
+**We aim to keep this guide stable.** It explains how the API works. It is our sincere intent to
+change it as seldom as we can, so that you do not have to adapt. The list of columns lives in a separate page, the
+[data dictionary](data_dictionary.md), because it will change more often as we try out new
+summaries. Every change to either is recorded in the [changelog](CHANGELOG.md).
 
----
+- **Address:** `https://crafdapi.viewsforecasting.org`
+- **Your key:** send it with every request, in a request header named `X-API-Key`.
+- **Questions, or an older forecast:** contact VIEWS at views-platform@prio.org.
 
-## 1. Overview
+## Getting started
 
-crafdapi serves VIEWS conflict data to CRAF'd over HTTP. It is the **terminal consumer** of the VIEWS pipeline (ADR-028): it reads the latest artifacts produced upstream by the `un_crafd` post-processor from an Appwrite bucket, computes summaries, and serves them as JSON. It runs no models and applies no transforms — all values are **raw fatality counts** (ADR-024).
+**We recommend the bulk download.** It is usually faster, and less prone to error: everything in
+it comes from the same, most recent forecast.
 
-**Two data scopes (`category`):**
+The bulk file also lists every place id and name, every month and every column name the API uses.
+Use those if you do need a smaller slice.
 
-| Category | Meaning |
-|----------|---------|
-| `historical` | Observed conflict actuals (UCDP/GED-derived fatality counts). |
-| `forecast` | VIEWS probabilistic forecasts, as posterior sample distributions. |
+In the examples, `$CRAFD_KEY` stands for your key.
 
-Every quantity is reported per **violence type**: `sb` (state-based), `ns` (non-state), `os` (one-sided).
+## What you get
 
-**Base URL (production):** `https://crafdapi.viewsforecasting.org`
-**Local development:** `http://localhost:8000` (see the repository README for `uvicorn` startup).
+**One forecast: the latest.** A new forecast arrives once a month and replaces the previous one.
+Every answer says which month the forecast was made in. If a new forecast is late, you keep getting
+the last good one.
 
----
+**Outcomes.** Each forecast covers several outcomes. Today these are three types of conflict
+fatalities, as defined by the Uppsala Conflict Data Program
+([UCDP definitions](https://www.uu.se/en/department/peace-and-conflict-research/research/ucdp/ucdp-definitions)):
 
-## 2. Authentication
+| Outcome | Code |
+|---|---|
+| State-based violence | `sb` |
+| Non-state violence | `ns` |
+| One-sided violence (against civilians) | `os` |
 
-All data, analysis, file, provenance, and cache endpoints require an **`X-API-Key`** header whose value is your **Appwrite API key** (ADR-027). crafdapi delegates authentication and authorization to Appwrite: what you can read is exactly what your key is scoped to. The key must be sent over HTTPS. crafdapi never stores the raw key — it partitions per-caller caches by a truncated SHA-256 hash only.
+More outcomes may be added; each gets its own code.
+
+**Levels.** Every outcome is available at three levels:
+
+| Level | Code | A place is identified by |
+|---|---|---|
+| Grid cell (a square about 55 km across at the equator) | `grid` | its PRIO-GRID cell id, a number such as `148759` |
+| Admin 1 (the first level below country, such as a province) | `admin1` | its FAO GAUL 2024 admin-1 code, a number |
+| Country (GAUL calls this admin 0) | `country` | its FAO GAUL 2024 country code, a number such as `161` (Sudan) |
+
+Every row at the admin-1 and country levels also carries the country's name and its ISO 3166
+three-letter code (such as `SDN`), for joining with other data. GAUL 2024 numbers countries differently from the older GAUL 2015, so
+an older GAUL table gives the wrong country. The bulk file for a level lists
+every place id at that level, with its name.
+
+**Summary columns, not raw numbers.** In most places, in most months, there is little or no
+conflict, especially below country level. So an average or a single "expected" number of deaths is almost
+always close to zero. That is accurate, but it tells you little. It hides the chance of a bad
+month, which is often what matters most.
+
+So the models do not stop at one number. They produce a large set of possible futures for each
+place and month: quiet ones, typical ones, and rare, very bad ones. From that set we can say how
+likely the bad futures are, and how bad they could plausibly get.
+
+Technically, each possible future is a draw (a sample) from a probability distribution that the
+models estimate but that cannot be observed directly. So for each place and month there are many
+draws, not one number.
+
+You don't get the draws themselves: there are too many of them to send and to compute with
+quickly. You get columns that summarise them, for each place, month and outcome. For example:
+
+- **The chance of any deaths at all,** and **how many deaths there would be if there are any.**
+  Read these two together: two places can have the same chance of deaths, but very different
+  numbers if it happens.
+- **The chance of exceeding a level.** For example: "a 12% chance of more than 100 deaths".
+- **The expected number of deaths:** the average over all the draws. It is usually small, because
+  most draws have no deaths.
+- **A severe case.** The average of the worst 5% of the draws: what a bad month could realistically
+  look like.
+
+Which summaries are offered is not fixed. We will try out different summaries, so the columns
+above are examples, and any one of them may not be available at a given time. Every change is
+recorded in the [changelog](CHANGELOG.md), and the [data dictionary](data_dictionary.md) always
+lists the columns available now.
+
+For past months, the recorded number of deaths is in its own column, so you can compare the forecast
+with what actually happened. The recorded numbers are added once they have been published: the
+first forecast month never shows recorded deaths, because only a sliver of that month has been
+reported when the forecast is made.
+
+## Bulk download (the fast way)
+
+One ready-made file per outcome and level, in Parquet format (a compact table format read by
+pandas, R's `arrow`, and most data tools).
 
 ```
-X-API-Key: <your-appwrite-api-key>
+GET /bulk/{level}/{outcome}
 ```
 
-A missing key returns `422`. An invalid/unscoped key surfaces as an upstream Appwrite error.
-
----
-
-## 3. Response envelope
-
-Every JSON endpoint returns:
-
-```json
-{ "success": true, "data": { ... } }
-```
-
-Tabular payloads (`data.dataframe` or `data.hdi_map`) also carry `shape`, `columns`, and an echo of the resolved `parameters`. Errors are returned as HTTP error status codes with a JSON `{"detail": "..."}` body:
-
-| Status | Meaning |
-|--------|---------|
-| `422` | Missing/invalid parameter (e.g. unknown `category`, missing `X-API-Key`). |
-| `404` | No artifact of the requested category exists in the bucket. |
-| `413` | The selection is too large to render as JSON. See [Response size limit](#35-response-size-limit). |
-| `500` | Unhandled server/upstream error (`detail` carries the message). |
-
-### 3.5 Response size limit
-
-The `subset` and `hdi-map` routes estimate the size of the response **before building it**, and
-refuse with `413` above **512 MiB**. That admits roughly 320,000 historical rows, or 65,000 rows of
-a 32-draw forecast.
-
-The bound is in bytes rather than rows because a row is not a fixed cost: a historical row runs
-~1,625 B and a forecast row ~7,731 B, since the second carries a posterior draw per sample per
-target — and sample width varies per delivery, so a 32-draw run and a 1000-draw run differ by
-another factor of thirty. One row number could not be right for both.
-
-The estimate accounts for the filters you send, so **narrowing the request lowers it**: `time_ids`,
-`entity_ids` and `features` reduce the estimate directly, and `sample_idx` reduces it for forecasts.
-`aggregate=true` does **not**, because aggregation runs after the full-resolution frame is built —
-the request still costs what the pre-aggregation frame costs.
-
-The `413` body names the way through: filters, or the whole-table route for that category
-(`GET /data/forecast/bulk` for forecasts; `GET /provenance/historical` then the file download for
-historical). **Nothing is unreachable because of this limit** — it bounds one rendering, not the data.
-
-Operators can override the budget with the `CRAFDAPI_MAX_RESPONSE_BYTES` environment variable
-(bytes). An unset, unparseable, or non-positive value falls back to the 512 MiB default.
-
----
-
-## 4. Endpoint catalogue
-
-### 4.1 Data & analysis (the resource grammar)
-
-The levelled surface follows `/{level}/{kind}/{category}/{operation}` (ADR-026):
-
-- **`level`** ∈ `pg` · `country` · `gaul0` · `gaul1` · `gaul2`
-- **`kind`** ∈ `data` (raw rows) · `analysis` (computed summaries)
-- **`category`** ∈ `historical` · `forecast`
-- **`operation`** ∈ `subset` (for `data`) · `hdi-map` (for `analysis`)
-
-| Method & Path | Purpose |
-|---------------|---------|
-| `GET /{level}/data/{category}/subset` | Rows of the latest dataframe at `level`, filtered by query params. |
-| `GET /{level}/analysis/{category}/hdi-map` | MAP + HDI summaries at `level`. |
-
-`pg` is the native PRIO-GRID grain; `country`/`gaul0`/`gaul1`/`gaul2` are aggregation levels (pass `aggregate=true` to roll up). Forecast aggregation uses the conservation-correct joint-sum (`HDI(Σ) ≠ ΣHDI`).
-
-### 4.2 Provenance
-
-| Method & Path | Purpose |
-|---------------|---------|
-| `GET /provenance/{category}` | Lineage record of the currently-served artifact (file id, hash, created-at, declared upstream source/pipeline, methodology version) — without fetching the dataframe. `category` ∈ `forecast`/`historical`. |
-
-### 4.3 File access (raw Appwrite passthrough)
-
-| Method & Path | Purpose |
-|---------------|---------|
-| `GET /files/{bucket_id}` | List files in a bucket (`limit` 1–1000, `offset`, `search`). |
-| `GET /files/{bucket_id}/{file_id}/info` | File metadata. |
-| `GET /files/{bucket_id}/{file_id}/download` | Download the raw artifact (native media type, e.g. parquet). |
-| `GET /files/{bucket_id}/{file_id}/cached` | Serve the file from the local cache if present. |
-
-### 4.4 Cache & service
-
-| Method & Path | Purpose |
-|---------------|---------|
-| `GET /cache/stats` | Per-key cache statistics. |
-| `DELETE /cache` | Clear the caller's cache partition. |
-| `GET /ping` | **Unauthenticated liveness probe** — returns `200 {"status":"ok"}` iff the process is serving HTTP. No API key, no Appwrite dependency; the target for external uptime monitors. |
-| `GET /version` | **Unauthenticated deployed-version probe** — `{"version": …, "deployed_tag": …}`: the installed package version and the pinned deploy tag (when the S4 deploy gate sets one). For verifying remotely which version is live. |
-| `GET /health` | **Readiness check** — verifies the Appwrite connection and returns cache stats. **Requires an `X-API-Key` header.** |
-| `GET /` | Self-describing index of endpoints. |
-
----
-
-## 5. Query parameters
-
-### `data/.../subset`
-
-| Param | Type | Default | Meaning |
-|-------|------|---------|---------|
-| `time_ids` | comma-separated ints | all | Months (VIEWS `month_id`) to include. |
-| `entity_ids` | comma-separated | all | Entity ids to include (strings for `country`, ints otherwise). |
-| `features` | comma-separated strings | all | Feature/column names to include. |
-| `sample_idx` | comma-separated ints | all | Posterior sample indices to include. |
-| `with_metadata` | bool | `true` | Join the GAUL geographic metadata. |
-| `aggregate` | bool | `false` | Roll up to `level` (joint-sum for forecasts). |
-| `force_refresh` | bool | `false` | Bypass the cache and re-fetch the latest artifact. |
-
-### `analysis/.../hdi-map`
-
-All of the above **plus**:
-
-| Param | Type | Default | Meaning |
-|-------|------|---------|---------|
-| `alpha` | float | `0.9` | Credible mass for the HDI (e.g. `0.9` = 90% HDI). |
-| `enforce_non_negative` | bool | `false` | Clip MAP estimates at zero (counts cannot be negative). |
-
----
-
-## 6. Examples
-
-Latest forecast (full, PRIO-GRID grain):
+Example: state-based violence for every admin-1 region.
 
 ```bash
-curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
-  "https://crafdapi.viewsforecasting.org/pg/data/forecast/subset?time_ids=559"
+curl -H "X-API-Key: $CRAFD_KEY" -o sb_admin1.parquet \
+  https://crafdapi.viewsforecasting.org/bulk/admin1/sb
 ```
 
-Forecast HDI + MAP aggregated to GAUL admin-1, 90% HDI, for two months:
+A file holds the same table as a slice with no options: every place and every month. Months before
+the forecast are recorded months: they have the recorded deaths, and their summary columns are empty.
+Forecast months have the summary columns, and their recorded-deaths column is empty. To keep only
+one kind, filter on whichever column is filled, or on `month_id`.
+
+The month the forecast was made in is sent with the file, in the response header
+`X-Forecast-Made-In` (for example `2026-07`). It is also the first month whose forecast columns are
+filled.
+
+## Slices (a smaller piece)
+
+For a few places or months, ask for a slice. You get JSON back.
+
+```
+GET /slice/{level}/{outcome}?places=...&months=...&columns=...
+```
+
+| Option | Meaning | If left out |
+|---|---|---|
+| `places` | Comma-separated place ids at that level | All places |
+| `months` | Comma-separated months, written year-month: `2027-01` is January 2027 | All months |
+| `columns` | Comma-separated column names | All columns |
+
+Place names and the month are always included. Every row has a `month` column written the same
+way, `2027-01`, and VIEWS' own month number, `month_id`. Grid rows also give the cell's centre,
+`latitude` and `longitude`. The answer also says which month the forecast was made in, as
+`forecast_made_in` (for example `2026-07`).
+
+Example: state-based violence in Sudan and South Sudan, for two months, only the chance of more
+than 25 deaths.
 
 ```bash
-curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
-  "https://crafdapi.viewsforecasting.org/gaul1/analysis/forecast/hdi-map?aggregate=true&alpha=0.9&time_ids=541,542"
+curl -H "X-API-Key: $CRAFD_KEY" \
+  "https://crafdapi.viewsforecasting.org/slice/country/sb?places=161,160&months=2027-01,2027-02&columns=sb_p_gt25"
 ```
 
-Country-level historical subset for one country (string entity id):
+## If something goes wrong
 
-```bash
-curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
-  "https://crafdapi.viewsforecasting.org/country/data/historical/subset?aggregate=true&entity_ids=SDN"
-```
-
-Provenance of the live forecast artifact:
-
-```bash
-curl -H "X-API-Key: $APPWRITE_DATASTORE_API_KEY" \
-  https://crafdapi.viewsforecasting.org/provenance/forecast
-```
-
----
-
-## 7. Versioning & change policy
-
-The API surface, the column schema, and the numerical scale are **CRAF'd-facing** contracts (this repo serves CRAF'd; the FAO instance is views-faoapi). Changes that alter published columns, names, or values are governed by [ADR-023](../ADRs/active/023_rebaselining_published_forecasts_governance.md) (re-baselining). The current schema/naming convention and its amendment of Release Note 01 are described in [ADR-025](../ADRs/active/025_fao_output_schema_and_naming.md). No `/v1` URL prefix is applied yet (see ADR-026, Open Questions).
-
----
-
-## 8. See also
-
-- Repository [README](../../README.md) — installation, configuration, local startup.
-- [ADRs index](../ADRs/active/) — all architecture decisions.
-- Quickstart notebooks under `notebooks/` — worked retrieval/plotting examples.
+| Answer | Meaning |
+|---|---|
+| `401` | The key is missing, wrong, or no longer valid. Contact VIEWS. |
+| `404` | That level or outcome does not exist. Check the codes above. |
+| `413` | The slice asks for too much at once. Ask for fewer places or months, or use the bulk download for the same level and outcome. |
+| `422` | An option is written wrong, for example a month not written `2027-01`. |
+| `503` | The forecast, or the recorded deaths, are not available right now. Try again later. |
+| `500`, `502`, `504` or no answer | A problem on our side. Try again later; contact VIEWS if it lasts. |

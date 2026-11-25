@@ -1,6 +1,8 @@
 # ADR-026: API Surface and Resource Model
 
-**Status:** Accepted
+**Status:** Superseded (2026-11-18) by the service specification, `docs/SERVICE_SPECIFICATION.md` (bulk files and slices). 2026-11-20: the levels `gaul0` and `gaul2` were removed (#205). Later on 2026-11-20 the whole `/{level}/{kind}/{category}/{operation}` grammar below was replaced by one slice route, `/slice/{level}/{outcome}` with levels `grid`, `admin1`, `country` and the options `places`, `months`, `columns` (#204, #206); the bulk route `/data/forecast/bulk` remained until #203. 2026-11-21: that bulk route was replaced by nine bulk files, `/bulk/{level}/{outcome}` (ADR-043). Nothing below describes a route the service still has.
+
+> Earlier status: Accepted
 **Date:** 2026-06-26
 **Deciders:** Simon (PRIO), Claude Code
 **Consulted:** ADR-024 (raw-count serving), ADR-025 (output schema & naming), ADR-022 (deployment strategy), ADR-008 (observability & explicit failure), ADR-018 (SDK response normalization), the live route table in `src/views_crafdapi/managers/api.py`
@@ -41,6 +43,9 @@ The data/analysis surface follows one URL grammar:
 
 - **`data/.../subset`** returns the rows of the latest dataframe at `level`, filtered by the query parameters.
 - **`analysis/.../hdi-map`** returns computed MAP + HDI summaries at `level`.
+> **Amended 2026-11-20 (#205):** `gaul0` and `gaul2` are removed; `level ∈ { pg, country, gaul1 }`.
+> **Amended again 2026-11-20 (#204, #206):** this grammar is gone. The service has one slice route, `/slice/{level}/{outcome}` (see the status note).
+
 - The **`pg`** prefix is the native PRIO-GRID grain; `country`/`gaul0`/`gaul1`/`gaul2` are aggregation levels. Aggregation is performed by the conservation-correct joint-sum (the `aggregate=true` parameter; cf. C-70, the forecast `forecast/aggregate` path).
 
 ~~Two **non-levelled** convenience endpoints return the full latest dataframe of a category: `/data/historical/latest` and `/data/forecast/latest`.~~
@@ -52,8 +57,8 @@ The data/analysis surface follows one URL grammar:
 Outside the data grammar, the API also exposes:
 
 - **`GET /provenance/{category}`** — the lineage record of the currently-served artifact (which file, from which upstream source/pipeline) without fetching the heavy dataframe (C-86, ADR-028).
-- **File access** — `GET /files/{bucket_id}`, `/files/{bucket_id}/{file_id}/info`, `/files/{bucket_id}/{file_id}/download`, `/files/{bucket_id}/{file_id}/cached` — direct, authenticated passthrough to the underlying Appwrite bucket (raw parquet retrieval).
-- **Cache** — `GET /cache/stats`, `DELETE /cache` (per-key; ADR-011, ADR-027).
+- **File access** — `GET /files/{bucket_id}`, `/files/{bucket_id}/{file_id}/info`, `/files/{bucket_id}/{file_id}/download` — direct, authenticated passthrough to the underlying Appwrite bucket (raw parquet retrieval).
+- **Cache** — no routes. `/files/{b}/{f}/cached`, `GET /cache/stats` and `DELETE /cache` were removed 2026-11-11: the file cache is shared by every key, so they answered a revoked key and let one caller read or empty everyone's cache (C-269, þing 04 D7).
 - **`GET /health`** and **`GET /`** (root: a self-describing endpoint index).
 
 ### 4. Uniform JSON response envelope

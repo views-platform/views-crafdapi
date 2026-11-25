@@ -1,12 +1,11 @@
 # CRAF'd Forecast API (views-crafdapi)
 
-FastAPI service for retrieving and analyzing CRAF'd prediction data stored in Appwrite. It provides:
-- Retrieval of historical and forecast prediction data, filtered by month, entity and feature
-- Flexible subsetting by time, entity, features, and samples
-- Computation of Highest Density Intervals (HDI) and MAP estimates
-- Aggregation to country and GAUL administrative levels
-- Appwrite file browsing and cache management
-- Geospatial metadata enrichment based on PRIO-GRID
+FastAPI service that serves partner organisations one forecast, the latest good one, from data
+stored in Appwrite (docs/SERVICE_SPECIFICATION.md). It provides:
+- A bulk download of the forecast
+- Slices of one outcome at one level (grid cell, admin 1, country), by places, months and columns
+- Summary columns (chances of more than 0, 25, 100, 500 and 1,000 deaths; the mean; the mean and median if any; a severe case; the number of draws) and the recorded deaths; never samples
+- Admin-1 and country values from the cells' samples summed first, then summarised
 
 This repository is part of the views-platform and focuses on exposing CRAF'd predictions via HTTP.
 
@@ -14,11 +13,11 @@ This repository is part of the views-platform and focuses on exposing CRAF'd pre
 
 This API is a consumer on the shared Appwrite seam and conforms to **The Appwrite Seam Contract**, referenced **by URL at a published tag — never `main`** (`joining_the_seam.md §1`):
 
-<https://github.com/views-platform/views-appwrite/blob/platform-001-v1.2.0/docs/ADRs/platform/appwrite_seam_contract.md>
+<https://github.com/views-platform/views-appwrite/blob/appwrite-seam-v1.9.0/docs/ADRs/platform/appwrite_seam_contract.md>
 
-`platform-001-v1.2.0` is the newest *published* tag; `main` carries the v1.3.0 rename (untagged until the operator cuts it — views-appwrite#21). Moving to a newer version is a deliberate act: read the diff, accept it, repoint. Coordinates are read from the pinned registry, never copied; this API writes its **own** thin Appwrite client (WET-before-DRY — it must not import `views_pipeline_core.modules.{appwrite,datastore}`).
+The pin is `appwrite-seam-v1.9.0`, the same tag `seam_contract.REGISTRY_PIN_TAG` binds in CI (below). Moving to a newer version is a deliberate act: read the diff, accept it, repoint. The move from `v1.5.2` to `v1.9.0` (2026-11-22, #231) was required, not routine: ADR-044 serves every partner one loaded copy, which the contract allows only from `v1.9.0` (§5.8, the "uniform entitlement" mode). Coordinates are read from the pinned registry, never copied; this API writes its **own** thin Appwrite client (WET-before-DRY — it must not import `views_pipeline_core.modules.{appwrite,datastore}`).
 
-**Served-document-name binding (ADR-017 D2).** The store-document `name` this API filters every query on is declared once in `src/views_crafdapi/seam_contract.py` (`CONSUMER_DOCUMENT_NAME = "un_crafd"`) and bound in CI against the registry's `[contract.UNCRAFD_CONSUMER_DOCUMENT_NAME]` declaration, read at the **immutable tag `appwrite-seam-v1.5.2`** (the pin lives in one place — `REGISTRY_PIN_TAG`; the UNCRAFD row exists only from v1.5.2). This closes the invisible-delivery failure (a producer/consumer name drift returns empty with no error — ADR-017 §1). Changing the name is a **contract amendment**: bump the registry edition and re-pin *both* sides, never one alone. Consumer half of views-postprocessing ADR-017 §5; mirrors views-faoapi#379.
+**Served-document-name binding (ADR-017 D2).** The store-document `name` this API filters every query on is declared once in `src/views_crafdapi/seam_contract.py` (`CONSUMER_DOCUMENT_NAME = "un_crafd"`) and bound in CI against the registry's `[contract.UNCRAFD_CONSUMER_DOCUMENT_NAME]` declaration, read at the **immutable tag `appwrite-seam-v1.9.0`** (the pin lives in one place — `REGISTRY_PIN_TAG`; the UNCRAFD row exists only from v1.5.2). This closes the invisible-delivery failure (a producer/consumer name drift returns empty with no error — ADR-017 §1). Changing the name is a **contract amendment**: bump the registry edition and re-pin *both* sides, never one alone. Consumer half of views-postprocessing ADR-017 §5; mirrors views-faoapi#379.
 
 ## Features
 
@@ -26,7 +25,7 @@ This API is a consumer on the shared Appwrite seam and conforms to **The Appwrit
 - Robust file parsing (parquet, CSV, JSON, pickle, feather)
 - Posterior analysis: MAP + empirical HDIs via `PosteriorDistributionAnalyzer`
 - Priogrid-to-country/GAUL mapping and metadata joins
-- Subset and aggregate results at levels: pg, country, gaul1, gaul2
+- Subset and aggregate results at three levels: grid cell (`pg`), country and admin 1 (`gaul1`)
 
 ## Requirements
 
@@ -51,17 +50,20 @@ pip install -e .
 
 The API reads its configuration from the environment, loaded in `CrafdApiManager.__init__`. **Where that comes from differs between running locally and running deployed** — the original text here named a third location (`views-models`) that is neither, which is #28:
 
-| | Coordinates (`APPWRITE_*`) | The one secret (`APPWRITE_DATASTORE_API_KEY`) |
+| | Coordinates (`APPWRITE_*`) | Keys |
 |---|---|---|
-| **Local dev / notebooks** | `.env` at the root of **this** repo, resolved via `pyprojroot.here()` (`managers/model.py`); copy `.env.example` | same `.env` |
-| **Deployed** (`deployment/RELEASE_RUNBOOK.md`) | the **views-appwrite registry** (`APPWRITE_REGISTRY`), written into `.env.crafdapi` | **exported into the environment by the operator** — *"never from anyone's `.env`"* |
+| **Local dev / notebooks** | `.env` at the root of **this** repo, resolved via `pyprojroot.here()` (`managers/model.py`); copy `.env.example` | a reader key from the `crafdapi` project in `CRAFD_KEY`, in the same `.env` |
+| **Deployed** (`deployment/RELEASE_RUNBOOK.md`) | the **views-appwrite registry** (`APPWRITE_REGISTRY`), written into `.env.crafdapi` | the service's own read key in `.env.crafdapi-server-key` (section 5); the settings file holds no key (#263; a server set up earlier is rebuilt at its next release, `RELEASE_RUNBOOK.md` section 1) |
+
+Creating, sending, renewing and revoking a partner's key: `deployment/PARTNER_KEYS.md`.
+Setting up and checking the two Better Stack monitors: `deployment/MONITORING.md`.
 
 `views-models/.env` holds the key the **postprocessor** delivers with. It is a different consumer of the same secret, not this API's config source. Set the following for local work:
 
 ```bash
 # .env
-APPWRITE_ENDPOINT=https://cloud.appwrite.io/v1
-APPWRITE_DATASTORE_PROJECT_ID=your-project-id
+APPWRITE_ENDPOINT=https://fra.cloud.appwrite.io/v1
+APPWRITE_CRAFD_PROJECT_ID=your-project-id
 APPWRITE_CRAFD_BUCKET_ID=predictions-bucket-id
 APPWRITE_CRAFD_BUCKET_NAME=predictions-bucket-name
 APPWRITE_CRAFD_COLLECTION_ID=file-metadata-collection-id
@@ -111,134 +113,42 @@ Every endpoint requires `X-API-Key: <your appwrite key>`. The server validates k
 
 > **Full API reference:** see [`docs/api/README.md`](docs/api/README.md) for the consolidated endpoint catalogue, query parameters, response envelope, and examples — and the governing ADRs ([026 surface](docs/ADRs/active/026_api_surface_and_resource_model.md), [027 auth](docs/ADRs/active/027_authentication_and_per_key_isolation.md), [028 data source](docs/ADRs/active/028_terminal_consumer_boundary.md)). Interactive docs are served at `/docs` (Swagger) and `/redoc`.
 
-Root
-- GET `/` — lists endpoints and usage note
-
 Health
-- GET `/health` — checks Appwrite connectivity and cache stats
+- GET `/health` — checks the store connection and the age of the served forecast
 
-Subset (by level)
-- GET `/{pg|country|gaul1|gaul2}/data/historical/subset`
-- GET `/{pg|country|gaul1|gaul2}/data/forecast/subset`
+Bulk download
+- GET `/bulk/{level}/{outcome}` — the whole table of one outcome at one level, one Parquet file: what a slice with no options returns, built once per forecast
 
-HDI-MAP (by level)
-- GET `/{pg|country|gaul1|gaul2}/analysis/historical/hdi-map`
-- GET `/{pg|country|gaul1|gaul2}/analysis/forecast/hdi-map`
+Slice
+- GET `/slice/{level}/{outcome}?places=...&months=...&columns=...`
+- `level`: `grid`, `admin1` or `country`. `outcome`: `sb`, `ns` or `os` today.
+- `places`: place ids at that level, comma-separated (PRIO-GRID cell ids, GAUL admin-1 codes, GAUL country codes). `months`: year-month, such as `2027-01`. `columns`: summary column names. Each one left out means all.
+- Each row is one place in one month: the place's id and names (grid rows also `latitude`, `longitude`), `month`, `month_id`, then the outcome's summary columns. Forecast months carry the summaries; months before the forecast carry the recorded deaths in `{outcome}_actual` (the first forecast month never does: it is barely reported yet, register C-293). Never samples.
+- No other options exist (docs/SERVICE_SPECIFICATION.md). An option given twice (`?places=1&places=2`) is refused; write it once, comma-separated.
 
-> **Size limit.** The subset and hdi-map routes estimate the response before building it and
-> return `413` above 512 MiB, with a body naming how to narrow the request or fetch the whole
-> table instead. Filters lower the estimate; `aggregate=true` does not. Override with
-> `CRAFDAPI_MAX_RESPONSE_BYTES`. See [docs/api/README.md](docs/api/README.md#35-response-size-limit).
+> **History.** A slice reaching months before the forecast needs the recorded deaths. If they
+> cannot be loaded, it answers `503` rather than an empty `{outcome}_actual` column. A slice of
+> forecast months only does not read the history. A refused key stays `401`.
 
-Files
-- GET `/files/{bucket_id}`
-- GET `/files/{bucket_id}/{file_id}/info`
-- GET `/files/{bucket_id}/{file_id}/download?download=true|false&use_cache=true|false`
-- GET `/files/{bucket_id}/{file_id}/cached`
+> **Size limit.** Before any work the slice estimates two sizes, its answer (rows x columns) and
+> its work (the cell-months it reads, with every forecast draw), and returns `413` if either is
+> above 512 MiB, saying to ask for fewer places or months. Override with
+> `CRAFDAPI_MAX_RESPONSE_BYTES`.
 
-Cache
-- GET `/cache/stats`
-- DELETE `/cache?bucket_id=&older_than_hours=`
-
-## Query Parameters and Headers
-
-Common
-- Header: `X-API-Key` (required)
-- `force_refresh` (bool) — bypass per-key cache and re-fetch latest
-
-Subset/HDI-MAP parameters
-- `time_ids` — comma-separated integers (e.g., `252,253`)
-- `features` — comma-separated names (e.g., `pred_lr_ged_sb`)
-- `sample_idx` — comma-separated integers (e.g., `0,1,2`)
-- `entity_ids` — country level: ISO3 strings (e.g., `USA,FRA`); others: integers
-- `with_metadata` — bool (default true)
-- `aggregate` — bool (default false)
-- `level` — only for programmatic calls; REST path already encodes level
-- `alpha` — float in (0,1) for HDI (default 0.9)
-- `enforce_non_negative` — bool for MAP floor at 0
-
-Files
-- `limit`, `offset`, `search` for listing
-- `use_cache`, `download` for file download
-- `bucket_id`, `file_id` path params
-
-## Response Shapes
-
-Latest endpoints
+Response
 ```json
 {
-  "success": true,
-  "data": {
-    "dataframe": [ { "...": "..." } ],
-    "shape": [rows, cols],
-    "columns": ["col1", "col2", "..."],
-    "file_id": "appwrite-file-id",
-    "timestamp": 1732630000.123,
-    "category": "historical"
-  }
+  "level": "country",
+  "outcome": "sb",
+  "columns": ["country_code", "country_name", "country_iso3", "month", "month_id", "sb_p_gt25"],
+  "rows": [{"country_code": 161, "country_name": "Sudan", "country_iso3": "SDN", "month": "2027-01", "month_id": 565, "sb_p_gt25": 0.84}]
 }
 ```
 
-Subset endpoints
-```json
-{
-  "success": true,
-  "data": {
-    "dataframe": [ { "...": "..." } ],
-    "shape": [rows, cols],
-    "columns": ["..."],
-    "category": "forecast",
-    "level": "country",
-    "parameters": {
-      "time_ids": [252,253],
-      "features": ["pred_lr_ged_sb"],
-      "sample_idx": [0,1],
-      "entity_ids": ["USA","FRA"],
-      "with_metadata": true,
-      "aggregate": true
-    }
-  }
-}
-```
-
-HDI-MAP endpoints
-- Return combined HDI lower/upper and MAP columns per requested variable, optionally joined with metadata.
-
-## Examples
-
-Curl (macOS)
+Example
 ```bash
-# Historical subset at PG level (force refresh)
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/pg/data/historical/subset?time_ids=540&force_refresh=true"
-
-# Forecast subset at PG level for specific months and features
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/pg/data/forecast/subset?time_ids=252,253&features=pred_lr_ged_sb&sample_idx=0,1&with_metadata=true"
-
-# Country-level aggregation for HDI/MAP
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/country/analysis/forecast/hdi-map?alpha=0.9&entity_ids=USA,FRA&aggregate=true"
-
-# List files in a bucket
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_CRAFD_BUCKET_ID?limit=50&search=forecast"
-
-# Download a file inline
-curl -H "X-API-Key: $APPWRITE_API_KEY" "http://localhost:8080/files/$APPWRITE_CRAFD_BUCKET_ID/<file_id>/download?download=false"
-```
-
-Python (requests)
-```python
-import requests
-
-API = "http://localhost:8080"
-headers = {"X-API-Key": "your-key"}
-
-r = requests.get(f"{API}/country/data/historical/subset", headers=headers, params={
-  "time_ids": "252,253",
-  "features": "pred_lr_ged_sb",
-  "entity_ids": "USA,FRA",
-  "aggregate": "true",
-  "with_metadata": "true"
-})
-print(r.json())
+curl -H "X-API-Key: $CRAFD_KEY" \
+  "http://localhost:8080/slice/country/sb?places=161,160&months=2027-01,2027-02&columns=sb_p_gt25"
 ```
 
 ## Caching
@@ -246,7 +156,7 @@ print(r.json())
 - Managers per API key are cached (`_manager_cache`)
 - Latest dataframe per API key and category cached for 4 hours (`_dataframe_cache`, `TTLCache(ttl=4*3600)`)
 - Global file bytes cache keyed by Appwrite file_id (`_file_cache`)
-- Clear caches via DELETE `/cache`
+- Caches are cleared by restarting the service. There is no clearing endpoint: the file cache is shared by every key, so no single caller may empty it (C-269)
 
 ## Geospatial Mapping
 
@@ -255,7 +165,7 @@ print(r.json())
   - PRIO-GRID
   - GAUL Level 1/2
 - `ForecastDataset` joins/aggregates results using metadata columns and supports:
-  - level: `country|gaul1|gaul2`
+  - level: `country|gaul1`
   - aggregation: sum for pred_* targets, first for constant metadata
 
 ## Development

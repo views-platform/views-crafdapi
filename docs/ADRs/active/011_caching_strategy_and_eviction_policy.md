@@ -24,7 +24,7 @@
 
 The system maintains a three-tier cache architecture with escalating persistence:
 
-1. **In-memory dicts** (`_manager_cache`, `_dataframe_cache`, `_file_cache` -- formerly at `managers/api.py:190-196`, now bounded caches at `api.py:292-295`) --- plain Python dicts keyed by API key hash and category. None had eviction policies, size limits, or LRU behavior. They grew monotonically with distinct API keys and file IDs, cleared only on explicit `DELETE /cache` or server shutdown.
+1. **In-memory dicts** (`_manager_cache`, `_dataframe_cache`, `_file_cache` -- formerly at `managers/api.py:190-196`, now bounded caches at `api.py:292-295`) --- plain Python dicts keyed by API key hash and category. None had eviction policies, size limits, or LRU behavior. They grew monotonically with distinct API keys and file IDs, cleared only on explicit `DELETE /cache` or server shutdown. *(2026-11-11: `DELETE /cache` and `/cache/stats` were removed, C-269 — the file cache is shared by every key. A restart is now the only way to clear the caches, and the question below is answered: no per-caller stats route.)*
 
 2. **Disk pickle with FileLock** (formerly inline in `api.py`, now extracted to `managers/disk_cache.py` as `CrafdDiskCacheManager`) --- entire `ForecastDataset` objects serialized via `pickle.dump()` with `HIGHEST_PROTOCOL`. A `.json` sidecar stores `file_id`, `timestamp`, `rows`, `columns`, `ttl_days`, and now `schema_version` (`disk_cache.py:145`). TTL is 3.5 weeks (`disk_cache.py:40`), reasonable for monthly forecast data.
 
@@ -60,6 +60,7 @@ Adopt bounded, TTL-aware, versioned caching across all three tiers:
 - Silent pickle deserialization failures mask the difference between "cache expired normally" and "deployment changed class definitions." These two cases require different operational responses.
 - `cachetools` is already in the dependency tree (`pyproject.toml:24`). Using it eliminates manual eviction logic and resolves the unused-dependency concern simultaneously.
 - The 3.5-week disk TTL is appropriate for monthly forecast data and does not need to change. The new schema version mechanism is orthogonal to TTL.
+- **Amended 2026-10-16 (#157, C-360):** the disk TTL bounds *normal* serving only. An expired entry is now a miss that stays on disk, not a deletion: the slot is the only copy of the last-good run, and the ADR-033 §6 fallback — bounded by the 45-day freshness SLA — reads it with the TTL waived. Deleting on expiry had cut that 45-day window to 24.5 days — through the fallback's own read when a new run was refused, and through the normal disk-tier read when no manifest existed. The fallback also refuses a last-good run the operator has quarantined or left off an active approval allowlist (C-71). A schema-version mismatch still deletes. Writes now remove the old meta before replacing the data and write the new meta atomically, so a crash mid-write can only produce a miss (C-361).
 
 ---
 

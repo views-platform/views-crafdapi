@@ -1,33 +1,18 @@
-# The production systemd unit for the CRAF'd Forecast API (epic #184, S3+S4).
+# The systemd service for the CRAF'd forecast API.
 #
-# Replaces the interim unit from the 2026-06-29 outage recovery (which ran from a
-# personal account). This one runs as the dedicated service account, and every
-# start passes the deploy gate (checkout-deploy-tag.sh), so what serves is always
-# exactly the tag named in ~/.views-crafdapi-deploy-tag.
-#
-# Install:  sudo cp deployment/views-crafdapi.service /etc/systemd/system/
-#           sudo systemctl daemon-reload && sudo systemctl enable --now views-crafdapi
-# Logs:     sudo journalctl -u views-crafdapi -f
-# Deploy:   echo vX.Y.Z > ~views-crafdapi-deploy/.views-crafdapi-deploy-tag
-#           sudo systemctl restart views-crafdapi
+# It runs as the service account. Every start first runs the deploy gate
+# (scripts/checkout-deploy-tag.sh), so what serves is always the tag named in
+# ~/.views-crafdapi-deploy-tag. How to release, restart and read the log:
+# deployment/RELEASE_RUNBOOK.md.
 
 [Unit]
 Description=VIEWS CRAF'd Conflict Forecast API
 After=network-online.target
 Wants=network-online.target
 
-# Bound the restart loop. These are [Unit] directives, NOT [Service] — they moved in systemd 229
-# and are silently ignored if placed under [Service], which would make this hardening a no-op
-# that looks present. Ubuntu 24.04 ships systemd 255. Guarded by
-# tests/test_deployment_artifacts.py so a future edit cannot quietly move them back.
-#
-# Sizing is a trade, not a maximum. The gate's refusals are deterministic and will never
-# succeed on retry, so stopping early costs nothing there. But a *transient* failure — a DNS
-# blip on `git fetch --tags` — does recover, and an unbounded loop recovers from it unattended
-# while a bound turns it into "down until someone runs `systemctl start`". A failing attempt
-# cycles in ~7 s (≈2 s to fail + RestartSec=5), so 30 attempts is ≈3.5 minutes of retrying:
-# long enough that a real blip self-heals, short enough that a broken release stops thrashing
-# and shows `failed` instead of `activating` forever.
+# Stop retrying after 30 failed starts in 10 minutes (about 3.5 minutes of retrying). Then the
+# service shows `failed` instead of retrying a bad tag forever. These two lines must stay under
+# [Unit]: systemd ignores them under [Service].
 StartLimitIntervalSec=600
 StartLimitBurst=30
 
@@ -36,67 +21,35 @@ Type=exec
 User=views-crafdapi-deploy
 WorkingDirectory=/home/views-crafdapi-deploy/views-crafdapi
 EnvironmentFile=/home/views-crafdapi-deploy/.env.crafdapi
+# The server's own read key (crafdapi-server, ADR-044), in a file of its own, apart from the other
+# settings. The leading "-" lets the service start without it: it then loads nothing, answers 503,
+# and logs why. Written by `bootstrap.sh serverkey`.
+EnvironmentFile=-/home/views-crafdapi-deploy/.env.crafdapi-server-key
 ExecStartPre=/usr/bin/env bash /home/views-crafdapi-deploy/views-crafdapi/scripts/checkout-deploy-tag.sh
 ExecStart=/home/views-crafdapi-deploy/views-crafdapi/.venv/bin/uvicorn \
     views_crafdapi.managers.api:create_app \
-    --factory --host 127.0.0.1 --port 8001
-# A *successful* start is ~3 s (measured 2026-08-21: stop 10:06:21, gate 10:06:23, listening
-# 10:06:24), so Restart=always costs nothing on the happy path. What it used to cost was the
-# unhappy one: the deploy gate's refusals are DETERMINISTIC — a tag absent from origin, a
-# tag/version mismatch, a lockfile `uv sync --frozen` rejects — so retrying them every 5 s
-# retries forever. The service 502s indefinitely and `systemctl status` reports `activating`,
-# never `failed`, which is how the 2026-08-15 tag-drift incident ran 47 minutes.
-#
-# Bounded now (see [Unit] above): the unit enters `failed` after ~3.5 minutes of refusals.
-# It is still down either way — the difference is that it is *visibly* down, stops thrashing
-# git/uv against the network, and `systemctl status` names the state. A transient failure
-# (a blip fetching tags) still recovers inside the burst.
+    --factory --host 127.0.0.1 --port 8001 --timeout-graceful-shutdown 30
 Restart=always
 RestartSec=5
 
-# Without this a hung `uv sync` or `git fetch` inside ExecStartPre blocks the start forever, and
-# the burst limit above never trips because no attempt ever *finishes*. 180 s is ~60x the
-# measured 3 s start — generous enough never to fire on a healthy deploy, and the only thing
-# that converts a hang into a countable failure.
+# A start that hangs (for example fetching tags) counts as failed after 3 minutes. A normal start
+# takes about 3 seconds.
 TimeoutStartSec=180
+# A stop (#236): uvicorn gives open requests up to 30 s (--timeout-graceful-shutdown), then the
+# lifespan shutdown waits up to 60 s for a running forecast load (ADR-044); after that the process
+# ends at once. That is normally 90 s at most, systemd's default limit exactly, so allow 120 s. A
+# request that blocks the server (a bulk file built on request) can push a stop past it; systemd
+# then kills it.
+TimeoutStopSec=120
 
-# Memory ceiling (C-262 / #99). Derived from a MEASURED cold start, not a steady state — that
-# distinction is the whole of C-263: crafd's steady state is 3.7 G and its cold start is 7.3 G,
-# so a ceiling sized from the former kills the service on every restart. Measured 2026-08-21 on
-# v0.5.1, with the historical value-dirs cleared first so the streamed ingest actually ran
-# (without that the disk cache serves the previous value-dir and the number is meaningless —
-# C-282):
-#
-#     cold-start peak 7.3 G   steady 3.7 G   box 22 GiB   views-faoapi 4.8 G observed
-#
-# The box is **22 GiB with no swap** (`free -g`, 2026-08-21), and views-faoapi's unit declares
-# MemoryMax=11G. That is the binding constraint, not our own headroom: 11 + 11 = 22 GiB is the
-# whole machine with nothing for the OS, nginx or page cache, and with zero swap, reaching it is
-# an immediate OOM rather than a slowdown. views-faoapi#368 sized its pair from "24 GB - 2 GB OS
-# = 22 GB -> 11 GB each"; the box is 22 GiB, so that reserve does not exist.
-#
-# So the pair has to sum to ~20 GiB, and crafd takes the smaller share because crafd is the one
-# with a MEASURED number: 7.3 G cold, against faoapi's believed ~10 G which is still unmeasured
-# (views-faoapi#432).
-#
-#     crafd 9G + faoapi 11G = 20 GiB, leaving 2 GiB for the OS and page cache
-#
-# MemoryMax=9G is 23% above the measured 7.3 G peak. MemoryHigh=8G is 10% above — narrow, and
-# deliberately so: High only applies reclaim pressure, and crafd's peak is dominated by
-# file-backed pages (the mmap'd value store) that the kernel can drop cheaply. A hard cap is the
-# thing that must not be tight; a soft one this close costs some reclaim on a cold start and
-# nothing else.
-#
-# This REPLACES a temporary `systemctl set-property --runtime views-crafdapi MemoryMax=14G` set as
-# a seatbelt during the measurement. That drop-in lives in /run and takes precedence over this
-# file until it is removed — see RELEASE_RUNBOOK.md. A ceiling in a file nobody can read from the
-# repo is the thing this is fixing.
-#
-# NOT the whole of #99: views-faoapi shares this box and has no ceiling. Its 4.8 G is an OBSERVED
-# resident figure, not a measured cold start, and sizing its ceiling from that would repeat C-263
-# on the neighbour. It needs its own measurement (views-faoapi#418).
-MemoryHigh=8G
-MemoryMax=9G
+# Memory. The service runs alone on a 32 GB server. Its highest use is at start, when it reads the
+# forecast: 7.3 GB, measured 2026-08-21 on v0.5.1. If it goes above 24 GB, it is stopped and
+# systemd restarts it; about 8 GB stay free for the system, so the server stays reachable. There
+# is deliberately no softer limit (MemoryHigh): without swap it slows the service to a crawl
+# while it still looks running, and nothing restarts it. MemorySwapMax=0 keeps the limit exact
+# even if swap is added later. (Independent review, 2026-11-18.)
+MemoryMax=24G
+MemorySwapMax=0
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=views-crafdapi

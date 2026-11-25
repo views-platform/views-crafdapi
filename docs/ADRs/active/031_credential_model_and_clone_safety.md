@@ -1,6 +1,8 @@
 # ADR-031: Credential Model and Clone-Safety Boundary
 
-**Status:** Proposed — the engineering boundary (§1–§4) is decided and being implemented under epic #325; the **credential-ownership model** (§5, decision *b*) is pending operator ratification (D-25/D-26).
+**Status:** Superseded (2026-11-18) by ADR-040 (the kinds of key) and the service specification. Written for copying views-faoapi into new APIs; kept as the record of what was decided.
+
+> Earlier status: Proposed — the engineering boundary (§1–§4) is decided and being implemented under epic #325; the **credential-ownership model** (§5, decision *b*) is pending operator ratification (D-25/D-26).
 **Deciders:** Claude (design authority, §1–§4); Simon (operator, §5 — credentials, external party, cross-repo).
 **Records:** the decisions that make `views-faoapi` safe to clone into `views-productionapi` (a write API) and `un-crafdapi` (a read API), from the clone-readiness investigation and þing-02 (`views_platform/þingit/02_credential_identity_key_ownership/`).
 

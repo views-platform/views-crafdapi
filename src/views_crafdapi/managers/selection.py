@@ -5,7 +5,7 @@ instead of a ``dataframe | None`` — a return shape that conflated *"no run exi
 *"a run exists but cannot be served"*, and *"served"* into the same ``None`` and
 threw away the one useful fact: **why**.
 
-- ``Served`` — a servable run was resolved (carries the dataframe/dataset it built).
+- ``Served`` — a servable run was resolved (carries the dataset it built).
 - ``Refused(reason, …)`` — a run was present but cannot be served; ``reason`` is a
   first-class, machine-readable value (surfaced in logs today; in ``/health`` and
   ``/provenance`` as later stories attach policy).
@@ -28,12 +28,12 @@ from typing import Any, Callable, Optional, Sequence, Union
 class Served:
     """The selection resolved to a servable run.
 
-    ``dataframe``/``dataset`` are kept untyped (``Any``) so this module stays
-    dependency-light; they are a ``pandas.DataFrame`` and a ``ForecastDataset``.
-    ``mode`` is the serving path that produced it (``"wire"`` / ``"legacy"``).
+    ``dataset`` is kept untyped (``Any``) so this module stays dependency-light; it is a
+    ``ForecastDataset``. ``mode`` is the serving path that produced it (``"wire"`` since S1/#264).
+    (A ``dataframe`` field was removed in #156: the caller serves the dataset, and the frame was a
+    deep copy built on every cold ingest and never read.)
     """
 
-    dataframe: Any
     dataset: Any
     file_id: str
     mode: str

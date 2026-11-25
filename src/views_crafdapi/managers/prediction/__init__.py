@@ -7,6 +7,7 @@ per module, mirroring the ``appwrite/`` package (S9):
 * :mod:`.quarantine` — the C-71 operator rollback gate (blocklist/allowlist)
 * :mod:`.metadata`   — the value objects (PredictionMetadata / -FileMetadata / -Provenance)
 * :mod:`.manager`    — ``PredictionStoreManager`` (fused reader + dead-producer writer)
+  and ``MetadataLookupError``, raised when a metadata search fails
 
 The public surface is re-exported here so ``from views_crafdapi.managers.prediction
 import X`` keeps working unchanged.
@@ -20,7 +21,7 @@ from .constants import (
     SIDECAR_ARTIFACT_TYPE,
     SYSTEM_METADATA_FIELDS,
 )
-from .manager import PredictionStoreManager
+from .manager import MetadataLookupError, PredictionStoreManager
 from .metadata import (
     PredictionFileMetadata,
     PredictionMetadata,
@@ -35,6 +36,7 @@ from .quarantine import (
 
 __all__ = [
     "PredictionStoreManager",
+    "MetadataLookupError",
     "PredictionMetadata",
     "PredictionFileMetadata",
     "PredictionProvenance",

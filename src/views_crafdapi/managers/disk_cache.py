@@ -23,12 +23,23 @@ if TYPE_CHECKING:
 
 import filelock
 
+from views_crafdapi.version import installed_version
+
 logger = logging.getLogger(__name__)
 
 # S6a (#208): `source_kind` + `provenance` round-trip so a disk-served forecast keeps its kind
 # (the §4.4 zero-manifest guard) and its C-86 lineage. Listing them here also auto-bumps
 # CACHE_SCHEMA_VERSION (see _derive_cache_schema_version), invalidating pre-S6 caches on read.
 _META_FIELDS = ("columns", "file_id", "provenance", "rows", "source_kind", "timestamp", "ttl_days")
+# C-282 (#170): `written_by` names the build that wrote the slot, so /health can say whether the
+# entry being served was produced by the code now running. Deliberately NOT in the fingerprint:
+# `read` tolerates its absence (a slot from an older build reads as written_by None), and
+# bumping the schema would delete every slot on deploy — the last-good copy included.
+_OPTIONAL_META_FIELDS = ("written_by",)
+# The version of the code in THIS process, fixed at import. `installed_version()` reads the
+# checkout on disk, which a deploy changes before the restart: read at write time, a still-running
+# old build would stamp its slots with the new version — the false "fix is in effect" this is for.
+_RUNNING_VERSION = installed_version()
 
 
 def _derive_cache_schema_version() -> int:
@@ -133,11 +144,25 @@ class CrafdDiskCacheManager:
         for suffix in ("_value", "_meta.json", ".lock", "_dataset.pkl"):
             self._cleanup(self._cache_dir / f"{api_key_hash}_{category}{suffix}")
 
-    def read(self, api_key_hash: str, category: str) -> Optional[Dict[str, Any]]:
+    def read(self, api_key_hash: str, category: str,
+             enforce_ttl: bool = True) -> Optional[Dict[str, Any]]:
         """Read a dataset reconstructed from its disk-cached value.
 
+        An entry older than the TTL is a **miss, not a deletion** (C-360, #157). The slot is the
+        only copy of the last-good run, and the last-good fallback is bounded by the freshness SLA
+        (ADR-033 §6), not by this TTL — so it reads with ``enforce_ttl=False``. Deleting on expiry
+        silently cut its 45-day window to the 24.5-day TTL in two ways: the fallback's own read
+        deleted the slot (a refused run), and with no manifest at all the ordinary disk-tier read
+        ran first and deleted it (NoRun). Both paths need the slot to survive expiry, so the
+        deletion is gone, not merely skipped for one caller. One slot per (key, category) is
+        overwritten on the next write, so leaving an expired one in place costs nothing. A
+        schema-version mismatch still deletes: that slot cannot be loaded at all.
+
         Returns:
-            Dict with 'dataset', 'file_id', 'timestamp' or None on cache miss/expired.
+            Dict with 'dataset', 'file_id', 'timestamp', 'source_kind', 'provenance' and
+            'written_by' (the version of the build that wrote the slot), or None on a miss:
+            absent, expired, lock contention, or a slot that cannot be loaded (logged at error,
+            e.g. C-261).
         """
         from views_crafdapi.data.handlers import ForecastDataset
 
@@ -157,47 +182,78 @@ class CrafdDiskCacheManager:
                 cached_version = meta.get("schema_version")
                 if cached_version != CACHE_SCHEMA_VERSION:
                     logger.warning(
-                        "Disk cache schema version mismatch for %s/%s: "
+                        "Disk cache schema version mismatch for %s: "
                         "expected %s, found %s. Invalidating.",
-                        api_key_hash, category,
+                        category,
                         CACHE_SCHEMA_VERSION, cached_version,
                     )
                     self._cleanup(value_dir, meta_path)
                     return None
 
                 cache_age = time.time() - meta.get("timestamp", 0)
-                if cache_age > self._ttl_seconds:
+                if enforce_ttl and cache_age > self._ttl_seconds:
                     logger.info(
-                        "Disk cache expired for %s/%s (age: %.1f days)",
-                        api_key_hash, category, cache_age / 86400,
+                        "Disk cache expired for %s (age: %.1f days); kept for the "
+                        "SLA-bounded last-good fallback",
+                        category, cache_age / 86400,
                     )
-                    self._cleanup(value_dir, meta_path)
                     return None
 
                 # S6b-1 (#208): mmap the sample store so a disk-served run pages on demand rather
                 # than loading the whole (N,S) block resident — combined with per-month serving
-                # (calculate_hdi_map streams months), this keeps the serve-side working set to ~one
+                # (summarize streams months), this keeps the serve-side working set to ~one
                 # month. Read-only; every serving read copies (astype/fancy-index) before any math.
                 # (POSIX: an in-flight serve's memmap survives a concurrent cache-invalidation
                 # rmtree — the unlinked inode stays live until the mapping is GC'd. Host is Linux.)
                 dataset = ForecastDataset.from_value(value_dir, mmap=True)
+                # Which delivery this is, for files built from it (`BulkFiles`, #203). Copies
+                # of the dataset keep it.
+                dataset.source_file_id = meta.get("file_id")
 
-                logger.info(
-                    "Disk cache hit for %s/%s (file_id: %s, age: %.1f days)",
-                    api_key_hash, category,
-                    meta.get("file_id"), cache_age / 86400,
+            # C-277 (#168): the bytes passed C-72 when they were written; nothing since has
+            # checked they still do. Re-run the same gate, so a disk read can never serve what
+            # ingest would refuse. Every caller inherits it, including the last-good fallback
+            # (which then answers 503) and the post-adopt read-backs. Outside the lock: the scan
+            # takes ~1-2 s, and the memmap keeps reading these bytes even if a writer replaces
+            # the slot meanwhile (see above). A failing slot is refused but KEPT: the next ingest
+            # overwrites it anyway, it is the evidence of what went wrong, and deleting it would
+            # destroy the only last-good copy if a later release tightened a rule.
+            try:
+                dataset.validate_value_plausibility()
+                dataset.validate_metadata_plausibility()
+            except ValueError as e:
+                logger.error(
+                    "Disk cache slot %s fails the C-72 plausibility gate; refusing it "
+                    "(kept for inspection): %s",
+                    category, e,
                 )
-                return {
-                    "dataset": dataset,
-                    "file_id": meta.get("file_id"),
-                    "timestamp": meta.get("timestamp"),
-                    # S6a (#208): default legacy so a pre-S6 meta (should already be invalidated by
-                    # the schema bump) still repopulates a safe kind; provenance may be absent.
-                    "source_kind": meta.get("source_kind", "legacy"),
-                    "provenance": meta.get("provenance"),
-                }
+                return None
+
+            logger.info(
+                "Disk cache hit for %s (file_id: %s, age: %.1f days)",
+                category,
+                meta.get("file_id"), cache_age / 86400,
+            )
+            return {
+                "dataset": dataset,
+                "file_id": meta.get("file_id"),
+                "timestamp": meta.get("timestamp"),
+                # S6a (#208): default legacy so a pre-S6 meta (should already be invalidated by
+                # the schema bump) still repopulates a safe kind; provenance may be absent.
+                "source_kind": meta.get("source_kind", "legacy"),
+                "provenance": meta.get("provenance"),
+                "written_by": meta.get("written_by"),
+            }
+        except filelock.Timeout:
+            logger.warning("Disk cache lock for %s held by another worker; treating as a miss",
+                           category)
+            return None
         except Exception as e:
-            logger.warning("Failed to read disk cache: %s", e)
+            # A slot that exists but cannot be loaded (corrupt, or an old-schema geo table, C-261)
+            # is a miss: the normal tier rebuilds from source; the last-good fallback answers 503.
+            # Logged at error with the traceback: it is never expected.
+            logger.error("Disk cache slot %s is unloadable, treating as a miss: %s",
+                         category, e, exc_info=True)
             return None
 
     def write(self, api_key_hash: str, category: str, dataset: "ForecastDataset", file_id: str,
@@ -224,6 +280,9 @@ class CrafdDiskCacheManager:
                 if tmp_dir.exists():
                     shutil.rmtree(tmp_dir)
                 dataset.to_value(tmp_dir)
+                # C-361 (#157): drop the old meta BEFORE the old data, so a kill anywhere below
+                # leaves "no meta" (a miss), never the new arrays under the previous run's identity.
+                meta_path.unlink(missing_ok=True)
                 if value_dir.exists():
                     shutil.rmtree(value_dir)
                 os.replace(tmp_dir, value_dir)
@@ -237,13 +296,13 @@ class CrafdDiskCacheManager:
                     "ttl_days": self._ttl_seconds / 86400,
                     "source_kind": source_kind,
                     "provenance": provenance,
+                    "written_by": _RUNNING_VERSION,
                 }
-                with open(meta_path, "w") as f:
-                    json.dump(meta, f)
+                self._write_meta(meta_path, meta)
 
                 logger.info(
-                    "Wrote disk cache for %s/%s (file_id: %s, rows: %d)",
-                    api_key_hash, category, file_id, len(dataset.dataframe),
+                    "Wrote disk cache for %s (file_id: %s, rows: %d)",
+                    category, file_id, len(dataset.dataframe),
                 )
                 return True
         except Exception as e:
@@ -278,6 +337,7 @@ class CrafdDiskCacheManager:
             lock = filelock.FileLock(lock_path, timeout=30)
             with lock:
                 self._cleanup_legacy_label(api_key_hash, category)
+                meta_path.unlink(missing_ok=True)  # C-361: before the data — see `write`
                 if value_dir.exists():
                     shutil.rmtree(value_dir)
                 os.replace(value_dir_src, value_dir)  # atomic (same filesystem)
@@ -290,12 +350,12 @@ class CrafdDiskCacheManager:
                     "ttl_days": self._ttl_seconds / 86400,
                     "source_kind": source_kind,
                     "provenance": provenance,
+                    "written_by": _RUNNING_VERSION,
                 }
-                with open(meta_path, "w") as f:
-                    json.dump(meta, f)
+                self._write_meta(meta_path, meta)
                 logger.info(
-                    "Adopted disk cache value-dir for %s/%s (file_id: %s, rows: %d)",
-                    api_key_hash, category, file_id, rows,
+                    "Adopted disk cache value-dir for %s (file_id: %s, rows: %d)",
+                    category, file_id, rows,
                 )
                 return True
         except Exception as e:
@@ -314,6 +374,21 @@ class CrafdDiskCacheManager:
         except Exception as e:
             logger.warning("Failed to check disk cache file_id: %s", e)
             return False
+
+    @staticmethod
+    def _write_meta(meta_path: Path, meta: Dict[str, Any]) -> None:
+        """Write the sidecar atomically: a reader — including the lock-free ``check_file_id`` —
+        sees the previous state (here: no meta) or the complete new one, never a torn file."""
+        tmp = meta_path.with_name(meta_path.name + ".tmp")
+        try:
+            with open(tmp, "w") as f:
+                json.dump(meta, f)
+                f.flush()
+                os.fsync(f.fileno())  # the old meta is already gone, so this is the only copy
+            os.replace(tmp, meta_path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     @staticmethod
     def _cleanup(*paths: Path) -> None:

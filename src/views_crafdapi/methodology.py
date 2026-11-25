@@ -19,14 +19,19 @@ Bump this string when a re-baselining change reaches `main` (see ADR-023). Histo
 
   * It said "served schema is 36 columns". It is **45** — ADR-034 §3 later added three
     exceedance columns per series (`s_p_gt25/100/1000`), live since `449bc13`.
-    `forecast/serialize/schema.py::bulk_columns()` is the authority (register C-244).
+    `forecast/serialize/schema.py::bulk_columns()` was the authority then (register C-244; removed in #203).
   * It cited `reports/adr025_output_schema/rebaseline_diff.md` for the before/after evidence.
     **That file has never existed** — `git log --all` over that path returns nothing, and
     `reports/` is not ignored, so it was not written rather than lost. ADR-023 requires a
     recorded diff for every re-baseline; for v3 that requirement was not met. Stated here
     rather than quietly dropping the citation, because a missing governance artifact and a
     broken link look identical once the link is deleted.
+- v4 — the summary columns decided 2026-11-17 (#204): `p_gt0/25/100/500/1000`, `mean`,
+  `mean_if_any`, `median_if_any`, `severe_scenario` (empty below 20 usable draws), `n_draws`;
+  `map`, the HDIs and `bimodality_flag` removed; every summary on the usable (finite) draws only.
+  The kept columns are value-for-value identical on the delivered run (grid level). Record:
+  `reports/2026-11-21_summary_columns_rebaseline.md`.
 """
 
-METHODOLOGY_VERSION = "crafdapi-methodology/3"
+METHODOLOGY_VERSION = "crafdapi-methodology/4"
 """Monotonic identifier for the published-forecast methodology (ADR-023)."""

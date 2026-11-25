@@ -25,7 +25,8 @@ import pytest
 from tests.conftest import make_fao_df
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.forecast.serialize import schema
-from views_crafdapi.forecast.summarize.estimator import collapse, tower_collapse
+from views_crafdapi.forecast.summarize.draws import summarize_draws
+from views_crafdapi.forecast.summarize.estimator import tower_collapse
 
 pytestmark = pytest.mark.layer2_data
 
@@ -248,7 +249,7 @@ def _object_oracle_aggregated_sums(ds, var, level):
     return {k: np.stack(v).sum(axis=0) for k, v in groups.items()}
 
 
-@pytest.mark.parametrize("level", ["country", "gaul0", "gaul1", "gaul2"])
+@pytest.mark.parametrize("level", ["country", "gaul1"])
 def test_served_aggregation_joint_sum_matches_object_oracle(level):
     """S4b parity net: the served aggregated distributions (`get_subset_dataframe`
     `aggregate=True`) are byte-identical to the object-cell joint-sum oracle, at every
@@ -265,27 +266,20 @@ def test_served_aggregation_joint_sum_matches_object_oracle(level):
             assert np.array_equal(served[k], oracle[k]), f"{level}/{var}/{k}: sum diverges"
 
 
-@pytest.mark.parametrize("level", ["country", "gaul0", "gaul1", "gaul2"])
-def test_served_aggregated_hdi_map_byte_identical_to_oracle(level):
-    """The end-to-end served aggregate collapse (`calculate_hdi_map` aggregate=True) is
-    byte-identical to collapsing the object-cell oracle sums — MAP, the three fixed HDIs
-    (50/90/95), and severe_scenario — at every level. This is the FAO-facing aggregated number
-    (raw sample min/max were dropped in #222/S4)."""
+@pytest.mark.parametrize("level", ["country", "gaul1"])
+def test_served_aggregated_summaries_byte_identical_to_oracle(level):
+    """The served region summaries (`summarize(aggregate=True)`) are byte-identical to
+    summarising the object-cell oracle sums, for every summary, at every level."""
     ds = ForecastDataset(make_fao_df(seed=2))
-    served = ds.calculate_hdi_map(aggregate=True, level=level, with_metadata=False)
+    served = ds.summarize(aggregate=True, level=level, with_metadata=False)
     for var in ds.targets:
-        if f"{var}_map" not in served.columns:
-            continue
-        assert f"{var}_min" not in served.columns and f"{var}_max" not in served.columns
         oracle = _object_oracle_aggregated_sums(ds, var, level)
+        assert oracle
         for (t, u), summed in oracle.items():
-            cr = collapse(summed, masses=schema.MASSES)
+            expected = summarize_draws(summed)
             row = served.loc[(t, u)]
-            assert row[f"{var}_map"] == float(cr.map[0])
-            assert row[f"{var}_severe_scenario"] == float(cr.severe[0])
-            for m in schema.MASSES:
-                assert row[schema.hdi_col(var, m, "lower")] == float(cr.lower(m)[0])
-                assert row[schema.hdi_col(var, m, "upper")] == float(cr.upper(m)[0])
+            for q in schema.SUMMARY_QUANTITIES:
+                np.testing.assert_equal(row[f"{var}_{q}"], float(expected[q][0]), err_msg=f"{var}_{q}")
 
 
 @pytest.mark.parametrize("n_cells,n_months,n_samples,seed", _CORPUS)

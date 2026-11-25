@@ -15,11 +15,11 @@ import pytest
 
 REQUIRED_ENV_VARS = [
     "APPWRITE_ENDPOINT",
-    "APPWRITE_DATASTORE_PROJECT_ID",
+    "APPWRITE_CRAFD_PROJECT_ID",
     "APPWRITE_CRAFD_BUCKET_ID",
     "APPWRITE_METADATA_DATABASE_ID",
     "APPWRITE_CRAFD_COLLECTION_ID",
-    "APPWRITE_DATASTORE_API_KEY",
+    "CRAFD_KEY",
 ]
 
 _missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
@@ -38,8 +38,8 @@ def appwrite_config():
 
     return AppwriteConfig(
         endpoint=os.getenv("APPWRITE_ENDPOINT"),
-        project_id=os.getenv("APPWRITE_DATASTORE_PROJECT_ID"),
-        credentials=os.getenv("APPWRITE_DATASTORE_API_KEY"),
+        project_id=os.getenv("APPWRITE_CRAFD_PROJECT_ID"),
+        credentials=os.getenv("CRAFD_KEY"),
         auth_method="api_key",
         cache_ttl_hours=24,
         bucket_id=os.getenv("APPWRITE_CRAFD_BUCKET_ID"),
@@ -217,10 +217,7 @@ class TestDatasetConstruction:
         from views_crafdapi.data.handlers import ForecastDataset
 
         dataset = ForecastDataset(forecast_df)
-        assert "country" in dataset.levels
-        assert "gaul0" in dataset.levels
-        assert "gaul1" in dataset.levels
-        assert "gaul2" in dataset.levels
+        assert set(dataset.levels) == {"country", "gaul1"}
 
     def test_dataset_validates_indices(self, forecast_df):
         from views_crafdapi.data.handlers import ForecastDataset

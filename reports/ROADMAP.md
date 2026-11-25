@@ -88,7 +88,7 @@ What step 1 actually requires:
 3. **All of it comes back out through the API** — all historical data and all forecasts, with the
    correct columns.
 
-The column **set** is settled: `schema.bulk_columns()` is the authority — 45 columns, 6 identity +
+(2026-11-21: superseded. The column set decided on 2026-11-17 (#204) is in `schema.SUMMARY_QUANTITIES`, and `bulk_columns()` was removed with the nine bulk files, #203.) The column **set** is settled: `schema.bulk_columns()` is the authority — 45 columns, 6 identity +
 3 series × 13 — documented in `docs/api/data_dictionary.md` and reconciled across the repo on
 2026-08-23 (**C-244**, which had the repo carrying three different totals).
 
@@ -146,7 +146,8 @@ ensemble exists to deliver**, and ADR-013 lists cm as an explicit non-goal.
 
 #81 also names a risk that is easy to miss and would surface as a partner complaint: with cm
 authoritative at `/country` and pgm aggregated at `/gaul0`, **the same geography would be served two
-different numbers by two endpoints, and nothing would detect the divergence.**
+different numbers by two endpoints, and nothing would detect the divergence.** (2026-11-20: `/gaul0`
+was removed in #205, so this pair no longer exists.)
 
 ### ADR-034 — decided
 
@@ -167,8 +168,7 @@ so running one first would prove the wrong thing.
 
 | check | passes when |
 |---|---|
-| `/provenance/forecast` | shows a **new** `run_id`, not `rusty_bucket_forecasting_20260727_095355` |
-| `/health` | `healthy`, `forecast_freshness.is_stale: false` |
+| `/health` | `healthy`, `forecast_freshness.is_stale: false`, and `forecast_freshness.created_at` is the new delivery's date (`/provenance` was removed, #207) |
 | `smoke.py --expect-tag <live tag>` | ALL PASS, both coverage checks included |
 | `/data/forecast/bulk` | byte count **differs from 461,991** |
 
@@ -217,7 +217,12 @@ communication* question: if CRAF'd was calling `/latest`, they have been receivi
 should be told. It is no longer a precondition. Nothing this repo ships called it — not
 `CrafdApiClient`, not `smoke.py`, not any notebook.
 
-**Done 2026-08-24 — C-284 is resolved too, so Step 3 is complete.** The 20 `subset` and `hdi-map`
+**Deployed 2026-08-24 as v0.7.0 — Step 3 is complete and live in production.** Verified on the
+running service: both `/latest` routes return `404`, `/pg/data/historical/subset` still returns
+`422` (so the 404s are the retirement, not an outage), the root catalog no longer advertises the
+retired routes, and `smoke.py --expect-tag v0.7.0` reports ALL PASS.
+
+**C-284 is resolved too.** The 20 `subset` and `hdi-map`
 routes now estimate the size of the response *before building it* and refuse above **512 MiB** with
 a `413` that names the way through. The 34.5 GB unparameterised request — the worst case, and the
 one that took no arguments — is refused in 0.014 s instead of spending thirteen minutes eating the

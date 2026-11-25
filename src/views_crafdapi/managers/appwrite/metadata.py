@@ -8,6 +8,7 @@ import time
 import logging
 
 from appwrite.services.databases import Databases
+from appwrite.services.tables_db import TablesDB
 from appwrite.exception import AppwriteException
 from appwrite.query import Query
 
@@ -23,8 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 class MetadataManager:
-    def __init__(self, databases: Databases, config: AppwriteConfig):
+    def __init__(self, databases: Databases, config: AppwriteConfig, tables: TablesDB):
         self.databases = databases
+        # Reads go through TablesDB, Appwrite 1.8's name for the Databases API (#200): its
+        # `list_rows` accepts a key with `rows.read`, the only scope the console now offers.
+        self.tables = tables
         self.config = config
 
     def create_database_if_not_exists(
@@ -452,7 +456,7 @@ class MetadataManager:
                     if value is not None:
                         queries.append(Query.contains(attribute, value))
 
-            # #287: Appwrite's list_documents caps a page at its default (25) unless a
+            # #287: Appwrite's list_rows caps a page at its default (25) unless a
             # Query.limit is supplied — and a single limit(100) is still short of a 108-shard
             # wire run. Page through with limit+offset so EVERY matching document is enumerated;
             # a silently-truncated result drops shards and refuses an otherwise-complete run
@@ -461,12 +465,12 @@ class MetadataManager:
             documents = []
             offset = 0
             while True:
-                page = self.databases.list_documents(
+                page = self.tables.list_rows(
                     db_id,
                     coll_id,
                     queries=queries + [Query.limit(DEFAULT_PAGE_LIMIT), Query.offset(offset)],
                 )
-                batch = _get(page, "documents") or []
+                batch = _get(page, "rows") or []
                 documents.extend(batch)
                 if len(batch) < DEFAULT_PAGE_LIMIT:
                     break
@@ -481,7 +485,7 @@ class MetadataManager:
         except AppwriteException as e:
             logger.error(f"Search failed: {e.message}")
             return OperationResult(
-                success=False, error=f"Search failed: {e.message}", code=e.type
+                success=False, error=f"Search failed: {e.message}", code=e.type, status=e.code
             )
 
     def update_file_metadata(

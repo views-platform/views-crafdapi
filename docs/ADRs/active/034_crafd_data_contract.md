@@ -1,6 +1,8 @@
 # ADR-034 — The CRAF'd data contract (targets, geography, summary statistics, bucket)
 
-**Status:** Proposed (2026-08-02) — awaiting CRAF'd/product sign-off on the target list.
+**Status:** Superseded (2026-11-18) by the service specification and the data dictionary (three levels, FAO GAUL 2024 codes, the new summary columns). Built in #204 (2026-11-21): the exceedance thresholds are now 0, 25, 100, 500 and 1,000, not the placeholders 25, 100 and 1,000. Kept as the record of what was decided.
+
+> Earlier status: Proposed (2026-08-02) — awaiting CRAF'd/product sign-off on the target list.
 **Deciders:** operator (Simon) + CRAF'd/product. Drafted with the design authority.
 **Story:** epic #1, S8 (#9). **Gates:** S10 (data-shape build) and the views-postprocessing CRAF'd producer.
 
@@ -87,6 +89,9 @@ The three thresholds `25 / 100 / 1000` are **reasonable placeholders** chosen by
 PRIO-GRID cell × month (`loa=pgm`) base grain, aggregated (conservation-correct joint sum,
 ADR-014) to GAUL admin-1 / admin-0 + ISO3. Endpoint level vocabulary `pg` / `country` /
 `gaul0` / `gaul1` / `gaul2`, same reference shapefiles. Unchanged from FAO.
+
+> **Amended 2026-11-20 (#205):** the service specification keeps three levels, `pg` / `country` /
+> `gaul1`. `gaul0` (the same geography as `country`) and `gaul2` are no longer served.
 
 ### 5. Configurability discipline — the served contract is one declared constant
 
