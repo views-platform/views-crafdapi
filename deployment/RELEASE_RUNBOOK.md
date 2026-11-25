@@ -197,6 +197,27 @@ Check what landed in the file. Expect exactly your tag, then `\n`. If it shows a
 sudo od -c /home/views-crafdapi-deploy/.views-crafdapi-deploy-tag
 ```
 
+**Before the restart: the settings file.** It must be rebuilt when the release pins a newer
+registry edition (`REGISTRY_PIN_TAG` in `src/views_crafdapi/seam_contract.py`) or needs a setting
+the server lacks, and whenever it still holds a key: since #263 it holds coordinates only. This
+prints how many key lines it holds (a number, never a value); anything but `0` means rebuild:
+
+```bash
+sudo grep -c 'API_KEY=' /home/views-crafdapi-deploy/.env.crafdapi
+```
+
+To rebuild, copy the setup script and the pinned registry to the server's `/tmp`, exactly as in
+section 4, step 2 (the script cannot be run from the service account's home, which your user
+cannot read). Then **ON THE BOX**, with the same tag you wrote above:
+
+```bash
+RELEASE_TAG=vX.Y.Z bash /tmp/crafd-bootstrap.sh part2
+```
+
+It writes the tag file again, checks the tag out and syncs its packages in the service's own
+checkout (as the restart below would anyway), and replaces the settings file only once the new one
+is complete. Then check that the key-line count above prints `0`.
+
 Restart, then check the version. Both `version` and `deployed_tag` should name your tag. The
 service may answer `502` for a few seconds while it restarts. After a restart it loads the forecast
 by itself before answering data requests; until then those answer `503`. From the disk cache this
@@ -300,8 +321,8 @@ change.
 
 ## 4. Set up a new server (once per server, ~1 hour)
 
-You need a fresh Ubuntu server you can `ssh` into with `sudo`, and our own reader key from
-Bitwarden.
+You need a fresh Ubuntu server you can `ssh` into with `sudo`. The server's own read key comes in
+section 5; our reader key (Bitwarden, `partner-views-...`) is needed only for the smoke test.
 
 1. **The domain.** Ask the administrator of `viewsforecasting.org` to point the `A` record for
    `crafdapi.viewsforecasting.org` at the new server's IP address. Check with
@@ -323,17 +344,10 @@ Bitwarden.
    Then, **ON THE BOX**, run `bash /tmp/crafd-bootstrap.sh part1`. It prints a public key.
 3. **The deploy key.** On GitHub, open views-crafdapi → Settings → Deploy keys → Add deploy key.
    Paste the printed key. Leave "write access" unticked.
-4. **The code and credentials.** **ON THE BOX**, put our reader key in the environment (the line
-   prompts; paste it alone), then build. The setup script reads the registry from step 2 and
-   refuses to run without the key. Then remove the key from your shell.
-   ```bash
-   read -rsp "reader key: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
-   ```
+4. **The code and settings.** **ON THE BOX**, build. The setup script reads the registry from
+   step 2 and writes the settings file (no key goes into it).
    ```bash
    RELEASE_TAG=vX.Y.Z bash /tmp/crafd-bootstrap.sh part2
-   ```
-   ```bash
-   unset APPWRITE_DATASTORE_API_KEY
    ```
 5. **The service.** `bash /tmp/crafd-bootstrap.sh part3` installs it. It does not start it yet.
 6. **nginx.** Install nginx and certbot:

@@ -7,7 +7,7 @@ installing it. The required names come from the code being deployed
 ``APPWRITE_CRAFD_PROJECT_ID``) cannot be deployed ahead of its registry row. Without this,
 the file would install and the service would loop on ``_validate_appwrite_env``.
 
-Prints only the absent NAMES, never a value: the file carries the operator's key.
+Prints only the absent NAMES, never a value.
 
 Usage:  <env file on stdin> | python3 check_required_env.py
 """

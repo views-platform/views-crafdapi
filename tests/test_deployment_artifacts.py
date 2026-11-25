@@ -163,10 +163,38 @@ class TestBootstrap:
         assert "coordinate_registry.toml" in _BOOTSTRAP
         assert "registry_to_env.py" in _BOOTSTRAP  # read + emit, never copy the file
 
-    def test_secret_comes_from_an_operator_slot_fail_loud(self):
-        # the one secret is required from the environment (operator slot), never a .env.
-        assert "APPWRITE_DATASTORE_API_KEY:?" in _BOOTSTRAP
-        assert "chmod 600" in _BOOTSTRAP
+    def test_the_settings_file_holds_no_key(self):
+        # #263: the shared project's reader key is gone; part2 writes coordinates only, and the
+        # server's own key has its own private file (`serverkey`, ADR-044). Checked on part2's
+        # own text, so a key under any name, required or written there, fails.
+        body = re.search(r"^part2\(\) \{\n(.*?)^\}", _BOOTSTRAP, re.M | re.S)[1]
+        part2 = "\n".join(line for line in body.splitlines() if not line.strip().startswith("#"))
+        # Exactly two things go into the settings file: the registry-version stamp and the
+        # registry's coordinates. Anything else written there, under any name, fails.
+        written = re.search(r"if ! \{\n(.*?)\n\s*\} \| sudo tee \"\$_tmp_env\"", part2, re.S)[1]
+        lines = [line.strip().rstrip("&").strip() for line in written.splitlines() if line.strip()]
+        assert len(lines) == 2, lines
+        assert lines[0].startswith("printf 'APPWRITE_REGISTRY_VERSION=%s\\n'"), lines[0]
+        assert lines[1] == ('sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" '
+                            '"${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}"'), lines[1]
+        # Private, and never loosened afterwards.
+        assert re.findall(r"chmod (\S+)", part2) == ["600"], re.findall(r"chmod (\S+)", part2)
+        # Nothing but the version to install is required from the environment, in any form.
+        required = (set(re.findall(r'(?:\[|test) -[nz] "\$\{?(\w+)(?::-)?\}?"', part2))
+                    | set(re.findall(r"\$\{(\w+):\?", part2)))
+        assert required == {"RELEASE_TAG"}, required
+        # No command in part2 handles a key under any name (comments are excluded above).
+        assert "KEY" not in part2.upper(), [line for line in part2.splitlines() if "KEY" in line.upper()]
+        # The settings file is written once, never appended to, and never copied anywhere: the
+        # only commands that touch it are these.
+        assert part2.count(" tee ") == 1 and "tee -a" not in part2 and ">>" not in part2
+        assert not re.search(r"^\s*(?:sudo\s+(?:-u\s+\S+\s+)?)?(?:cp|install|dd)\s", part2, re.M), \
+            "part2 copies no file"
+        uses = [line.strip() for line in part2.splitlines() if "$_tmp_env" in line]
+        allowed = ("_tmp_env=", "sudo chmod 600", "} | sudo tee", "sudo rm -f", "N=$(sudo grep -c",
+                   "if ! _absent=", "sudo chown", "sudo mv \"$_tmp_env\" \"${SVC_HOME}/.env.crafdapi\"")
+        assert all(any(u.startswith(a) for a in allowed) for u in uses), uses
+        assert "APPWRITE_DATASTORE" not in _BOOTSTRAP
 
 
 class TestRegistryToEnv:

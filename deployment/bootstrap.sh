@@ -4,7 +4,7 @@
 #
 # Run the three parts in order, from your own sudo account on the server:
 #   bash bootstrap.sh part1     # create the service account and its GitHub deploy key
-#   bash bootstrap.sh part2     # (after adding the key on GitHub) get the code, build, write credentials
+#   bash bootstrap.sh part2     # (after adding the key on GitHub) get the code, build, write the settings file
 #   bash bootstrap.sh part3     # install the systemd service (does not start it)
 set -euo pipefail
 
@@ -45,11 +45,11 @@ part1() {
 }
 
 part2() {
-    echo "== Part 2: clone, toolchain, environment, credentials =="
+    echo "== Part 2: clone, toolchain, environment, settings =="
     [ -n "${RELEASE_TAG}" ] || { echo "FATAL: say which version to install, e.g. RELEASE_TAG=v0.7.0 bash bootstrap.sh part2" >&2; exit 1; }
-    # Credentials: the coordinates are read from the registry; the one secret, our reader key
-    # (ADR-040), comes from the environment, where you put it with `read -rs`. Never from a file.
-    : "${APPWRITE_DATASTORE_API_KEY:?FATAL: put our reader key in the environment first (RELEASE_RUNBOOK.md, section 4, step 4)}"
+    # Settings: the coordinates are read from the registry. No key goes into this file: the
+    # service's own read key has its own file (`serverkey` below, ADR-044), and partner keys are
+    # only checked, never stored (#263: the shared project's reader key is gone).
     [ -f "${APPWRITE_REGISTRY}" ] || {
         echo "FATAL: the views-appwrite registry was not found at ${APPWRITE_REGISTRY}" >&2
         echo "  Put a copy of coordinate_registry.toml on the server and set APPWRITE_REGISTRY to it." >&2
@@ -78,26 +78,25 @@ with open(sys.argv[1], "rb") as fh:
     print(tomllib.load(fh).get("meta", {}).get("version", "unknown"))
 PY
 )"
-    echo "building ${SVC_HOME}/.env.crafdapi: coordinates from ${APPWRITE_REGISTRY} (registry version ${_reg_version}), secret from operator slot"
-    # Build the credentials file in a temporary file, private (0600) before the key is written,
-    # and move it into place only when it is complete. If anything fails, the old file is left
-    # untouched and a running service keeps working. The key is never shown on screen.
+    echo "building ${SVC_HOME}/.env.crafdapi: coordinates from ${APPWRITE_REGISTRY} (registry version ${_reg_version})"
+    # Build the settings file in a temporary file, private (0600), and move it into place only
+    # when it is complete. If anything fails, the old file is left untouched and a running
+    # service keeps working.
     _tmp_env="$(sudo mktemp "${SVC_HOME}/.env.crafdapi.XXXXXX")"
     sudo chmod 600 "$_tmp_env"
     if ! {
         printf 'APPWRITE_REGISTRY_VERSION=%s\n' "${_reg_version}" &&
-        sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}" &&
-        printf 'APPWRITE_DATASTORE_API_KEY=%s\n' "${APPWRITE_DATASTORE_API_KEY}"
+        sudo -u "$SVC_USER" "${REPO_DIR}/.venv/bin/python" "${REPO_DIR}/deployment/registry_to_env.py" "${APPWRITE_REGISTRY}"
     } | sudo tee "$_tmp_env" >/dev/null; then
         sudo rm -f "$_tmp_env"
-        echo "FATAL: could not build the credentials file (registry read or secret emit failed)." >&2
+        echo "FATAL: could not build the settings file (registry read failed)." >&2
         echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
         return 1
     fi
     N=$(sudo grep -c '^APPWRITE_' "$_tmp_env")
     if [ "$N" -lt 9 ]; then
         sudo rm -f "$_tmp_env"
-        echo "FATAL: built credentials file has only ${N} APPWRITE_ lines (expected >= 9)." >&2
+        echo "FATAL: built settings file has only ${N} APPWRITE_ lines (expected >= 9)." >&2
         echo "       ${SVC_HOME}/.env.crafdapi is UNCHANGED — the running service keeps working." >&2
         return 1
     fi
@@ -112,7 +111,7 @@ PY
     fi
     sudo chown "${SVC_USER}:${SVC_USER}" "$_tmp_env"
     sudo mv "$_tmp_env" "${SVC_HOME}/.env.crafdapi"
-    echo "credentials file written (${N} APPWRITE_ lines: 1 registry-version stamp + registry coordinates + 1 operator secret; values not displayed)"
+    echo "settings file written (${N} APPWRITE_ lines: 1 registry-version stamp + registry coordinates)"
     echo "Then run:  bash bootstrap.sh part3"
 }
 
