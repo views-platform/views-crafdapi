@@ -173,6 +173,19 @@ class TestTheRouteList:
 
 class TestHealthEndpoint:
 
+    def test_health_names_the_served_run(self, app_client):
+        """#262: a check from outside confirms which forecast run partners get."""
+        client, mgr, _ = app_client
+        _serve(mgr, provenance={"run_id": "chrome_box_forecasting_20261112_210150",
+                                "created_at": datetime.now(timezone.utc).isoformat()})
+        assert client.get("/health", headers=HEADERS).json()["served_run"] == \
+            "chrome_box_forecasting_20261112_210150"
+
+    def test_health_omits_the_served_run_when_nothing_is_loaded(self, app_client):
+        client, mgr, _ = app_client
+        mgr._loader._served = None
+        assert "served_run" not in client.get("/health", headers=HEADERS).json()
+
     def test_health_degraded_when_forecast_stale(self, app_client):
         """S3 (#246, C-50): a served forecast older than the SLA degrades health (service up)."""
         client, _, mock_pm = app_client

@@ -24,6 +24,10 @@ _IMPORT_RE = re.compile(r"^\s*(?:import pandas\b|from pandas\b|import pandas as\
 _ALLOWED = frozenset({
     # top-level edges
     "client.py", "plotting.py",
+    # #262: the client-side checks on served tables (as a partner downloads them), used by the
+    # notebooks and the post-deploy smoke test. Client edge, like client.py; nothing in the
+    # service imports them.
+    "data_checks.py", "smoke.py",
     # the spine — target for removal across S3–S8
     "data/handlers/grid_dataset.py",
     "data/handlers/forecast_dataset.py",

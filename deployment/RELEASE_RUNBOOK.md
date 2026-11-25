@@ -236,14 +236,19 @@ sudo -iu views-crafdapi-deploy
 cd views-crafdapi
 ```
 
-This line prompts for our own reader key (Bitwarden: `partner-views-...`, ADR-040). Paste it alone:
+This line prompts for our own reader key from the `crafdapi` project (Bitwarden:
+`partner-views-...`, ADR-040). Paste it alone:
 
 ```bash
-read -rsp "reader key: " APPWRITE_DATASTORE_API_KEY; echo; export APPWRITE_DATASTORE_API_KEY
+read -rsp "reader key: " CRAFD_KEY; echo; export CRAFD_KEY
 ```
 
+Then the smoke test. Replace `RUN_ID` with the forecast run that should be served (the delivery's
+name, for example `chrome_box_forecasting_20261112_210150`); it checks that this run is served and
+that the data is right (months, summaries, and totals adding up from grid cells to countries):
+
 ```bash
-.venv/bin/python scripts/smoke.py --expect-tag vX.Y.Z
+.venv/bin/python scripts/smoke.py --expect-tag vX.Y.Z --expect-run RUN_ID --expect-draws 1024
 ```
 
 Expect `ALL PASS`. Then `exit`.
