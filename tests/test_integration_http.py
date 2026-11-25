@@ -33,7 +33,7 @@ REQUIRED_ENV_VARS = [
     "APPWRITE_CRAFD_COLLECTION_NAME",
     "APPWRITE_METADATA_DATABASE_ID",
     "APPWRITE_METADATA_DATABASE_NAME",
-    "APPWRITE_DATASTORE_API_KEY",
+    "CRAFD_KEY",
 ]
 
 _missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
@@ -58,7 +58,7 @@ def appwrite_config():
     kwargs = dict(
         endpoint=os.getenv("APPWRITE_ENDPOINT"),
         project_id=os.getenv("APPWRITE_CRAFD_PROJECT_ID"),
-        credentials=os.getenv("APPWRITE_DATASTORE_API_KEY"),
+        credentials=os.getenv("CRAFD_KEY"),
         auth_method="api_key",
         cache_ttl_hours=24,
         bucket_id=os.getenv("APPWRITE_CRAFD_BUCKET_ID"),
@@ -103,7 +103,7 @@ def integration_client(tmp_path_factory):
     from fastapi.testclient import TestClient
     from views_crafdapi.managers.api import CrafdApiManager
 
-    api_key = os.environ["APPWRITE_DATASTORE_API_KEY"]
+    api_key = os.environ["CRAFD_KEY"]
     cache_dir = tmp_path_factory.mktemp("http_integ_cache")
 
     mgr = CrafdApiManager.from_config(

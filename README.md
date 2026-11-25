@@ -50,10 +50,10 @@ pip install -e .
 
 The API reads its configuration from the environment, loaded in `CrafdApiManager.__init__`. **Where that comes from differs between running locally and running deployed** — the original text here named a third location (`views-models`) that is neither, which is #28:
 
-| | Coordinates (`APPWRITE_*`) | The one secret (`APPWRITE_DATASTORE_API_KEY`) |
+| | Coordinates (`APPWRITE_*`) | Keys |
 |---|---|---|
-| **Local dev / notebooks** | `.env` at the root of **this** repo, resolved via `pyprojroot.here()` (`managers/model.py`); copy `.env.example` | same `.env` |
-| **Deployed** (`deployment/RELEASE_RUNBOOK.md`) | the **views-appwrite registry** (`APPWRITE_REGISTRY`), written into `.env.crafdapi` | **exported into the environment by the operator** — *"never from anyone's `.env`"* |
+| **Local dev / notebooks** | `.env` at the root of **this** repo, resolved via `pyprojroot.here()` (`managers/model.py`); copy `.env.example` | a reader key from the `crafdapi` project in `CRAFD_KEY`, in the same `.env` |
+| **Deployed** (`deployment/RELEASE_RUNBOOK.md`) | the **views-appwrite registry** (`APPWRITE_REGISTRY`), written into `.env.crafdapi` | the service's own read key in `.env.crafdapi-server-key` (section 5); the settings file holds no key (#263; a server set up earlier is rebuilt at its next release, `RELEASE_RUNBOOK.md` section 1) |
 
 Creating, sending, renewing and revoking a partner's key: `deployment/PARTNER_KEYS.md`.
 Setting up and checking the two Better Stack monitors: `deployment/MONITORING.md`.
