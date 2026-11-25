@@ -909,6 +909,11 @@ class CrafdApiManager(APIManager):
                 served_entry = loaded.entry if loaded else None
                 if served_entry is not None:
                     health["served_entry"] = served_entry
+                # Which forecast run partners get (the delivery's own name), so a check from
+                # outside can confirm the intended run is the one served (#262).
+                served_run = (loaded.provenance or {}).get("run_id") if loaded else None
+                if served_run:
+                    health["served_run"] = served_run
                 return health
             except HTTPException:
                 raise
