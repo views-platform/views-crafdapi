@@ -4,7 +4,8 @@ import pandas as pd
 import pytest
 
 from views_crafdapi.data_checks import (
-    DataCheckError, check_forecast_summaries, check_levels_add_up, check_months,
+    DataCheckError, check_forecast_age, check_forecast_month_fits_its_date, check_forecast_summaries,
+    check_horizon, check_levels_add_up, check_months, check_newest_delivery_served,
 )
 
 MADE_IN = "2026-07"
@@ -155,3 +156,150 @@ class TestLevelsAddUp:
         levels["country"] = levels["country"].assign(sb_mean=np.nan)
         with pytest.raises(DataCheckError, match="no values at country level in 2026-07"):
             check_levels_add_up(levels, "sb_mean")
+
+
+def _health(**override):
+    health = {"status": "healthy", "forecast_loaded": True, "served_run": "run_a",
+              "forecast_freshness": {"sla_days": 45.0, "age_days": 10.0, "is_stale": False}}
+    health.update(override)
+    return health
+
+
+class TestNewestDeliveryServed:
+    def test_a_loaded_forecast_with_nothing_pending_passes(self):
+        assert "run_a" in check_newest_delivery_served(_health())
+
+    def test_nothing_loaded_fails(self):
+        with pytest.raises(DataCheckError, match="no forecast is loaded"):
+            check_newest_delivery_served(_health(forecast_loaded=False))
+
+    def test_a_newer_delivery_that_failed_to_load_fails(self):
+        with pytest.raises(DataCheckError, match="a newer delivery is not served"):
+            check_newest_delivery_served(_health(forecast_loading="the newest delivery could not be loaded"))
+
+    def test_a_fallback_served_fails(self):
+        with pytest.raises(DataCheckError, match="an older forecast is served"):
+            check_newest_delivery_served(_health(forecast_serving_state={"degraded": True, "reason": "refused"}))
+
+    def test_a_serving_state_that_is_not_degraded_passes(self):
+        check_newest_delivery_served(_health(forecast_serving_state={"degraded": False}))
+
+    def test_an_unverified_copy_passes_once_the_store_answers_again(self):
+        """As on /health: a past failure to ask the store is shown, not alarmed on."""
+        state = {"degraded": True, "reason": "manifest_lookup_error", "serving": "cached_unverified"}
+        assert "store answers again" in check_newest_delivery_served(
+            _health(forecast_serving_state=state, appwrite_connected=True))
+
+    def test_a_normal_state_fails_while_the_store_cannot_be_reached(self):
+        """As on /health, which is degraded when its store probe fails."""
+        with pytest.raises(DataCheckError, match="cannot reach its store"):
+            check_newest_delivery_served(_health(appwrite_connected=False))
+
+    def test_an_unverified_copy_fails_while_the_store_cannot_be_reached(self):
+        state = {"degraded": True, "reason": "manifest_lookup_error", "serving": "cached_unverified"}
+        with pytest.raises(DataCheckError, match="cannot be confirmed"):
+            check_newest_delivery_served(_health(forecast_serving_state=state, appwrite_connected=False))
+
+    def test_a_last_good_fallback_fails_even_with_the_store_reachable(self):
+        state = {"degraded": True, "reason": "newest run refused", "serving": "last_good_manifested"}
+        with pytest.raises(DataCheckError, match="an older forecast is served"):
+            check_newest_delivery_served(_health(forecast_serving_state=state, appwrite_connected=True))
+
+
+class TestForecastAge:
+    def test_within_the_limit_passes(self):
+        assert "10 days old" in check_forecast_age(_health())
+
+    def test_older_than_the_limit_fails(self):
+        with pytest.raises(DataCheckError, match="55.0 days old, more than the 45-day limit"):
+            check_forecast_age(_health(forecast_freshness={"sla_days": 45.0, "age_days": 55.0, "is_stale": True}))
+
+    def test_exactly_at_the_limit_passes(self):
+        check_forecast_age(_health(forecast_freshness={"sla_days": 45.0, "age_days": 45.0, "is_stale": False}))
+
+    def test_just_over_the_limit_fails_even_when_rounding_shows_the_limit(self):
+        """/health rounds the age to two decimals; its is_stale is computed before that."""
+        with pytest.raises(DataCheckError, match="more than the 45-day limit"):
+            check_forecast_age(_health(forecast_freshness={"sla_days": 45.0, "age_days": 45.0, "is_stale": True}))
+
+    def test_over_the_limit_fails_without_the_stale_flag(self):
+        with pytest.raises(DataCheckError, match="more than the 45-day limit"):
+            check_forecast_age(_health(forecast_freshness={"sla_days": 45.0, "age_days": 46.0}))
+
+    def test_a_fractional_limit_is_shown_as_it_is(self):
+        with pytest.raises(DataCheckError, match="more than the 30.5-day limit"):
+            check_forecast_age(_health(forecast_freshness={"sla_days": 30.5, "age_days": 31.0, "is_stale": True}))
+
+    def test_the_limit_comes_from_health_not_from_a_constant(self):
+        check_forecast_age(_health(forecast_freshness={"sla_days": 60.0, "age_days": 55.0, "is_stale": False}))
+
+    def test_an_unknown_age_fails(self):
+        with pytest.raises(DataCheckError, match="age is unknown"):
+            check_forecast_age(_health(forecast_freshness={"error": "freshness check failed"}))
+
+    def test_no_freshness_at_all_fails(self):
+        health = _health()
+        del health["forecast_freshness"]
+        with pytest.raises(DataCheckError, match="age is unknown"):
+            check_forecast_age(health)
+
+
+class TestForecastMonthFitsItsDate:
+    def test_delivered_in_its_first_month_passes(self):
+        check_forecast_month_fits_its_date("2026-11", "2026-11-25T12:05:00+00:00")
+
+    def test_delivered_the_month_after_passes(self):
+        """FAO's July run was made on 2026-07-27 and stored on 2026-08-14."""
+        check_forecast_month_fits_its_date("2026-07", "2026-08-14T18:35:54.962+00:00")
+
+    def test_delivered_two_months_later_fails(self):
+        with pytest.raises(DataCheckError, match="starts in 2026-09, but it is dated 2026-11, 2 months later"):
+            check_forecast_month_fits_its_date("2026-09", "2026-11-14T08:00:00+00:00")
+
+    def test_starting_after_its_delivery_fails(self):
+        with pytest.raises(DataCheckError, match="starts in 2026-12, after its date \\(2026-11\\)"):
+            check_forecast_month_fits_its_date("2026-12", "2026-11-30T12:00:00+00:00")
+
+    def test_across_a_year_end(self):
+        check_forecast_month_fits_its_date("2026-12", "2027-01-03T00:00:00Z")
+        with pytest.raises(DataCheckError, match="2 months later"):
+            check_forecast_month_fits_its_date("2026-11", "2027-01-03T00:00:00Z")
+
+    def test_the_month_is_counted_in_utc(self):
+        """23:30 on 31 October in UTC-2 is 1 November in UTC."""
+        check_forecast_month_fits_its_date("2026-11", "2026-10-31T23:30:00-02:00")
+        with pytest.raises(DataCheckError, match="after its date"):
+            check_forecast_month_fits_its_date("2026-12", "2026-10-31T23:30:00-02:00")
+
+    def test_an_unreadable_first_month_fails(self):
+        with pytest.raises(DataCheckError, match="first month cannot be read"):
+            check_forecast_month_fits_its_date("Nov 2026", "2026-11-25T12:05:00Z")
+
+    def test_an_unknown_delivery_date_fails(self):
+        with pytest.raises(DataCheckError, match="the forecast's date is unknown"):
+            check_forecast_month_fits_its_date("2026-11", None)
+
+    def test_an_unreadable_delivery_date_fails(self):
+        with pytest.raises(DataCheckError, match="cannot be read"):
+            check_forecast_month_fits_its_date("2026-11", "last tuesday")
+
+
+class TestHorizon:
+    def test_counts_the_forecast_months(self):
+        table = pd.DataFrame({"month": ["2026-06", "2026-07", "2026-08", "2026-09"]})
+        assert "3 forecast months, 2026-07 to 2026-09" in check_horizon(table, MADE_IN)
+
+    def test_the_expected_number_passes(self):
+        check_horizon(pd.DataFrame({"month": ["2026-07", "2026-08"]}), MADE_IN, 2)
+
+    def test_a_short_horizon_fails(self):
+        with pytest.raises(DataCheckError, match="2 forecast months .* expected 36"):
+            check_horizon(pd.DataFrame({"month": ["2026-07", "2026-08"]}), MADE_IN, 36)
+
+    def test_a_horizon_longer_than_expected_fails(self):
+        with pytest.raises(DataCheckError, match="3 forecast months .* expected 2"):
+            check_horizon(pd.DataFrame({"month": ["2026-07", "2026-08", "2026-09"]}), MADE_IN, 2)
+
+    def test_no_forecast_months_fails(self):
+        with pytest.raises(DataCheckError, match="no forecast months"):
+            check_horizon(pd.DataFrame({"month": ["2026-05"]}), MADE_IN)

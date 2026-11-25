@@ -32,6 +32,7 @@ recorded deaths. `02` (section 2) maps the whole world for one month.
 | [`01_quickstart.ipynb`](01_quickstart.ipynb) | The API end to end: the bulk download (`/bulk/{level}/{outcome}`), recorded versus forecast months, the summary columns, slices with `CrafdApiClient.slice` (places by GAUL code, months written `2027-01`), and the three levels (grid, admin 1, country). | **Yes** (live API) |
 | [`02_visualization.ipynb`](02_visualization.ipynb) | PRIO-GRID pixel maps via `views_crafdapi.plotting`: the whole world for one month, one country (expected deaths and the chance of more than 25), several months on one scale, the three outcomes side by side, recorded deaths next to the forecast. | **Yes** (live API) |
 | [`03_offline_demo.ipynb`](03_offline_demo.ipynb) | The analytics the service performs (subsetting, the summaries of the draws, aggregation across levels, a map) run **in-process on synthetic data** (`_synthetic.py`). | **No** |
+| [`07_is_the_data_current.ipynb`](07_is_the_data_current.ipynb) | Is the data I got the right data for today? Five checks from `/health` and the small country file: the newest delivery is the one served, the forecast's age is within the service's limit, its first month fits the forecast's date, it starts the month after the recorded deaths stop, and how many forecast months it has. Then the months on one line and the world's deaths across the join. | **Yes** (live API) |
 
 ## Conventions
 
@@ -76,12 +77,24 @@ a minute or two. The same checks run in the post-deploy
 smoke test (`views_crafdapi.data_checks`). Whether the numbers are plausible is judged by eye in
 `02`, section 6: recorded deaths beside the forecast for the world, Nigeria and Ukraine.
 
+### The checks in `07`
+
+`07_is_the_data_current.ipynb` stops with a plain message when the data served is not current for
+today: an older forecast served after a newer delivery failed to load, a forecast past the
+service's age limit (taken from `/health`), a forecast whose first month is more than a month
+before its date (a run made on old months),
+months missing between the records and the forecast, or (if you set `CRAFD_EXPECTED_MONTHS`) a
+forecast cut short. `CRAFD_EXPECTED_RUN` works as in `01`. It downloads only the country file, so
+it runs in seconds. The checks are in `views_crafdapi.data_checks`;
+`tests/test_is_the_data_current_notebook.py` runs its check cell against deliberately broken
+answers.
+
 `02` additionally needs `geopandas` for the border overlay (installed by `uv sync`).
 `03_offline_demo.ipynb` needs no `.env` and no network.
 
 ### Outputs are committed on purpose (from the next release)
 
-`01` and `02` are stored **with their executed outputs** once they have been run against the live
+`01`, `02` and `07` are stored **with their executed outputs** once they have been run against the live
 service (at the moment they are stored without: see above), matching views-faoapi. Someone
 browsing this repo on GitHub sees the real numbers and the maps without needing a key —
 which is the point, since these notebooks are the worked example an external analyst is pointed
@@ -97,10 +110,10 @@ even when nothing meaningful changed. Two consequences:
   months, so after a new delivery they describe something that is no longer live:
 
   ```bash
-  .venv/bin/python -m pytest --nbmake notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb
+  .venv/bin/python -m pytest --nbmake notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb notebooks/07_is_the_data_current.ipynb
   # then, to refresh the stored outputs:
   uv run --with nbconvert jupyter nbconvert --to notebook --execute --inplace \
-      notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb
+      notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb notebooks/07_is_the_data_current.ipynb
   ```
 
 `--with nbconvert`, for the same reason as `--with jupyterlab` above: neither is in the dev group, and `.venv/bin/jupyter nbconvert` *looks* available — `--version` prints `7.16.6` — while actually running it raises `ModuleNotFoundError: No module named 'nbconvert'`. The command above was executed end to end before being written here.
