@@ -33,6 +33,7 @@ recorded deaths. `02` (section 2) maps the whole world for one month.
 | [`02_visualization.ipynb`](02_visualization.ipynb) | PRIO-GRID pixel maps via `views_crafdapi.plotting`: the whole world for one month, one country (expected deaths and the chance of more than 25), several months on one scale, the three outcomes side by side, recorded deaths next to the forecast. | **Yes** (live API) |
 | [`03_offline_demo.ipynb`](03_offline_demo.ipynb) | The analytics the service performs (subsetting, the summaries of the draws, aggregation across levels, a map) run **in-process on synthetic data** (`_synthetic.py`). | **No** |
 | [`04_monthly_download.ipynb`](04_monthly_download.ipynb) | The monthly job: downloads all nine bulk files (three levels × three outcomes) into a `data/` folder where it runs (`notebooks/data/` when Jupyter is started in `notebooks/`), checks that each carries values in every month (every row names its place, the same places every month, draws in every forecast month, recorded deaths in every recorded month, complete and ordered summaries) and that the nine agree, and ends with one verdict. Part B explains what the files hold. About 500 MB of disk and 5 GB of memory. | **Yes** (live API) |
+| [`05_totals.ipynb`](05_totals.ipynb) | Totals for a country or admin-1 region, and why to take them from the country and admin-1 files: expected deaths add up from grid cells, but the chance of deaths neither averages nor adds, and the severe case does not add. Each point measured on the data served; then which column to map at which level. | **Yes** (live API) |
 | [`07_is_the_data_current.ipynb`](07_is_the_data_current.ipynb) | Is the data I got the right data for today? Five checks from `/health` and the small country file: the newest delivery is the one served, the forecast's age is within the service's limit, its first month fits the forecast's date, it starts the month after the recorded deaths stop, and how many forecast months it has. Then the months on one line and the world's deaths across the join. | **Yes** (live API) |
 
 ## Conventions
@@ -95,7 +96,7 @@ answers.
 
 ### Outputs are committed on purpose (from the next release)
 
-`01`, `02`, `04` and `07` are stored **with their executed outputs** once they have been run against the live
+`01`, `02`, `04`, `05` and `07` are stored **with their executed outputs** once they have been run against the live
 service (at the moment they are stored without: see above), matching views-faoapi. Someone
 browsing this repo on GitHub sees the real numbers and the maps without needing a key —
 which is the point, since these notebooks are the worked example an external analyst is pointed
@@ -111,10 +112,10 @@ even when nothing meaningful changed. Two consequences:
   months, so after a new delivery they describe something that is no longer live:
 
   ```bash
-  .venv/bin/python -m pytest --nbmake notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb notebooks/04_monthly_download.ipynb notebooks/07_is_the_data_current.ipynb
+  .venv/bin/python -m pytest --nbmake notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb notebooks/04_monthly_download.ipynb notebooks/05_totals.ipynb notebooks/07_is_the_data_current.ipynb
   # then, to refresh the stored outputs:
   uv run --with nbconvert jupyter nbconvert --to notebook --execute --inplace \
-      notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb notebooks/04_monthly_download.ipynb notebooks/07_is_the_data_current.ipynb
+      notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb notebooks/04_monthly_download.ipynb notebooks/05_totals.ipynb notebooks/07_is_the_data_current.ipynb
   ```
 
 `--with nbconvert`, for the same reason as `--with jupyterlab` above: neither is in the dev group, and `.venv/bin/jupyter nbconvert` *looks* available — `--version` prints `7.16.6` — while actually running it raises `ModuleNotFoundError: No module named 'nbconvert'`. The command above was executed end to end before being written here.
