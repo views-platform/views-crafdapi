@@ -66,6 +66,8 @@ def api_key_config(mock_path_manager):
         credentials="test_api_key",
         auth_method=AuthMethod.API_KEY,
         bucket_id="test_bucket",
+        collection_id="test_collection",
+        database_id="test_database",
         cache_dir="/tmp/test_cache",
         path_manager=mock_path_manager,
     )
@@ -132,8 +134,8 @@ class TestAppwriteConfig:
         
         assert config.auth_method == AuthMethod.API_KEY
         assert config.bucket_name == "Test Bucket"
-        # Fix: Use the actual default from the config
-        assert config.database_name == "File Metadata"  # Changed from "Test Bucket Metadata"
+        assert config.database_name == "Test Bucket Metadata"
+        assert config.collection_id is None and config.database_id is None
         assert config.cache_ttl_hours == 24
 
     def test_config_with_custom_values(self, mock_path_manager):
@@ -160,6 +162,7 @@ class TestAppwriteConfig:
             project_id="test_project",
             credentials="test_key",
             auth_method="api_key",
+            bucket_id="test_bucket",
             path_manager=mock_path_manager,
         )
 
@@ -171,6 +174,7 @@ class TestAppwriteConfig:
             endpoint="https://cloud.appwrite.io/v1",
             project_id="test_project",
             credentials="test_key",
+            bucket_id="test_bucket",
             path_manager=mock_path_manager,
         )
         assert config.timeout_seconds == 30
@@ -180,6 +184,7 @@ class TestAppwriteConfig:
             endpoint="https://cloud.appwrite.io/v1",
             project_id="test_project",
             credentials="test_key",
+            bucket_id="test_bucket",
             path_manager=mock_path_manager,
             timeout_seconds=60,
         )
@@ -493,12 +498,6 @@ class TestErrorHandling:
             assert not result.success
             assert result.code == "storage_file_not_found"
 
-    # Remove the invalid config test or update it to test actual validation
-    # The config doesn't validate credential types in __post_init__, so this test is invalid
-    # Option 1: Remove the test
-    # Option 2: Add actual validation to AppwriteConfig and test it
-    # For now, let's test that initialization succeeds (which is the actual behavior)
-
     def test_config_rejects_the_retired_session_auth_method(self, mock_path_manager):
         # Session auth was retired (þing-01 #274): the enum no longer carries "session", so a
         # config that asks for it is rejected outright — single-mode by construction.
@@ -508,6 +507,7 @@ class TestErrorHandling:
                 project_id="test_project",
                 credentials={"bad": "data"},
                 auth_method="session",
+                bucket_id="test_bucket",
                 path_manager=mock_path_manager,
             )
 

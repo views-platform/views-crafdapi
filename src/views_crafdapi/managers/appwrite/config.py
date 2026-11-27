@@ -34,19 +34,15 @@ class AppwriteConfig:
     cache_dir: Optional[str] = None
     cache_ttl_hours: int = DEFAULT_CACHE_TTL_HOURS
 
-    # Storage settings
-    bucket_id: str = "production_forecasts"
-    bucket_name: Optional[str] = (
-        None  # Will default to bucket_id with spaces if not provided
-    )
-
-    # Metadata settings
-    collection_name: str = "Pipeline Forecasts"
-    collection_id: Optional[str] = "pipeline_forecasts"  # Custom collection ID override
-    database_name: Optional[str] = (
-        "File Metadata"  # Will default to bucket_name + " Metadata" if not provided
-    )
-    database_id: Optional[str] = "file_metadata"  # Custom database ID override
+    # Storage and metadata settings. No defaults that name a store: a value left out must not
+    # silently point at another service's storage (#253). The bucket is required; a missing
+    # table or database id makes the metadata search refuse ("not configured").
+    bucket_id: str = field(kw_only=True)
+    bucket_name: Optional[str] = None       # defaults to bucket_id with spaces
+    collection_name: Optional[str] = None
+    collection_id: Optional[str] = None
+    database_name: Optional[str] = None     # defaults to bucket_name + " Metadata"
+    database_id: Optional[str] = None
 
     # Path manager
     path_manager: ModelPathManager = None
