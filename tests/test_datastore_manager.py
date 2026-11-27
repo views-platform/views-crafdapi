@@ -418,44 +418,6 @@ class TestPredictionStoreManager:
         
         assert file_id is None
 
-    def test_list_all_predictions_unfiltered(self, prediction_store, mock_appwrite_manager):
-        """Test listing all predictions without filters"""
-        mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
-            success=True,
-            data={
-                "documents": [
-                    {"fileId": "file1", "$createdAt": "2025-10-22T13:00:00.000Z"},
-                    {"fileId": "file2", "$createdAt": "2025-10-22T12:00:00.000Z"},
-                    {"fileId": "file3", "$createdAt": "2025-10-22T11:00:00.000Z"},
-                ],
-                "total": 3
-            }
-        )
-        
-        result = prediction_store.list_all_predictions_unfiltered()
-        
-        assert len(result) == 3
-        # Should be sorted by creation date, newest first
-        assert result[0]["fileId"] == "file1"
-        assert result[1]["fileId"] == "file2"
-        assert result[2]["fileId"] == "file3"
-        
-        # Verify no filters were passed
-        call_args = mock_appwrite_manager.metadata_manager.search_files_by_metadata.call_args
-        assert call_args[1]["filters"] is None
-
-    def test_list_all_predictions_unfiltered_search_fails(self, prediction_store, mock_appwrite_manager):
-        """Test unfiltered list when search fails"""
-        mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
-            success=False,
-            error="Search failed",
-            code="ERROR"
-        )
-        
-        result = prediction_store.list_all_predictions_unfiltered()
-        
-        assert result == []
-
 
 # Integration-style tests
 class TestPredictionStoreManagerIntegration:

@@ -122,9 +122,7 @@ def _manager(tmp_path):
         path_manager=path_manager,
     )
     with patch("views_crafdapi.managers.appwrite.manager.Client"), \
-         patch("views_crafdapi.managers.appwrite.manager.Storage"), \
-         patch("views_crafdapi.managers.appwrite.manager.Databases"), \
-         patch("views_crafdapi.managers.appwrite.manager.Users"):
+         patch("views_crafdapi.managers.appwrite.manager.Storage"):
         mgr = AppWriteFileManager(config)
     mgr.storage.get_file_download.return_value = b"content"
     mgr.get_file = Mock(return_value=OperationResult(

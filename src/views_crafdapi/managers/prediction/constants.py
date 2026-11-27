@@ -31,13 +31,3 @@ PREDICTION_METADATA_FIELDS = {
     "category":    {"type": str, "required": True, "allowed": ["forecast", "historical"]},
     "description": {"type": str, "required": False},
 }
-
-SYSTEM_METADATA_FIELDS = {
-    "fileId":      {"type": "string", "size": 255, "required": True},
-    "bucketId":    {"type": "string", "size": 255, "required": True},
-    "filename":    {"type": "string", "size": 500, "required": True},
-    "file_size":   {"type": "integer", "required": False},
-    "mime_type":   {"type": "string", "size": 100, "required": False},
-    "uploaded_at": {"type": "datetime", "required": False},
-    "file_hash":   {"type": "string", "size": 64, "required": False},
-}

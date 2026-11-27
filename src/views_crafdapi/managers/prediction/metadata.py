@@ -1,17 +1,9 @@
-"""Prediction value objects: the metadata a producer stamps (PredictionMetadata),
-the file identity/timestamps (PredictionFileMetadata), and the served-artifact
-lineage record (PredictionProvenance, C-86)."""
+"""Prediction value objects: the metadata a producer stamps (PredictionMetadata) and the
+served-artifact lineage record (PredictionProvenance, C-86)."""
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from views_crafdapi.methodology import METHODOLOGY_VERSION
-
-
-@dataclass
-class PredictionFileMetadata:
-    file_id: str
-    created_at: str
-    updated_at: str
 
 
 @dataclass

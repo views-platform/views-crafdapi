@@ -95,13 +95,6 @@ def mock_storage():
 
 
 @pytest.fixture
-def mock_databases():
-    """Mock Databases service"""
-    with patch("views_crafdapi.managers.appwrite.manager.Databases") as mock:
-        yield mock.return_value
-
-
-@pytest.fixture
 def mock_tables():
     """Mock TablesDB service (Appwrite 1.8's Databases API; the metadata search reads through it)"""
     with patch("views_crafdapi.managers.appwrite.manager.TablesDB") as mock:
@@ -120,9 +113,7 @@ def temp_cache_dir(tmp_path):
 def file_manager(api_key_config):
     """AppWriteFileManager with API key auth and all SDK services mocked."""
     with patch("views_crafdapi.managers.appwrite.manager.Client"), \
-         patch("views_crafdapi.managers.appwrite.manager.Storage"), \
-         patch("views_crafdapi.managers.appwrite.manager.Databases"), \
-         patch("views_crafdapi.managers.appwrite.manager.Users"):
+         patch("views_crafdapi.managers.appwrite.manager.Storage"):
         yield AppWriteFileManager(api_key_config)
 
 
@@ -201,8 +192,6 @@ class TestTimeoutInjection:
     def timeout_manager(self, api_key_config):
         """AppWriteFileManager with real Client (for timeout tests) but mocked auth/services."""
         with patch("views_crafdapi.managers.appwrite.manager.Storage"), \
-             patch("views_crafdapi.managers.appwrite.manager.Databases"), \
-             patch("views_crafdapi.managers.appwrite.manager.Users"), \
              patch("views_crafdapi.managers.appwrite.manager.AuthFactory") as MockAuthFactory:
             MockAuthFactory.create_auth.return_value.setup.return_value = OperationResult(
                 success=True, data={}, code="OK"
@@ -348,8 +337,8 @@ class TestCacheManager:
 # Test MetadataManager
 class TestMetadataManager:
     @pytest.fixture
-    def metadata_manager(self, mock_databases, api_key_config, mock_tables):
-        return MetadataManager(mock_databases, api_key_config, mock_tables)
+    def metadata_manager(self, api_key_config, mock_tables):
+        return MetadataManager(api_key_config, mock_tables)
 
     def test_search_files_by_metadata(self, metadata_manager, mock_tables):
         mock_tables.list_rows.return_value = _sdk_result(
@@ -449,21 +438,6 @@ class TestAppWriteFileManager:
         assert isinstance(fb, (bytes, bytearray))
         assert _json.loads(fb) == payload  # round-trips back to the manifest
 
-    def test_list_files(self, file_manager):
-        file_manager.storage.list_files.return_value = _sdk_result(
-            files=[
-                _sdk_result(**{"$id": "file1", "name": "test1.txt"}),
-                _sdk_result(**{"$id": "file2", "name": "test2.txt"}),
-            ],
-            total=2,
-        )
-        
-        result = file_manager.list_files("bucket1")
-        
-        assert result.success
-        assert len(result.data["files"]) == 2
-        assert result.data["total"] == 2
-
     def test_get_file(self, file_manager):
         file_manager.storage.get_file.return_value = _sdk_result(
             **{"$id": "file123", "name": "test.txt", "sizeOriginal": 100}
@@ -507,9 +481,7 @@ class TestAppWriteFileManager:
 class TestErrorHandling:
     def test_appwrite_exception_handling(self, api_key_config):
         with patch("views_crafdapi.managers.appwrite.manager.Client"), \
-             patch("views_crafdapi.managers.appwrite.manager.Storage") as mock_storage, \
-             patch("views_crafdapi.managers.appwrite.manager.Databases"), \
-             patch("views_crafdapi.managers.appwrite.manager.Users"):
+             patch("views_crafdapi.managers.appwrite.manager.Storage") as mock_storage:
             
             manager = AppWriteFileManager(api_key_config)
             mock_storage.return_value.get_file.side_effect = AppwriteException(
@@ -685,15 +657,6 @@ class TestAppwriteEnvVarValidation:
 class TestNormalizationContract:
     """Every OperationResult.data on success must be a plain dict (ADR-018)."""
 
-    def test_list_files_data_is_dict(self, file_manager):
-        file_manager.storage.list_files.return_value = _sdk_result(
-            files=[_sdk_result(**{"$id": "f1", "name": "test.txt"})], total=1
-        )
-        result = file_manager.list_files("bucket1")
-        assert result.success
-        assert isinstance(result.data, dict)
-        assert isinstance(result.data["files"], list)
-
     def test_get_file_data_is_dict(self, file_manager):
         file_manager.storage.get_file.return_value = _sdk_result(
             **{"$id": "file123", "name": "test.txt", "sizeOriginal": 100}
@@ -760,11 +723,11 @@ class TestAFailedCallKeepsItsHttpStatus:
     "not authorised" (401/403) from "unreachable" (0/None/5xx) instead of reading all of them as
     "nothing found"."""
 
-    def test_a_failed_search_carries_the_status_and_type(self, mock_databases, mock_tables, api_key_config):
+    def test_a_failed_search_carries_the_status_and_type(self, mock_tables, api_key_config):
         mock_tables.list_rows.side_effect = AppwriteException(
             "Service unavailable", 503, "general_server_error"
         )
-        result = MetadataManager(mock_databases, api_key_config, mock_tables).search_files_by_metadata(
+        result = MetadataManager(api_key_config, mock_tables).search_files_by_metadata(
             filters={"type": "sampled_forecast_manifest"}
         )
         assert result.success is False

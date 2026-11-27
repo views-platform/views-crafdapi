@@ -32,7 +32,6 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 
 ### Model-aware filtering
 - `get_predictions_by_metadata` automatically adds a `name` filter set to `self.model_path.model_name` when the model path has a `model_name` attribute. This scopes all metadata queries to the current model.
-- `list_all_predictions_unfiltered` bypasses this filter for debugging purposes.
 
 ### Latest-file resolution
 - `get_latest_file_id` returns the `fileId` of the newest prediction matching the given filters (sorted by `$createdAt` descending).
@@ -72,7 +71,6 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 - `get_latest_file_id(...)` returns `Optional[str]` -- the file ID or `None`.
 - `get_latest_provenance(...)` returns `Optional[PredictionProvenance]` -- a lineage record (file ID, declared upstream `source`/`pipeline`, hash, timestamp, filename, name, category, targets, description) for the newest matching artifact, or `None` (C-86).
 - `get_predictions_by_metadata(...)` returns `List[Dict]` sorted by `$createdAt` descending.
-- `list_all_predictions_unfiltered()` returns `List[Dict]` with no model filter.
 
 ### Side effects
 - **File system:** `download_prediction` writes files to disk at the specified `save_path` or a cache directory.
@@ -95,7 +93,6 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 
 ### Soft failures (OperationResult)
 - Other Appwrite API failures (on the file surface) are returned as `OperationResult(success=False, error=..., code=<Appwrite type>)` rather than raised, except where noted above. `status` (the HTTP status) is set only by `search_files_by_metadata` and `list_buckets` — the two calls the serving path classifies; elsewhere it is `None`, which there means *not recorded*, not *no response*.
-- `list_all_predictions_unfiltered` calls the search directly and still returns `[]` on failure; it has no serving-path caller.
 - A missing database/collection id raises `RuntimeError` (a deployment error), not `MetadataLookupError`.
 - `get_latest_file_id` returns `None` if no matching files exist.
 
@@ -140,7 +137,6 @@ None recorded.
 - `PredictionMetadata` raises `TypeError` for each invalid field type (`loa` as int, `targets` as string, etc.).
 - `PredictionMetadata` raises `ValueError` when `category` is not `"forecast"` or `"historical"`.
 - `get_predictions_by_metadata` adds `model_name` filter automatically.
-- `list_all_predictions_unfiltered` does not add `model_name` filter.
 - `get_latest_file_id` returns `None` when no files match, not an exception.
 - `get_predictions_by_metadata` excludes file IDs listed in `APPWRITE_CRAFD_QUARANTINED_FILE_IDS`; quarantining the newest file makes the next-newest the selected "latest" (C-71 rollback).
 - `get_predictions_by_metadata` restricts to `APPWRITE_CRAFD_APPROVED_FILE_IDS` when that allowlist is non-empty; an unset allowlist is unrestricted (C-71 proactive gate).

@@ -157,7 +157,6 @@ class PredictionStoreManager:
 
         if len(documents) == 0:
             logger.warning(f"No files found matching filters: {filters}")
-            logger.info("Try calling list_all_predictions_unfiltered() to see all files in the bucket")
 
         return sorted(
             documents,
@@ -265,36 +264,3 @@ class PredictionStoreManager:
                 if file_id:
                     resolved[filename] = file_id
         return resolved
-    
-    # Debug
-    def list_all_predictions_unfiltered(self) -> List[Dict[str, Any]]:
-        """
-        List all predictions in the bucket without any filters.
-        Useful for debugging when filtered searches return no results.
-        
-        Returns:
-            List of all prediction metadata documents
-        """
-        logger.info("Listing all predictions without filters")
-        
-        search_result = (
-            self.__appwrite_file_manager.metadata_manager.search_files_by_metadata(
-                filters=None,  # No filters
-                collection_name=self.__appwrite_file_manager_config.collection_name,
-                collection_id=self.__appwrite_file_manager_config.collection_id,
-                database_id=self.__appwrite_file_manager_config.database_id,
-            ).to_dict()
-        )
-
-        if not search_result.get("success", False):
-            logger.error(f"Search error: {search_result.get('error', 'Unknown error')}")
-            return []
-        
-        documents = search_result.get("data", {}).get("documents", [])
-        logger.info(f"Found {len(documents)} total prediction files")
-        
-        return sorted(
-            documents,
-            key=lambda x: x.get("$createdAt", ""),
-            reverse=True,
-        )

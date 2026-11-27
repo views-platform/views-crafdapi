@@ -66,7 +66,7 @@
       code: Optional[str]     # Machine-readable status code
   )
   ```
-- **Status codes include:** `"SAVED_FROM_CACHE"`, `"RETURNED_FROM_CACHE"`, `"SAVED_FROM_REMOTE"`, `"RETURNED_FROM_REMOTE"`, `"NOT_FOUND"`, `"IO_ERROR"`, `"storage_bucket_not_found"`, and Appwrite error type strings.
+- **Status codes include:** `"SAVED_FROM_CACHE"`, `"RETURNED_FROM_CACHE"`, `"SAVED_FROM_REMOTE"`, `"RETURNED_FROM_REMOTE"`, `"NOT_FOUND"`, `"IO_ERROR"`, and Appwrite error type strings.
 - **Side effects:**
   - **Remote:** None. This class never writes to Appwrite.
   - **Local:** Creates and manages a local file cache directory. Writes cache metadata JSON. Downloads files to cache before returning bytes or copying to save path.
@@ -78,14 +78,8 @@ The following public methods are grouped by domain. All return `OperationResult`
 
 #### Storage Operations
 
-- **`list_files(bucket_id, queries=None, limit=DEFAULT_PAGE_LIMIT, offset=0, order_field=None, order_type="ASC")`**
-  Lists files in a storage bucket with pagination. Accepts optional Appwrite query filters, limit/offset for paging, and optional ordering by field name. Returns `data={"files": [...], "total": int}`.
-
 - **`get_file(bucket_id, file_id)`**
   Retrieves file metadata (not the file content) from Appwrite storage. Returns the Appwrite file object as a plain dict. Used internally by `download_file()` for cache validation.
-
-- **`get_bucket(bucket_id)`**
-  Retrieves bucket metadata from Appwrite storage. Returns `code="storage_bucket_not_found"` when the bucket does not exist, allowing callers to distinguish "not found" from other errors.
 
 #### Cache Operations
 
@@ -111,7 +105,7 @@ None. `clear_cache` and `get_cache_stats` were removed 2026-11-11 with the route
 ## 7. Boundaries and Interactions
 
 - **Layer:** Infrastructure (`src/views_crafdapi/managers/appwrite/`).
-- **External dependency:** Appwrite Python SDK (`appwrite.client`, `appwrite.services.storage`, `appwrite.services.databases`, `appwrite.services.account`, `appwrite.services.users`). The class wraps all SDK calls and never exposes raw Appwrite types to callers.
+- **External dependency:** Appwrite Python SDK (`appwrite.client`, `appwrite.services.storage`, `appwrite.services.tables_db`). The class wraps all SDK calls and never exposes raw Appwrite types to callers.
 - **Callers:**
   - `PredictionStoreManager` (`managers/prediction/manager.py`) -- constructs an `AppWriteFileManager` from `AppwriteConfig` and delegates all file operations to it.
   - `CrafdApiManager` (`managers/api.py`) -- maintains a cache of `AppWriteFileManager` instances keyed by API key hash.

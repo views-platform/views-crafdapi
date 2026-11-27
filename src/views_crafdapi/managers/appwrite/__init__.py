@@ -12,8 +12,6 @@ removed in #311.
 # manager instantiates its own, so mocks must patch `...appwrite.manager.<Class>`).
 from appwrite.client import Client
 from appwrite.services.storage import Storage
-from appwrite.services.databases import Databases
-from appwrite.services.users import Users
 
 from .config import AppwriteConfig, AuthMethod
 from .auth import AuthManager, ApiKeyAuth, AuthFactory
@@ -24,7 +22,7 @@ from .metadata import MetadataManager
 from .manager import AppWriteFileManager
 
 __all__ = [
-    "Client", "Storage", "Databases", "Users",
+    "Client", "Storage",
     "AppwriteConfig", "AuthMethod", "AuthManager", "ApiKeyAuth", "AuthFactory",
     "OperationResult", "FileMetadata",
     "_as_dict", "_get",
