@@ -32,6 +32,10 @@ recorded deaths. `02` (section 2) maps the whole world for one month.
 | [`01_quickstart.ipynb`](01_quickstart.ipynb) | The API end to end: the bulk download (`/bulk/{level}/{outcome}`), recorded versus forecast months, the summary columns, slices with `CrafdApiClient.slice` (places by GAUL code, months written `2027-01`), and the three levels (grid, admin 1, country). | **Yes** (live API) |
 | [`02_visualization.ipynb`](02_visualization.ipynb) | PRIO-GRID pixel maps via `views_crafdapi.plotting`: the whole world for one month, one country (expected deaths and the chance of more than 25), several months on one scale, the three outcomes side by side, recorded deaths next to the forecast. | **Yes** (live API) |
 | [`03_offline_demo.ipynb`](03_offline_demo.ipynb) | The analytics the service performs (subsetting, the summaries of the draws, aggregation across levels, a map) run **in-process on synthetic data** (`_synthetic.py`). | **No** |
+| [`04_monthly_download.ipynb`](04_monthly_download.ipynb) | The monthly job: downloads all nine bulk files (three levels × three outcomes) into a `data/` folder where it runs (`notebooks/data/` when Jupyter is started in `notebooks/`), checks that each carries values in every month (every row names its place, the same places every month, draws in every forecast month, recorded deaths in every recorded month, complete and ordered summaries) and that the nine agree, and ends with one verdict. Part B explains what the files hold. About 500 MB of disk and 5 GB of memory. | **Yes** (live API) |
+| [`05_totals.ipynb`](05_totals.ipynb) | Totals for a country or admin-1 region, and why to take them from the country and admin-1 files: expected deaths add up from grid cells, but the chance of deaths neither averages nor adds, and the severe case does not add. Each point measured on the data served; then which column to map at which level. | **Yes** (live API) |
+| [`06_which_number_to_report.ipynb`](06_which_number_to_report.ipynb) | Which summary column answers which question, and how they relate, each measured on the data served: expected deaths are the chance times the size if any; likely-but-small against unlikely-but-large; the average against the median of the deaths if any; what the severe case averages; the thresholds; three maps with the right scale each; and the common misreadings. | **Yes** (live API) |
+| [`07_is_the_data_current.ipynb`](07_is_the_data_current.ipynb) | Is the data I got the right data for today? Five checks from `/health` and the small country file: the newest delivery is the one served, the forecast's age is within the service's limit, its first month fits the forecast's date, it starts the month after the recorded deaths stop, and how many forecast months it has. Then the months on one line and the world's deaths across the join. | **Yes** (live API) |
 
 ## Conventions
 
@@ -61,7 +65,7 @@ uv run --with jupyterlab jupyter lab notebooks/
 only, so the default dev install stays lean. `uv sync` installs `ipykernel`, so the kernel also
 works from VS Code or any Jupyter you already have.
 
-The live-API notebooks (`01`, `02`) read your key from `CRAFD_KEY` in `.env` (request one from
+The live-API notebooks (`01`, `02`, `04` to `07`) read your key from `CRAFD_KEY` in `.env` (request one from
 the VIEWS team).
 
 ### The checks in `01`
@@ -76,12 +80,24 @@ a minute or two. The same checks run in the post-deploy
 smoke test (`views_crafdapi.data_checks`). Whether the numbers are plausible is judged by eye in
 `02`, section 6: recorded deaths beside the forecast for the world, Nigeria and Ukraine.
 
+### The checks in `07`
+
+`07_is_the_data_current.ipynb` stops with a plain message when the data served is not current for
+today: an older forecast served after a newer delivery failed to load, a forecast past the
+service's age limit (taken from `/health`), a forecast whose first month is more than a month
+before its date (a run made on old months),
+months missing between the records and the forecast, or (if you set `CRAFD_EXPECTED_MONTHS`) a
+forecast cut short. `CRAFD_EXPECTED_RUN` works as in `01`. It downloads only the country file, so
+it runs in seconds. The checks are in `views_crafdapi.data_checks`;
+`tests/test_is_the_data_current_notebook.py` runs its check cell against deliberately broken
+answers.
+
 `02` additionally needs `geopandas` for the border overlay (installed by `uv sync`).
 `03_offline_demo.ipynb` needs no `.env` and no network.
 
 ### Outputs are committed on purpose (from the next release)
 
-`01` and `02` are stored **with their executed outputs** once they have been run against the live
+`01`, `02` and `04` to `07` are stored **with their executed outputs** once they have been run against the live
 service (at the moment they are stored without: see above), matching views-faoapi. Someone
 browsing this repo on GitHub sees the real numbers and the maps without needing a key —
 which is the point, since these notebooks are the worked example an external analyst is pointed
@@ -97,10 +113,10 @@ even when nothing meaningful changed. Two consequences:
   months, so after a new delivery they describe something that is no longer live:
 
   ```bash
-  .venv/bin/python -m pytest --nbmake notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb
+  .venv/bin/python -m pytest --nbmake notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb notebooks/04_monthly_download.ipynb notebooks/05_totals.ipynb notebooks/06_which_number_to_report.ipynb notebooks/07_is_the_data_current.ipynb
   # then, to refresh the stored outputs:
   uv run --with nbconvert jupyter nbconvert --to notebook --execute --inplace \
-      notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb
+      notebooks/01_quickstart.ipynb notebooks/02_visualization.ipynb notebooks/04_monthly_download.ipynb notebooks/05_totals.ipynb notebooks/06_which_number_to_report.ipynb notebooks/07_is_the_data_current.ipynb
   ```
 
 `--with nbconvert`, for the same reason as `--with jupyterlab` above: neither is in the dev group, and `.venv/bin/jupyter nbconvert` *looks* available — `--version` prints `7.16.6` — while actually running it raises `ModuleNotFoundError: No module named 'nbconvert'`. The command above was executed end to end before being written here.
