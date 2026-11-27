@@ -23,15 +23,14 @@ The red/beige/green column is the ADR-005 taxonomy (adversarial / realistic-misu
 `uv run pytest` (which applies `addopts = "-m 'not integration'"`) is **green-by-default**:
 
 ```
-1212 passed, 10 skipped, 49 deselected, 23 xfailed, 1 xpassed, 0 failed
+1625 passed, 4 skipped, 16 deselected, 0 failed
 ```
 
-- **deselected (49):** the `integration` tests — need live Appwrite creds (below).
-- **xfailed (23):** falsification probes that *document a genuinely-open concern* — 7 of them the priogrid-naming cluster (C-61..C-65), the rest spread across the dual-SDK, rename and provenance probes. An `xfail` here is expected, not a failure.
-- **skipped (10):** tests whose required *environment/resource* is absent (e.g. a sibling repo, see the marker below; or a cached artifact).
-- **xpassed (1):** the views-datafactory naming probe, which passes wherever that sibling is checked out (it skips in CI); see its comment.
+- **deselected (16):** the `integration` tests, which need a live Appwrite key (below). No job runs them.
+- **skipped (4):** tests whose required resource is absent (a cached file, views-pipeline-core installed, a tagged commit).
+- **expected to fail: none.** An open concern belongs in an issue, not in a test that cannot fail the build (#314).
 
-*Measured 2026-10-16 on a maintainer machine with sibling repos and the delivered run present; a clean/CI checkout skips more and xpasses none.*
+*Measured 2026-11-28 on the maintainer's computer.*
 
 A **failure** (not xfail, not skip) is the only red signal that should ever stop a merge.
 
@@ -73,11 +72,10 @@ Use the **narrowest** marker that states *why* a test is not an ordinary green t
 |--------|---------|----------|
 | `@pytest.mark.layerN_*` | Which architectural layer the test belongs to (1–5). | Always — pick the layer by *what the test proves*, not what it imports. |
 | `@pytest.mark.integration` | Needs live Appwrite credentials. | The test makes real network calls to Appwrite. Deselected by default. |
-| `@pytest.mark.requires_sibling_repos("repo", …)` | Needs a sibling repo's **source on disk** under `PLATFORM_ROOT` (the monorepo parent). | A cross-repo falsification probe inspects e.g. `views-pipeline-core` source. A conftest hook (`pytest_runtest_setup`) **skips** the test cleanly when the named repo is absent — so the suite stays green in a clean/CI checkout. Introduced in S1 (#126). |
 | `@pytest.mark.xfail(strict=False, reason=…)` | The test **documents a genuinely-open concern**; it is *expected to fail* until the concern is resolved. | The behaviour is wrong-but-tracked (cite the register C-xx). With `strict=False`, an unexpected pass (xpass) is tolerated. **Not** for environment problems — use `skip`/`requires_sibling_repos` for those. |
 | `pytest.skip(reason=…)` (in-body) | The test cannot run here because a **resource is absent**, or it is **superseded** by a better test. | A required file/data subdir is missing, or the assertion moved elsewhere. Prefer the declarative `requires_sibling_repos` marker over an ad-hoc in-body `skip` for whole-repo dependencies. |
 
-**Rule of thumb:** environment-absent → `skip`/`requires_sibling_repos` (it *can't* run); behaviour-wrong-but-tracked → `xfail` (it *should* run and fail). Keeping these distinct is what makes the green/red bar trustworthy (register **C-74**).
+**Rule of thumb:** environment-absent → `skip` (it *can't* run); behaviour-wrong-but-tracked → `xfail` (it *should* run and fail). Keeping these distinct is what makes the green/red bar trustworthy (register **C-74**).
 
 ## Marker hygiene
 
@@ -129,6 +127,5 @@ done
 1. Determine which layer your test belongs to based on what it *proves* (not what it imports).
 2. Add `pytestmark = pytest.mark.<layer_marker>` at module level.
 3. If the test requires live Appwrite, also add `pytest.mark.integration`.
-4. If it inspects a sibling repo's source, add `@pytest.mark.requires_sibling_repos("<repo>")` instead of an in-body existence check.
 5. If it documents a known-open bug, use `@pytest.mark.xfail(strict=False, reason="… (register C-xx)")` — not `skip`.
 6. Do not remove a test file without understanding which layer it covers and what correctness property would be lost.

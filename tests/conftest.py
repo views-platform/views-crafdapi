@@ -18,26 +18,6 @@ _METADATA_COLS = ForecastDataset._METADATA_COLS
 PLATFORM_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-def pytest_runtest_setup(item):
-    """Skip tests marked ``requires_sibling_repos`` when a named sibling repo
-    directory is absent under :data:`PLATFORM_ROOT`.
-
-    Cross-repo falsification probes (the ``test_falsify_*`` suite) inspect the
-    source of sibling repos (views-pipeline-core, views-datafactory, …). Those
-    siblings exist in a full monorepo checkout but not in a clean CI checkout of
-    this repo alone. This one hook lets a probe declare its sibling dependency
-    *once* as a marker, so it SKIPS (not errors, not xfails) when the sibling is
-    absent — keeping the suite green-by-default everywhere (register C-74; the
-    xfail-vs-skip convention is documented in TESTING.md).
-    """
-    for marker in item.iter_markers(name="requires_sibling_repos"):
-        missing = [repo for repo in marker.args if not (PLATFORM_ROOT / repo).exists()]
-        if missing:
-            pytest.skip(
-                f"sibling repo(s) not available under {PLATFORM_ROOT}: {', '.join(missing)}"
-            )
-
-
 def make_fao_df(n_cells=4, n_months=2, n_samples=10, seed=42, targets=("pred_test", "pred_other")):
     """Synthetic forecast frame. ``targets`` names the per-cell sample columns; the default
     ``pred_test``/``pred_other`` are deliberately series-less (they exercise the reduction, which

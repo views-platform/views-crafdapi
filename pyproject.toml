@@ -63,7 +63,6 @@ markers = [
     "layer3_http: Layer 3 — HTTP API contract tests",
     "layer4_infra: Layer 4 — Infrastructure, SDK, cache, deployment",
     "layer5_audit: Layer 5 — Falsification, regression, coverage tracking",
-    "requires_sibling_repos(*repos): skip unless the named sibling repo directories exist under PLATFORM_ROOT (cross-repo falsification probes — see TESTING.md, register C-74)",
 ]
 addopts = "-m 'not integration'"
 
