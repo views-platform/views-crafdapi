@@ -51,7 +51,7 @@ It acts as the prediction-domain facade over Appwrite's generic file storage, en
 
 ### Constructor inputs
 - `appwrite_file_manager_config: AppwriteConfig` -- a configuration object that provides:
-  - `path_manager` (a `ModelPathManager` instance with a `model_name` attribute).
+  - `path_manager` (an `APIPathManager` instance with a `model_name` attribute).
   - `bucket_id`, `bucket_name` for storage operations.
   - `collection_name`, `collection_id`, `database_id` for metadata operations.
   - Appwrite connection credentials (project ID, endpoint, API key).
@@ -107,7 +107,7 @@ Infrastructure layer (`src/views_crafdapi/managers/`).
 
 ### Depends on
 - `AppWriteFileManager` and `AppwriteConfig` (`src/views_crafdapi/managers/appwrite/`) -- all Appwrite storage and metadata operations are delegated to this component. Treated as a trusted infrastructure wrapper.
-- `ModelPathManager` (`src/views_crafdapi/managers/model.py`) -- provides `model_name` for automatic query scoping.
+- `APIPathManager` (`src/views_crafdapi/managers/model.py`) -- provides `model_name` for automatic query scoping.
 - `OperationResult` (`src/views_crafdapi/managers/appwrite/`) -- the standard result envelope.
 
 ### Called by

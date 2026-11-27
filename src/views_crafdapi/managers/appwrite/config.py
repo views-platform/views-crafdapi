@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional, Union
 
-from views_crafdapi.managers.model import ModelPathManager
+from views_crafdapi.managers.model import APIPathManager
 
 from .constants import DEFAULT_CACHE_TTL_HOURS, DEFAULT_TIMEOUT_SECONDS
 
@@ -45,7 +45,7 @@ class AppwriteConfig:
     database_id: Optional[str] = None
 
     # Path manager
-    path_manager: ModelPathManager = None
+    path_manager: APIPathManager = None
 
     # Network timeout (seconds) for all Appwrite SDK calls
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS

@@ -47,8 +47,7 @@
 
 ## 4. Inputs and Assumptions
 
-- **`model_path: APIPathManager`** (required at construction): Provides paths for `.env` file, cache directory, and configuration. Must be a valid `APIPathManager` instance with resolvable `dotenv`, `cache`, and config attributes.
-- **`wandb_notifications: bool`** (optional, default `False`): Passed through to the parent `APIManager` constructor. Enables Weights & Biases alerting if True.
+- **`model_path: APIPathManager`** (required at construction): the service's folders (`src/views_crafdapi/managers/model.py`): `dotenv`, `cache`, `logging`, and `model_name`, the store-document name.
 - **Environment variables** (loaded from `.env` at construction time):
   - `APPWRITE_ENDPOINT` -- Appwrite server URL.
   - `APPWRITE_CRAFD_PROJECT_ID` -- CRAF'd's own Appwrite project (þing 04 D3), not the shared project that holds the shelf and FAO's data.
@@ -58,7 +57,7 @@
 - **API key per request (ADR-044):** Every data endpoint requires an `X-API-Key` header holding a partner key. `_check_partner_key` checks it with the store (`_validate_api_key`, `list_buckets(limit=1)`) and remembers a valid key for 60 seconds, so a key deleted in Appwrite is refused within a minute. The key only decides who gets in: no data route reads the store with it. `/health` still asks the store with the caller's key.
 - **The server's own key (ADR-044):** `APPWRITE_CRAFDAPI_SERVER_API_KEY` (its own environment file on the server). Without it the service starts, loads nothing and answers 503 to every data request.
 - **Appwrite reachability:** The Appwrite server must be reachable at runtime. There is no offline fallback beyond cached data.
-- **Parent class chain:** Inherits `CrafdApiManager` -> `APIManager` -> `ModelManager`. Path management uses a separate hierarchy (`APIPathManager` -> `ModelPathManager`) via composition: `ModelManager` stores a `ModelPathManager` instance as `self._model_path`. The parent `ModelManager` provides `self.configs` as a computed `@property` that merges deployment, hyperparameters, and meta configuration dicts on each access. Parent constructors also initialize `self._model_path`.
+- **No parent class.** `self._model_path` holds the `APIPathManager`. `self.configs` merges three settings dicts that only the test constructor `from_config` fills; the running service has none, so it is `{}`.
 
 ---
 
@@ -102,7 +101,6 @@
 ## 7. Boundaries and Interactions
 
 - **Layer:** Infrastructure (`src/views_crafdapi/managers/api.py`). This is the top-level orchestration class in the infrastructure layer.
-- **Inheritance chain:** `CrafdApiManager` -> `APIManager` -> `ModelManager`. `ModelPathManager` is composed (not inherited) via `self._model_path`. The parent classes provide `self.configs` (computed property) and `self._model_path`.
 - **Calls (downstream):**
   - `ForecastDataset` (Domain layer, `data/handlers/forecast_dataset.py`) -- constructs datasets from DataFrames, delegates `get_subset_dataframe()` and `calculate_hdi_map()`.
   - `CrafdDiskCacheManager` (Infrastructure, `managers/disk_cache.py`) -- owns disk-based dataset caching with file-locking, TTL, and auto-derived schema versioning. Composed as `self._disk_cache`.

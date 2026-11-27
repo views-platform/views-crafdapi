@@ -58,7 +58,7 @@ def rng():
 
 @pytest.fixture
 def mock_path_manager():
-    """Mock ModelPathManager for tests that need path management."""
+    """Mock APIPathManager for tests that need path management."""
     manager = Mock()
     manager.cache = Path("/tmp/test_cache")
     manager.model_name = "test_model"

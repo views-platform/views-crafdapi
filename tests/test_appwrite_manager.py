@@ -51,7 +51,7 @@ def _mock_session_response(status_code=201, user_id="user123", session_id="sess1
 # Fixtures
 @pytest.fixture
 def mock_path_manager():
-    """Mock ModelPathManager"""
+    """Mock APIPathManager"""
     manager = Mock()
     manager.cache = Path("/tmp/test_cache")
     return manager

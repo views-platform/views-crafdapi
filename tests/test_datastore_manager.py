@@ -174,7 +174,7 @@ class TestPredictionMetadata:
 # Fixtures for PredictionStoreManager tests
 @pytest.fixture
 def mock_path_manager():
-    """Mock ModelPathManager"""
+    """Mock APIPathManager"""
     manager = Mock()
     manager.cache = Path("/tmp/test_cache")
     manager.model_name = "test_model"
