@@ -13,9 +13,6 @@ varied sizes, and NaN, because those are the corners a representation flip hits.
 
 Findings recorded in ADR-030:
 - Store flip (object-dtype store vs frame store, both under float64 collapse): **byte-identical**.
-- Per-cell MAP/HDI float32-vs-float64 delta: **0** (the tower is order-statistic based).
-- Aggregation (joint-sum) float32-vs-float64 delta: **~1e-5** — real, sub-count, but
-  invisible to the `approx(1e-4)` golden (register C-136). This is the #112 surface.
 - Ragged-S: rejected fail-loud (rectangular `(N,S)` required).
 """
 import numpy as np
@@ -26,7 +23,6 @@ from tests.conftest import make_fao_df
 from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.forecast.serialize import schema
 from views_crafdapi.forecast.summarize.draws import summarize_draws
-from views_crafdapi.forecast.summarize.estimator import tower_collapse
 
 pytestmark = pytest.mark.layer2_data
 
@@ -67,57 +63,6 @@ class TestStoreFlipIsByteIdentical:
             assert frame.dtype == np.float32
             # Same samples, same row order -> the store carries the input faithfully.
             assert np.array_equal(frame, expected), f"{var}: frame store diverges from input"
-
-    def test_float64_collapse_identical_from_frame_and_input(self, n_cells, n_months, n_samples, seed):
-        df = make_fao_df(n_cells=n_cells, n_months=n_months, n_samples=n_samples, seed=seed)
-        ds = ForecastDataset(df)
-        for var in ds.targets:
-            input_f64 = _input_samples(df, var).astype(np.float64)
-            frame_f64 = ds.to_frames()[var].values.astype(np.float64)
-            a_lo, a_hi, a_mp = tower_collapse(input_f64, 0.9)
-            b_lo, b_hi, b_mp = tower_collapse(frame_f64, 0.9)
-            assert np.array_equal(np.asarray(a_mp), np.asarray(b_mp))
-            assert np.array_equal(np.asarray(a_lo), np.asarray(b_lo))
-            assert np.array_equal(np.asarray(a_hi), np.asarray(b_hi))
-
-
-@pytest.mark.parametrize("n_cells,n_months,n_samples,seed", _CORPUS)
-class TestFloat32CollapseDelta:
-    """Characterize the ONLY numeric change (the gated #112): float32-native collapse."""
-
-    # Recorded in ADR-030. Per-cell MAP/HDI is order-statistic -> exactly 0 here; the
-    # bound is generous to remain robust across the corpus, and the test asserts the
-    # measured delta stays sub-count (far below a single fatality).
-    PER_CELL_BOUND = 1e-3
-
-    def test_per_cell_map_hdi_float32_delta_is_negligible(self, n_cells, n_months, n_samples, seed):
-        ds = ForecastDataset(make_fao_df(n_cells=n_cells, n_months=n_months,
-                                         n_samples=n_samples, seed=seed))
-        for var in ds.targets:
-            f32 = ds.to_frames()[var].values
-            f64 = f32.astype(np.float64)
-            lo32, hi32, mp32 = (np.asarray(x) for x in tower_collapse(f32, 0.9))
-            lo64, hi64, mp64 = (np.asarray(x) for x in tower_collapse(f64, 0.9))
-            assert np.max(np.abs(mp32 - mp64)) <= self.PER_CELL_BOUND
-            assert np.max(np.abs(lo32 - lo64)) <= self.PER_CELL_BOUND
-            assert np.max(np.abs(hi32 - hi64)) <= self.PER_CELL_BOUND
-
-
-def test_aggregation_joint_sum_float32_delta_is_subcount_but_golden_invisible():
-    """The #112 aggregation surface (register C-136): the cross-cell joint-sum is
-    arithmetic, so float32 vs float64 differ — by ~1e-5 here. Real, sub-count, and
-    BELOW the `approx(1e-4)` golden tolerance, which is why a flip would pass CI
-    silently. Recorded so the ADR-023 diff for #112 is evidence-based."""
-    rng = np.random.default_rng(0)
-    cells = rng.gamma(2.0, 3.0, size=(20, 1000)).astype(np.float32)  # 20 cells x 1000 draws
-    summed_f32 = cells.sum(axis=0)
-    summed_f64 = cells.astype(np.float64).sum(axis=0)
-    _, hi32, mp32 = (np.asarray(x) for x in tower_collapse(summed_f32, 0.9))
-    _, hi64, mp64 = (np.asarray(x) for x in tower_collapse(summed_f64, 0.9))
-    map_delta = float(abs(mp32[0] - mp64[0]))
-    # The drift exists (arithmetic), is sub-count, and would be invisible at 1e-4.
-    assert 0.0 < float(np.max(np.abs(summed_f32 - summed_f64)))   # the sum genuinely differs
-    assert map_delta < 1e-3                                        # but is sub-count
 
 
 def test_ragged_S_is_rejected_fail_loud():

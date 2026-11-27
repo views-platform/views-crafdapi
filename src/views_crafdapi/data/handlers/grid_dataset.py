@@ -11,12 +11,9 @@ from views_crafdapi.forecast.ingestion.plausibility import (
 )
 from views_crafdapi.forecast.serialize import schema
 from views_crafdapi.forecast.serialize.json_contract import (
-    hdi_dataframe,
-    map_dataframe,
     series_value_dataframe,
 )
 from views_crafdapi.forecast.summarize.draws import summarize_draws
-from views_crafdapi.forecast.summarize.estimator import tower_collapse
 
 from pathlib import Path
 
@@ -32,11 +29,10 @@ class _GridDataset:
 
     Carries the canonical `(N, S)` sample store (`_sample_store`) over a sorted 2-level
     MultiIndex and provides the representation-agnostic machinery: tensor build, subset,
-    the MAP/HDI collapse, frame export, and integrity round-trip. It is **not** FAO-specific
+    the summaries and frame export. It is **not** FAO-specific
     — it requires no geography — which is exactly why it is retained as a separate base
     rather than merged into `ForecastDataset`: it is the geo-less unit under test (the
-    parity/validation suites instantiate it directly) and the vehicle `check_integrity`
-    uses to round-trip a metadata-free subset.
+    parity/validation suites instantiate it directly).
 
     `ForecastDataset` composes the `forecast/*` modules ON TOP of this base, adding the FAO
     geo-metadata table, aggregation, and the served `summarize`. The object-dtype
@@ -120,7 +116,6 @@ class _GridDataset:
             converted if converted.index.is_monotonic_increasing else converted.sort_index()
         )  # Sort early
 
-        self.original_index = self.dataframe.index.copy()  # Save sorted index
 
         self._time_id, self._entity_id = self.dataframe.index.names
         self._rebuild_index_mappings()
@@ -175,7 +170,6 @@ class _GridDataset:
                 # Disable tensor operations by not setting sample_size
                 self.sample_size = None
         self._split_tensor_cache = {}
-        self._max_tensor_cache_size = 128  # Set a maximum cache size
         self._entity_metadata_cache = None
 
         # S4d (#154, the keystone / declared stop-point): the contiguous (N,S) float32
@@ -233,10 +227,6 @@ class _GridDataset:
                     )
             self.dataframe = self.dataframe.drop(columns=scalar_cols)
 
-    def _clear_tensor_cache_if_needed(self):
-        if len(self._split_tensor_cache) > self._max_tensor_cache_size:
-            self._split_tensor_cache.clear()
-
     def __deepcopy__(self, memo):
         """Shallow-copy DataFrames (shares underlying numpy arrays) but copy structure.
 
@@ -281,24 +271,6 @@ class _GridDataset:
         # Convert to pandas Index for efficient lookups
         self._time_values = pd.Index(self._time_values)
         self._entity_values = pd.Index(self._entity_values)
-
-    def _get_time_index(self, time_id: int) -> int:
-        """Get positional index for time ID using vectorized lookup."""
-        indices = self._time_values.get_indexer([time_id])
-        if indices[0] == -1:
-            raise KeyError(
-                f"Time ID {time_id} not found. Available: {self._time_values.tolist()}"
-            )
-        return indices[0]
-
-    def _get_entity_index(self, entity_id: int) -> int:
-        """Get positional index for entity ID using vectorized lookup."""
-        indices = self._entity_values.get_indexer([entity_id])
-        if indices[0] == -1:
-            raise KeyError(
-                f"Entity ID {entity_id} not found. Available: {self._entity_values.tolist()}"
-            )
-        return indices[0]
 
     def _convert_to_arrays(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -611,101 +583,6 @@ class _GridDataset:
             block = block[:, sample_indices]
         return block
 
-    def to_dataframe(self, tensor: np.ndarray) -> pd.DataFrame:
-        """
-        Convert a tensor back to a DataFrame with the proper structure.
-
-        Parameters:
-        tensor (np.ndarray): The tensor to be converted.
-
-        Returns:
-        pd.DataFrame: The converted DataFrame.
-
-        Notes:
-        If the instance is a prediction, the tensor will be converted using the
-        _prediction_to_dataframe method. Otherwise, it will use the _features_to_dataframe method.
-        """
-        if self.is_prediction:
-            return self._prediction_to_dataframe(tensor)
-        return self._features_to_dataframe(tensor)
-
-    def _features_to_dataframe(self, tensor: np.ndarray) -> pd.DataFrame:
-        """
-        Convert a 4D features tensor back to a pandas DataFrame.
-
-        Parameters:
-        tensor (np.ndarray): 4D tensor with shape (time × entity × samples × features).
-
-        Returns:
-        pd.DataFrame: DataFrame with MultiIndex (time, entity) and variables as columns.
-        """
-
-        n_time, n_entities, n_samples, n_vars = tensor.shape
-
-        # Create MultiIndex for rows (time × entity)
-        index = pd.MultiIndex.from_product(
-            [self._time_values, self._entity_values],
-            names=[self._time_id, self._entity_id],
-        )
-
-        # Reshape data for DataFrame construction
-        data = {}
-        for var_idx, var_name in enumerate(self.dataframe.columns):
-            # Extract variable data (time × entity × samples)
-            var_data = tensor[..., var_idx]
-            # Reshape to (n_time * n_entities, n_samples)
-            data[var_name] = var_data.reshape(-1, n_samples)
-
-        # Create DataFrame with proper array storage
-        df = pd.DataFrame(
-            {col: list(data[col]) for col in self.dataframe.columns}, index=index
-        )
-
-        return df.loc[self.original_index]
-
-    @staticmethod
-    def _tower_collapse(flat, alpha, enforce_non_negative=False):
-        """Vectorized MAP/HDI via the views-frames tower estimator (register C-81).
-
-        Delegates to `forecast.summarize.estimator.tower_collapse` (extracted in Phase 2 of
-        #87 / #89). Returns ``(hdi_lower, hdi_upper, map)``, each shape ``(N,)``.
-        """
-        return tower_collapse(flat, alpha, enforce_non_negative)
-
-    def _compute_single_map_with_checks(self, samples, enforce_non_negative, alpha=0.9):
-        """Wrapper with NaN handling and input validation"""
-        if np.all(np.isnan(samples)):
-            return np.nan
-        return self._compute_single_map(
-            samples=samples[~np.isnan(samples)],
-            enforce_non_negative=enforce_non_negative,
-            alpha=alpha,
-        )
-
-    def _compute_single_map(self, samples, enforce_non_negative=False, alpha=0.9):
-        """Compute the MAP estimate via the views-frames ``tower_point`` estimator.
-
-        Parameters
-        ----------
-        samples : array-like
-            Posterior samples.
-        enforce_non_negative : bool
-            If True, forces the MAP estimate to be non-negative.
-
-        Returns
-        -------
-        float
-            The estimated MAP.
-        """
-        samples = np.asarray(samples)
-        if np.all(np.isnan(samples)):
-            return np.nan
-        if len(samples) == 0:
-            logger.error("❌ No valid samples. Returning MAP = 0.0")
-            return 0.0
-        _, _, map_vals = self._tower_collapse(samples, alpha, enforce_non_negative)
-        return float(map_vals[0])
-
     @staticmethod
     def _stack_cells(column: pd.Series) -> np.ndarray:
         """Materialize an object-dtype sample column into a contiguous ``(N, S)`` float32
@@ -780,82 +657,6 @@ class _GridDataset:
             else:
                 frames[var] = build_target_frame(stacked[:, 0], time, unit)
         return frames
-
-    def _create_map_dataframe(
-        self,
-        var_name: str,
-        values: np.ndarray,
-        time_ids: Optional[Union[int, List[int]]] = None,
-        entity_ids: Optional[Union[int, List[int]]] = None,
-    ) -> pd.DataFrame:
-        """Helper to format statistic results into DataFrame.
-
-        Delegates to `forecast.serialize.json_contract.map_dataframe` (Phase 4a, #112).
-        """
-        return map_dataframe(
-            var_name,
-            values,
-            self._time_id,
-            self._entity_id,
-            self.dataframe.index.get_level_values(self._time_id).unique(),
-            self.dataframe.index.get_level_values(self._entity_id).unique(),
-            time_ids,
-            entity_ids,
-        )
-
-    def _prediction_to_dataframe(self, tensor: np.ndarray) -> pd.DataFrame:
-        """
-        Convert a 4D prediction tensor to a pandas DataFrame.
-
-        Parameters:
-        tensor (np.ndarray): 4D tensor with shape (time × entity × samples × variables).
-
-        Returns:
-        pd.DataFrame: DataFrame with MultiIndex (time, entity) and variables as columns.
-        """
-        n_time, n_entities, n_samples, n_vars = tensor.shape
-        current_columns = self.targets
-        time_steps = self.dataframe.index.get_level_values(self._time_id).unique()
-        entities = self.dataframe.index.get_level_values(self._entity_id).unique()
-
-        self._validate_tensor_dims(n_time, n_entities, n_vars, len(current_columns))
-
-        data = {}
-        for var_idx, var_name in enumerate(current_columns):
-            var_data = tensor[..., var_idx].reshape(-1, n_samples)
-            data[var_name] = [arr for arr in var_data]
-
-        return pd.DataFrame(
-            data,
-            index=pd.MultiIndex.from_product(
-                [time_steps, entities], names=[self._time_id, self._entity_id]
-            ),
-        ).loc[self.dataframe.index]
-
-    def _validate_tensor_dims(
-        self, n_time: int, n_entities: int, n_features: int, expected: int
-    ) -> None:
-        """
-        Validate tensor dimensions against original data.
-
-        Parameters:
-        n_time (int): The expected number of unique time steps.
-        n_entities (int): The expected number of unique entities.
-        n_features (int): The number of features in the tensor.
-        expected (int): The expected number of features.
-
-        Raises:
-        ValueError: If there is a mismatch in the number of time steps, entities, or features.
-        """
-        if len(self.dataframe.index.get_level_values(self._time_id).unique()) != n_time:
-            raise ValueError("Mismatch in number of time steps")
-        if (
-            len(self.dataframe.index.get_level_values(self._entity_id).unique())
-            != n_entities
-        ):
-            raise ValueError("Mismatch in number of entities")
-        if n_features != expected:
-            raise ValueError(f"Feature dimension mismatch: {n_features} vs {expected}")
 
     def get_subset_tensor(
         self,
@@ -1067,66 +868,6 @@ class _GridDataset:
                 data[col] = s
         return pd.DataFrame(data, index=index)
 
-    def check_integrity(
-        self,
-        include_targets: bool = True,
-        time_ids: Optional[Union[int, List[int]]] = None,
-        features: Optional[Union[str, List[str]]] = None,
-        sample_idx: Optional[Union[int, List[int]]] = None,
-        entity_ids: Optional[Union[int, List[int]]] = None,
-    ) -> bool:
-        """
-        Validate tensor reconstruction integrity, optionally for subset
-
-        Parameters:
-        include_targets: Whether to include dependent variables
-        time_ids: Time IDs to validate (None for all)
-        features: Feature names to validate (None for all)
-        sample_idx: Sample indices to validate (None for all)
-        entity_ids: Entity IDs to validate (None for all)
-        """
-        if self.is_prediction and not include_targets:
-            raise ValueError("Cannot exclude dependent variables in prediction mode")
-
-        # Get subset if specified
-        if (
-            time_ids is not None
-            or entity_ids is not None
-            or features is not None
-            or sample_idx is not None
-        ):
-            subset_df = self._subset_for_integrity(
-                time_ids, features, sample_idx, entity_ids
-            )
-            temp_ds = _GridDataset(subset_df)
-            tensor = temp_ds.to_tensor(include_targets)
-            reconstructed = temp_ds.to_dataframe(tensor)
-            original = subset_df
-        else:
-            tensor = self.to_tensor(include_targets)
-            reconstructed = self.to_dataframe(tensor)
-            # Prediction sample cells live in `_sample_store` (S4d), not `.dataframe`;
-            # rebuild the object-cell view (frame-sourced, base impl → pred_* only, no
-            # geo-metadata) to compare against the tensor round-trip. Byte-identical to
-            # the pre-S4d `self.dataframe`. Feature mode keeps its pandas cells.
-            original = (
-                _GridDataset.get_subset_dataframe(self)
-                if self.is_prediction
-                else self.dataframe
-            )
-
-        if include_targets:
-            return original.equals(reconstructed)
-        else:
-            return original[self.features].equals(reconstructed[self.features])
-
-    def _subset_for_integrity(self, time_ids, features, sample_idx, entity_ids):
-        """The subset frame used by ``check_integrity`` — must contain only the
-        ``pred_*``/feature columns, since it is re-wrapped in a bare
-        ``_GridDataset``. Subclasses whose ``get_subset_dataframe`` adds extra
-        columns (e.g. geo-metadata) override this to exclude them (C-68)."""
-        return self.get_subset_dataframe(time_ids, features, sample_idx, entity_ids)
-
     @property
     def num_entities(self) -> int:
         return len(self.dataframe.index.get_level_values(self._entity_id).unique())
@@ -1145,30 +886,6 @@ class _GridDataset:
             f"entities={self.num_entities}, "
             f"features={self.num_features}, "
             f"prediction_mode={self.is_prediction})"
-        )
-
-    def _create_hdi_dataframe(
-        self,
-        var_name: str,
-        lower: np.ndarray,
-        upper: np.ndarray,
-        time_ids: Optional[Union[int, List[int]]] = None,
-        entity_ids: Optional[Union[int, List[int]]] = None,
-    ) -> pd.DataFrame:
-        """Helper to format HDI results into DataFrame.
-
-        Delegates to `forecast.serialize.json_contract.hdi_dataframe` (Phase 4a, #112).
-        """
-        return hdi_dataframe(
-            var_name,
-            lower,
-            upper,
-            self._time_id,
-            self._entity_id,
-            self.dataframe.index.get_level_values(self._time_id).unique(),
-            self.dataframe.index.get_level_values(self._entity_id).unique(),
-            time_ids,
-            entity_ids,
         )
 
     def _create_series_value_dataframe(self, var, summary, time_ids=None, entity_ids=None) -> pd.DataFrame:
@@ -1220,7 +937,7 @@ class _GridDataset:
 
         # S6b-1 (#208): stream the reduction ONE MONTH at a time instead of materializing the
         # full `(n_time, n_entity, S, targets)` float64 grid (~57 GB at full scale). The reduction
-        # is per-row (`_tower_collapse` uses positional ids), so per-month blocks reduced and
+        # is per-row, so per-month blocks reduced and
         # stacked in month order are byte-identical to the whole-grid path — guarded by the golden
         # output test. Axis resolution mirrors `get_subset_tensor` exactly (order preserved).
         wrap = lambda v: [v] if (v is not None and not isinstance(v, list)) else v  # noqa: E731
@@ -1278,36 +995,5 @@ class _GridDataset:
             for var_name in selected_vars
         ]
         return pd.concat(results, axis=1)
-
-    def _analyze_samples(
-        self, samples: np.ndarray, alpha: float, enforce_non_negative: bool
-    ) -> Tuple[float, float, float]:
-        """
-        Analyze samples to get HDI bounds and MAP estimate in a single operation.
-
-        Parameters:
-        samples: Array of samples
-        alpha: Credibility level for HDI
-        enforce_non_negative: Whether to enforce non-negative MAP estimates
-
-        Returns:
-        Tuple of (hdi_lower, hdi_upper, map_estimate)
-        """
-        if np.all(np.isnan(samples)):
-            return (np.nan, np.nan, np.nan)
-
-        lower, upper, map_vals = self._tower_collapse(
-            samples, alpha, enforce_non_negative
-        )
-        return (float(lower[0]), float(upper[0]), float(map_vals[0]))
-
-    def _calculate_single_hdi(
-        self, data: np.ndarray, alpha: float
-    ) -> Tuple[float, float]:
-        """Calculate HDI for a 1D array"""
-        if np.all(np.isnan(data)):
-            return (np.nan, np.nan)
-        lower, upper, _ = self._tower_collapse(data, alpha, enforce_non_negative=False)
-        return (float(lower[0]), float(upper[0]))
 
 

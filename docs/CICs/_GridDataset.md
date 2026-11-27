@@ -62,12 +62,12 @@
 
 - **Index validation:** Guarantees that the internal DataFrame has a two-level MultiIndex (time ID, entity ID). Construction fails with `ValueError` if this invariant is violated.
 - **Dense grid fill:** Guarantees that after preprocessing, the DataFrame contains entries for all entity x time combinations of the last time step's entities. Missing combinations are recreated and filled with `fill_value` (default 0, per ADR-021) — array (sample) columns are filled with a sample-length array of `fill_value`, not a scalar (C-87). The dense grid is defined by the entities present in the last time step; an entity present in the input but **absent** from the last time step raises `ValueError` rather than being silently dropped (C-87) — consistent with the "does not silently drop data" guarantee below.
-- **Index mapping:** Maintains sorted `_time_values` and `_entity_values` indices. Provides O(1) positional lookup from time ID or entity ID via `_get_time_index()` and `_get_entity_index()`. Missing IDs raise `KeyError`.
-- **Tensor conversion:** Guarantees lossless round-trip conversion between DataFrame and tensor via `to_tensor()` / `to_dataframe()` after initial normalization (prediction columns are converted to float32 during `_validate_prediction_structure`, so float64 input data loses precision at construction time, not during round-trip). The tensor layout is `(time x entity x samples x features)` for both prediction and feature modes. Round-trip integrity is verifiable via `check_integrity()`.
+- **Index mapping:** Maintains sorted `_time_values` and `_entity_values` indices.
+- **Tensor conversion:** Builds the tensor from the DataFrame via `to_tensor()` after initial normalization (prediction columns are converted to float32 during `_validate_prediction_structure`, so float64 input data loses precision at construction time). The tensor layout is `(time x entity x samples x features)` for both prediction and feature modes.
 - **Prediction/feature mode:** Automatically detects prediction mode by the presence of `pred_*` columns. In prediction mode, `targets` are the `pred_*` columns and `features` is empty. In feature mode, `targets` must be explicitly provided or a `ValueError` is raised.
 - **Subsetting:** `get_subset_tensor()` and `get_subset_dataframe()` provide consistent subsetting along time, entity, feature, and sample dimensions. Invalid IDs raise `KeyError` or `ValueError`.
 - **HDI/MAP delegation:** `calculate_hdi_map()` delegates per-cell statistical analysis to `PosteriorDistributionAnalyzer`, creating a fresh instance per sample vector. Returns a DataFrame with `{var}_hdi_lower`, `{var}_hdi_upper`, `{var}_map`, `{var}_min`, and `{var}_max` columns.
-- **Tensor caching:** Caches computed tensors (`_prediction_tensor_cache`, `_features_tensor_cache`, `_split_tensor_cache`) to avoid redundant computation. Note: `_clear_tensor_cache_if_needed()` is defined with a 128-entry bound but is not currently wired into any insertion path — the cache grows unboundedly in practice. This is a known gap.
+- **Tensor caching:** Caches computed tensors (`_prediction_tensor_cache`, `_features_tensor_cache`, `_split_tensor_cache`) to avoid redundant computation. Nothing bounds these caches.
 - **Deep copy performance:** `__deepcopy__` performs shallow DataFrame copies (sharing underlying numpy arrays), which is ~1,700x faster than default deepcopy at global scale. Safe as long as consumers do not mutate cell contents in-place.
 
 ---
@@ -86,10 +86,8 @@
 ## 5. Outputs and Side Effects
 
 - **`to_tensor()`**: Returns a 4D numpy array of shape `(time x entity x samples x features/targets)`. In prediction mode, returns the prediction tensor directly. In feature mode with `include_targets=False`, returns only the feature dimensions.
-- **`to_dataframe(tensor)`**: Converts a tensor back to a DataFrame with the original MultiIndex structure. The returned DataFrame is indexed to match `self.original_index`.
 - **`get_subset_tensor()` / `get_subset_dataframe()`**: Return filtered views of the data along any combination of time, entity, feature, and sample dimensions.
 - **`calculate_hdi_map()`**: Returns a DataFrame with columns `{var}_hdi_lower`, `{var}_hdi_upper`, `{var}_map`, `{var}_min`, `{var}_max` for each selected prediction variable.
-- **`check_integrity()`**: Returns `True` if tensor round-trip reconstruction produces an identical DataFrame; `False` otherwise.
 - **Properties:** `num_entities`, `num_time_steps`, `num_features` return integer counts.
 - **Side effects:**
   - Internal tensor caches (`_prediction_tensor_cache`, `_features_tensor_cache`, `_split_tensor_cache`) are populated lazily on first tensor access.
@@ -111,9 +109,8 @@
 - **`TypeError("Invalid type {type} for prediction column {var}")`** -- Raised by `_validate_prediction_structure` if a prediction column contains an unsupported type (not int, float, list, or ndarray).
 - **`ValueError("Prediction columns must contain array-like values after conversion")`** -- Raised by `_validate_prediction_structure` if conversion to ndarray fails.
 - **`ValueError("Tensor operations are disabled when broadcast_features=False")`** -- Raised by `to_tensor()` when tensor conversion is attempted without broadcast.
-- **`KeyError("Time ID ... not found")`** / **`KeyError("Invalid time IDs: ...")`** -- Raised when subsetting with nonexistent time IDs.
-- **`KeyError("Entity ID ... not found")`** / **`KeyError("Invalid entity IDs: ...")`** -- Raised when subsetting with nonexistent entity IDs.
-- **`ValueError("Feature dimension mismatch: ...")`** -- Raised by `_validate_tensor_dims` on shape inconsistency during tensor-to-DataFrame conversion.
+- **`KeyError("Invalid time IDs: ...")`** -- Raised when subsetting with nonexistent time IDs.
+- **`KeyError("Invalid entity IDs: ...")`** -- Raised when subsetting with nonexistent entity IDs.
 - **Must never fail silently:** Index mismatches, missing columns, and shape violations must always raise. Dense grid fill proceeds deterministically and does not silently drop data.
 
 ---
@@ -126,7 +123,6 @@
   - `ForecastDataset` (via `_PGDataset`) -- adds geographic metadata columns, aggregation to admin units, and Shapefile-based spatial operations.
 - **Callers:** `ForecastDataset` (child), `CrafdApiManager` (via child). Test fixtures in `conftest.py`.
 - **Dependencies:**
-  - `PosteriorDistributionAnalyzer` (domain peer in `data/statistics.py`) -- instantiated fresh per sample vector inside `_analyze_samples`, `_compute_single_map`, and `_calculate_single_hdi`.
   - `pandas`, `numpy` -- structural dependencies for DataFrame/tensor operations.
   - `joblib.Parallel` -- patched by `tqdm_joblib` context manager for progress reporting.
 - **Must not depend on:** Infrastructure layer (`managers/`), Observability layer (`wandb/`), API layer (`routers/`), or any I/O / network operations.
@@ -158,8 +154,6 @@ assert ds.is_prediction is True
 # Get tensor: shape (2 time, 2 entity, 100 samples, 1 target)
 tensor = ds.to_tensor()
 
-# Round-trip check
-assert ds.check_integrity() is True
 
 # HDI/MAP summary
 summary = ds.calculate_hdi_map(alpha=0.9)
@@ -229,7 +223,6 @@ ds = _GridDataset(df)  # Raises ValueError: "Prediction dataframe should only co
 - **Green tests (must pass):**
   - MultiIndex validation: rejects non-MultiIndex and wrong number of levels (`test_dataset_validation.py`).
   - Dense grid fill: verifies all entity x time combinations are present after preprocessing.
-  - Tensor round-trip: `check_integrity()` returns `True` for both prediction and feature datasets.
   - `calculate_hdi_map()` returns expected columns and non-NaN values for valid prediction data (`test_handler_statistics.py`).
   - Subsetting: `get_subset_tensor` and `get_subset_dataframe` return correct shapes and raise on invalid IDs.
   - Prediction mode auto-detection: datasets with `pred_*` columns correctly set `is_prediction = True`.

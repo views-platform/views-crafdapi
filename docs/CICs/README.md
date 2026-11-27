@@ -58,7 +58,7 @@ Contracts must be clear enough that:
 
 ## Superseded Contracts
 
-- [`PosteriorDistributionAnalyzer`](PosteriorDistributionAnalyzer.md) — the v1 hand-rolled MAP/HDI estimator; **class removed 2026-07-24** (epic #222 / S1), superseded by the views-frames tower (`forecast/summarize/estimator.tower_collapse`). Retained for historical reference only.
+- [`PosteriorDistributionAnalyzer`](PosteriorDistributionAnalyzer.md) — the v1 hand-rolled MAP/HDI estimator; **class removed 2026-07-24** (epic #222 / S1), superseded by the views-frames tower. Retained for historical reference only.
 
 ---
 
