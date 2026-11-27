@@ -51,5 +51,6 @@ uv run pytest           # the tests (those needing a live key are left out by de
 uv run ruff check .     # lint
 ```
 
-To run the service locally it needs the settings named in `.env.example` and a read key in
+To run the service locally it needs the eight Appwrite settings listed in
+`_REQUIRED_APPWRITE_ENV_VARS` (`src/views_crafdapi/managers/api.py`) and a read key in
 `APPWRITE_CRAFDAPI_SERVER_API_KEY`. Tests and their layers are described in [`TESTING.md`](TESTING.md).
