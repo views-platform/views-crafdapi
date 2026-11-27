@@ -104,37 +104,6 @@ class TestP1_GetAliasFailure:
 # P-2: Unconverted raw dict access on SDK responses
 # ============================================================
 
-class TestP2_RawDictAccess:
-    """Raw dict subscript on Pydantic models must not crash."""
-
-    @pytest.mark.xfail(reason="Pydantic models are not subscriptable — normalization via _as_dict() at call sites is the fix")
-    def test_session_subscript_crashes_on_pydantic(self):
-        """Reproduces line 204: session['$id']"""
-        session = FakeSession(**{"$id": "s1", "userId": "u1", "$createdAt": "2025-01-01"})
-        # This is what the code does — it should work but currently crashes
-        try:
-            session["$id"]
-        except TypeError:
-            pytest.fail("session['$id'] crashes on Pydantic model — line 204 is broken on SDK 19.2.0")
-
-    @pytest.mark.xfail(reason="Pydantic models are not subscriptable — normalization via _as_dict() at call sites is the fix")
-    def test_existing_docs_subscript_crashes_on_pydantic(self):
-        """Reproduces line 1155: existing_docs['total']"""
-        existing_docs = FakeDocumentList(total=3, documents=[])
-        try:
-            existing_docs["total"]
-        except TypeError:
-            pytest.fail("existing_docs['total'] crashes on Pydantic model — line 1155 is broken on SDK 19.2.0")
-
-    @pytest.mark.xfail(reason="Pydantic models are not subscriptable — normalization via _as_dict() at call sites is the fix")
-    def test_user_subscript_crashes_on_pydantic(self):
-        """Reproduces line 2115: user['$id']"""
-        user = FakeUser(**{"$id": "u1", "email": "a@b.com", "name": "Test"})
-        try:
-            user["$id"]
-        except TypeError:
-            pytest.fail("user['$id'] crashes on Pydantic model — line 2115 is broken on SDK 19.2.0")
-
 
 # ============================================================
 # P-3: OperationResult.data stores un-normalized Pydantic models
@@ -142,39 +111,6 @@ class TestP2_RawDictAccess:
 
 class TestP3_PropagationCrash:
     """OperationResult.data holding a Pydantic model breaks downstream dict access."""
-
-    @pytest.mark.xfail(reason="Pydantic models are not subscriptable — normalization via _as_dict() at call sites is the fix")
-    def test_upload_result_data_subscript(self):
-        """Reproduces line 1817: file_id = upload_result.data['$id']
-        where upload_result.data is a raw Pydantic model from storage.create_file()"""
-        raw_sdk_response = FakeFile(**{"$id": "file1", "name": "test.txt", "sizeOriginal": 1024})
-
-        # Simulate OperationResult.data = raw_sdk_response
-        data = raw_sdk_response
-        try:
-            data["$id"]
-        except TypeError:
-            pytest.fail("data['$id'] crashes when OperationResult.data is a Pydantic model")
-
-    @pytest.mark.xfail(reason="Pydantic models are not subscriptable — normalization via _as_dict() at call sites is the fix")
-    def test_upload_result_data_get(self):
-        """Reproduces line 1441: uploaded_file_id = upload_result.data.get('$id')"""
-        raw_sdk_response = FakeFile(**{"$id": "file1", "name": "test.txt", "sizeOriginal": 1024})
-        data = raw_sdk_response
-        try:
-            data.get("$id")
-        except AttributeError:
-            pytest.fail("data.get('$id') crashes when OperationResult.data is a Pydantic model")
-
-    @pytest.mark.xfail(reason="Pydantic models are not subscriptable — normalization via _as_dict() at call sites is the fix")
-    def test_upload_result_data_mutation(self):
-        """Reproduces line 1837: upload_result.data['metadata'] = metadata_result.data"""
-        raw_sdk_response = FakeFile(**{"$id": "file1", "name": "test.txt", "sizeOriginal": 1024})
-        data = raw_sdk_response
-        try:
-            data["metadata"] = {"key": "value"}
-        except TypeError:
-            pytest.fail("data['metadata'] = ... crashes when OperationResult.data is a Pydantic model")
 
     def test_as_dict_normalizes_before_storage(self):
         """OperationResult(data=result) should store _as_dict(result), not raw result."""
