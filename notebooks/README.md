@@ -40,8 +40,8 @@ recorded deaths. `02` (section 2) maps the whole world for one month.
 ## Conventions
 
 - **Public surface only**: the API client (`CrafdApiClient`), the plotting helpers
-  (`views_crafdapi.plotting`), the dataset class for the offline demo, and plain HTTP (`requests`)
-  for the bulk download, which is a file, not JSON.
+  (`views_crafdapi.plotting`) and the dataset class for the offline demo. Bulk files come through
+  the client too: `client.download_bulk(level, outcome)` or `client.download_bulk_to(level, outcome, path)`.
 - **No secrets committed**: the live-API notebooks read the key from `.env` and print only whether
   it is set; stored outputs are checked for keys before a commit; `03` uses synthetic data with **fictional geography** (a toy
   lattice, fixed seed) so anyone can *Run All* with zero credentials.
