@@ -71,12 +71,6 @@ class TestAppwriteConnection:
         result = file_manager.list_buckets(limit=1)
         assert result.success, f"Auth failed: {result.error}"
 
-    def test_bucket_accessible(self, file_manager, appwrite_config):
-        result = file_manager.list_files(
-            bucket_id=appwrite_config.bucket_id, limit=1
-        )
-        assert result.success, f"Cannot access bucket: {result.error}"
-
 
 class TestDataDownload:
 

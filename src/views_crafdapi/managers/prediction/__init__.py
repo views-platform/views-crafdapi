@@ -5,7 +5,7 @@ per module, mirroring the ``appwrite/`` package (S9):
 
 * :mod:`.constants`  — wire-contract artifact types + metadata field schemas
 * :mod:`.quarantine` — the C-71 operator rollback gate (blocklist/allowlist)
-* :mod:`.metadata`   — the value objects (PredictionMetadata / -FileMetadata / -Provenance)
+* :mod:`.metadata`   — the value objects (PredictionMetadata / -Provenance)
 * :mod:`.manager`    — ``PredictionStoreManager`` (finds and downloads deliveries; read only)
   and ``MetadataLookupError``, raised when a metadata search fails
 
@@ -19,11 +19,9 @@ from .constants import (
     PREDICTION_METADATA_FIELDS,
     SHARD_ARTIFACT_TYPE,
     SIDECAR_ARTIFACT_TYPE,
-    SYSTEM_METADATA_FIELDS,
 )
 from .manager import MetadataLookupError, PredictionStoreManager
 from .metadata import (
-    PredictionFileMetadata,
     PredictionMetadata,
     PredictionProvenance,
 )
@@ -38,10 +36,8 @@ __all__ = [
     "PredictionStoreManager",
     "MetadataLookupError",
     "PredictionMetadata",
-    "PredictionFileMetadata",
     "PredictionProvenance",
     "PREDICTION_METADATA_FIELDS",
-    "SYSTEM_METADATA_FIELDS",
     "LEGACY_ARTIFACT_TYPE",
     "FORECAST_CATEGORY",
     "MANIFEST_ARTIFACT_TYPE",

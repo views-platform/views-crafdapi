@@ -141,14 +141,3 @@ class TestP4_ApiConsumerAssumptions:
         result = _as_dict(f)
         assert isinstance(result, dict), f"_as_dict should return dict, got {type(result)}"
         assert result.get("name") == "test.txt", f"'name' key missing or wrong: {result}"
-
-    def test_list_files_data_shape(self):
-        """api.py:1154-1155 does result.data.get('files', []) and result.data.get('total', 0).
-        These are built by list_files() using _get() + _as_dict(). Verify shape."""
-        # This tests the output shape, not the SDK input
-        normalized_output = {
-            "files": [{"$id": "f1", "name": "test.txt"}],
-            "total": 5,
-        }
-        assert isinstance(normalized_output.get("files"), list)
-        assert isinstance(normalized_output.get("total"), (int, float))

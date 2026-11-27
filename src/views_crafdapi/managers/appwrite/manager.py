@@ -1,8 +1,7 @@
-"""The Appwrite file manager: download files, list buckets, read file and bucket details. Read only.
+"""The Appwrite file manager: download files, list buckets, read a file's details. Read only.
 
 Extracted from the appwrite god-module (epic #325 S9).
 """
-from typing import List
 from pathlib import Path
 from datetime import timedelta
 import json
@@ -13,9 +12,7 @@ import logging
 
 from appwrite.client import Client
 from appwrite.services.storage import Storage
-from appwrite.services.databases import Databases
 from appwrite.services.tables_db import TablesDB
-from appwrite.services.users import Users
 from appwrite.exception import AppwriteException
 from appwrite.query import Query
 
@@ -47,12 +44,10 @@ class AppWriteFileManager:
 
         # Initialize services
         self.storage = Storage(self.client)
-        self.users = Users(self.client)
-        self.databases = Databases(self.client)
         self.tables = TablesDB(self.client)
 
         # Initialize managers
-        self.metadata_manager = MetadataManager(self.databases, config, self.tables)
+        self.metadata_manager = MetadataManager(config, self.tables)
         self.cache_manager = self._setup_cache()
 
     def _inject_timeout(self, timeout_seconds: int) -> None:
@@ -262,48 +257,6 @@ class AppWriteFileManager:
                 success=False, error=f"Download failed: {str(e)}", code="UNEXPECTED_ERROR"
             )
 
-    def list_files(
-        self,
-        bucket_id: str,
-        queries: List[str] = None,
-        limit: int = DEFAULT_PAGE_LIMIT,
-        offset: int = 0,
-        order_field: str = None,
-        order_type: str = "ASC",
-    ) -> OperationResult:
-        try:
-            if queries is None:
-                queries = []
-
-            query_list = queries.copy()
-            query_list.append(Query.limit(limit))
-            query_list.append(Query.offset(offset))
-
-            if order_field:
-                if order_type.upper() == "DESC":
-                    query_list.append(Query.order_desc(order_field))
-                else:
-                    query_list.append(Query.order_asc(order_field))
-
-            result = self.storage.list_files(bucket_id, query_list)
-
-            return OperationResult(
-                success=True,
-                data={
-                    "files": [_as_dict(f) for f in (_get(result, "files") or [])],
-                    "total": _get(result, "total") or 0,
-                },
-            )
-
-        except AppwriteException as e:
-            return OperationResult(
-                success=False, error=f"List files failed: {e.message}", code=e.type
-            )
-        except Exception as e:
-            return OperationResult(
-                success=False, error=f"List files failed: {str(e)}", code="UNEXPECTED_ERROR"
-            )
-
     def get_file(self, bucket_id: str, file_id: str) -> OperationResult:
         try:
             result = self.storage.get_file(bucket_id, file_id)
@@ -316,26 +269,6 @@ class AppWriteFileManager:
         except Exception as e:
             return OperationResult(
                 success=False, error=f"Get file failed: {str(e)}", code="UNEXPECTED_ERROR"
-            )
-
-    def get_bucket(self, bucket_id: str) -> OperationResult:
-        try:
-            result = self.storage.get_bucket(bucket_id)
-            return OperationResult(success=True, data=_as_dict(result))
-
-        except AppwriteException as e:
-            # Check if this is a bucket not found error
-            if "Storage bucket with the requested ID could not be found" in e.message:
-                return OperationResult(
-                    success=False, error=e.message, code="storage_bucket_not_found"
-                )
-
-            return OperationResult(
-                success=False, error=f"Get bucket failed: {e.message}", code=e.type
-            )
-        except Exception as e:
-            return OperationResult(
-                success=False, error=f"Get bucket failed: {str(e)}", code="UNEXPECTED_ERROR"
             )
 
     def list_buckets(

@@ -10,7 +10,6 @@ import pytest
 from unittest.mock import MagicMock
 
 from views_crafdapi.managers.api import CrafdApiManager, StalenessResult
-from views_crafdapi.managers.prediction import PredictionFileMetadata, PredictionStoreManager
 from views_crafdapi.data.handlers import ForecastDataset
 from tests.conftest import make_fao_df
 
@@ -73,29 +72,6 @@ class TestStalenessResult:
         just_over = time.time() - (24.1 * 3600)
         assert mgr._check_staleness(just_under).is_stale is False
         assert mgr._check_staleness(just_over).is_stale is True
-
-
-class TestPredictionFileMetadata:
-
-    def test_metadata_returns_timestamps(self):
-        mock_pm = MagicMock(spec=PredictionStoreManager)
-        mock_pm.get_predictions_by_metadata.return_value = [
-            {
-                "fileId": "file_123",
-                "$createdAt": "2026-06-01T12:00:00.000+00:00",
-                "$updatedAt": "2026-06-01T13:00:00.000+00:00",
-                "name": "test_model",
-            }
-        ]
-        result = mock_pm.get_predictions_by_metadata.return_value[0]
-        meta = PredictionFileMetadata(
-            file_id=result["fileId"],
-            created_at=result["$createdAt"],
-            updated_at=result["$updatedAt"],
-        )
-        assert meta.file_id == "file_123"
-        assert "2026-06-01" in meta.created_at
-        assert "2026-06-01" in meta.updated_at
 
 
 class TestStalenessDoesNotBlockResponse:
