@@ -45,8 +45,9 @@
   - `project_id` (str): Appwrite project ID.
   - `credentials` (str or dict): API key string for `API_KEY` auth, or `{"email": ..., "password": ...}` dict for `SESSION` auth.
   - `auth_method` (AuthMethod, default `API_KEY`): Authentication strategy.
-  - `bucket_id` (str, default `"production_forecasts"`): Default storage bucket.
-  - `database_id`, `collection_id`, `database_name`, `collection_name`: Metadata storage identifiers.
+  - `bucket_id` (str, required, keyword only): the storage bucket. No default.
+  - `database_id`, `collection_id`: the metadata database and table. No default; without them the metadata search refuses with `MISSING_CONFIG`.
+  - `bucket_name`, `database_name`, `collection_name`: display names, optional.
   - `cache_dir` (optional str): Local cache directory path. Falls back to `path_manager.cache / "appwrite_cache"` or `.appwrite_cache`.
   - `cache_ttl_hours` (int, default 24): Cache time-to-live.
   - `timeout_seconds` (int, default `DEFAULT_TIMEOUT_SECONDS`=30): Network timeout for all Appwrite SDK HTTP calls. Applied as `(connect=min(timeout_seconds, DEFAULT_CONNECT_TIMEOUT_SECONDS), read=timeout_seconds)` via per-instance `client.call` wrapping.
@@ -124,7 +125,7 @@ None. `clear_cache` and `get_cache_stats` were removed 2026-11-11 with the route
 
 ```python
 result = manager.download_file(
-    bucket_id="production_forecasts",
+    bucket_id=config.bucket_id,
     file_id="abc123",
     use_cache=True,
 )
