@@ -22,13 +22,13 @@
 - This class does **not** manage the Appwrite SDK directly. All Appwrite interactions (authentication, file upload/download, metadata CRUD) are delegated to `AppWriteFileManager` and `PredictionStoreManager`.
 - This class does **not** implement its own authentication. API key validation is performed by constructing an `AppWriteFileManager` and calling `list_buckets()` against Appwrite. The class has no local user store.
 - This class does **not** implement custom cache eviction logic. In-memory caches use `cachetools` (`LRUCache`, `TTLCache`) for bounded, automatic eviction. Disk caching is delegated to `CrafdDiskCacheManager`.
-- This class does **not** implement the data-fetch pipeline itself (epic #144 / S2). The three-tier fetch (memory → disk → remote download), format-cascade parsing, plausibility validation (C-72), and provenance recording (C-86) are owned by the composed `DatasetService` (`managers/dataset_service.py`, see its CIC). `CrafdApiManager` owns the caches and injects them; `_get_latest_dataframe`/`_get_latest_dataset` are thin delegators.
+- This class does **not** implement the data-fetch pipeline itself (epic #144 / S2). The three-tier fetch (memory → disk → remote download), format-cascade parsing, plausibility validation (C-72), and provenance recording (C-86) are owned by the composed `DatasetService` (`managers/dataset_service.py`, see its CIC). `CrafdApiManager` owns the caches and injects them; `_get_latest_dataframe` is a thin delegator kept for tests.
 
 ---
 
 ## 3. Responsibilities and Guarantees
 
-- **API lifecycle management:** Constructs a fully configured FastAPI application with all routes registered during `__init__`. Provides lifespan hooks that start the loader at start-up, and at shutdown stop it and clear the in-memory caches (kept instead when the load does not stop within `_STOP_WAIT_SECONDS`, since its thread may still write them) (the durable on-disk cache persists, C-66). Installs no signal handlers of its own (#236): uvicorn handles SIGINT and SIGTERM and runs the lifespan shutdown. A stop normally takes at most 90 s: up to 30 s for open requests (`--timeout-graceful-shutdown 30`), then up to 60 s waiting for a running load; on SIGTERM the process then ends at once (uvicorn re-raises the signal), and a load still running dies in the middle of its step. (On SIGINT, Ctrl-C by hand, Python instead waits for the load's thread.) These limits are the unit's; `_startup()` (not used in production) sets no graceful limit. A SIGTERM that arrives while the service is still starting, or a second Ctrl-C (SIGINT) during a stop (uvicorn then forces the exit; a second SIGTERM does not), skips the lifespan shutdown; nothing is lost, since the in-memory caches end with the process and files are written under temporary names. The unit allows 120 s (`TimeoutStopSec=120`). This is not a hard bound: a request that blocks the event loop (a bulk file built on request, about 40 s for a grid file, or a large slice) stops both timers while it runs, and a stop that passes 120 s is ended by systemd with SIGKILL (files are written under temporary names, so nothing is left half-written). During the first 30 s the loader keeps checking; a load it starts then is stopped like any other.
+- **API lifecycle management:** Constructs a fully configured FastAPI application with all routes registered during `__init__`. Provides lifespan hooks that start the loader at start-up, and at shutdown stop it and clear the in-memory caches (kept instead when the load does not stop within `_STOP_WAIT_SECONDS`, since its thread may still write them) (the durable on-disk cache persists, C-66). Installs no signal handlers of its own (#236): uvicorn handles SIGINT and SIGTERM and runs the lifespan shutdown. A stop normally takes at most 90 s: up to 30 s for open requests (`--timeout-graceful-shutdown 30`), then up to 60 s waiting for a running load; on SIGTERM the process then ends at once (uvicorn re-raises the signal), and a load still running dies in the middle of its step. (On SIGINT, Ctrl-C by hand, Python instead waits for the load's thread.) These limits are the unit's. A SIGTERM that arrives while the service is still starting, or a second Ctrl-C (SIGINT) during a stop (uvicorn then forces the exit; a second SIGTERM does not), skips the lifespan shutdown; nothing is lost, since the in-memory caches end with the process and files are written under temporary names. The unit allows 120 s (`TimeoutStopSec=120`). This is not a hard bound: a request that blocks the event loop (a bulk file built on request, about 40 s for a grid file, or a large slice) stops both timers while it runs, and a stop that passes 120 s is ended by systemd with SIGKILL (files are written under temporary names, so nothing is left half-written). During the first 30 s the loader keeps checking; a load it starts then is stopped like any other.
 - **Three-tier cache:** Every data request is served through a three-tier cache hierarchy:
   1. In-memory bounded caches (fastest, per-worker process, keyed by API key hash + category). `_manager_cache`: `LRUCache(100)`, `_dataframe_cache`: `TTLCache(50, ttl=4h)`, `_file_cache`: `LRUCache(20)`.
   2. Disk **value store** via `CrafdDiskCacheManager` (`managers/disk_cache.py`) — the dataset's columnar value (arrow/npz frame arrays + geo table + index + manifest, via `ForecastDataset.to_value`/`from_value`; **no pickle**, C-149), cross-worker, `FileLock`-serialized, TTL-validated at 3.5 weeks. The schema version is derived from the value format + meta layout, **decoupled from the class signature** (C-138). Partition directories are labelled by a salted HMAC of the API-key-hash (ADR-031/#323), not the raw key hash.
@@ -37,12 +37,11 @@
 - **Loading (ADR-044):** The forecast and the recorded deaths are loaded by `ForecastLoader` (`managers/forecast_loader.py`) with the server's own read key (`APPWRITE_CRAFDAPI_SERVER_API_KEY`), at start and whenever a check every five minutes finds a new delivery. The load runs in a worker thread; it builds the nine bulk files, then hands the routes freshly read datasets in one assignment. Routes answer only from that loaded data (`_served()`), and with `503` before the first load. A failed load leaves the served data in place.
 - **Partner keys (ADR-044):** A partner key only decides who gets in: `_check_partner_key` checks it with the store (`_validate_api_key`) and remembers a valid key for 60 seconds. No route reads data with a partner key. All partners are served the same loaded copy; the per-key cache tiers below are now used under the server key only.
 - **Endpoint routing:** Registers exactly the routes `tests/test_api_endpoints.py::TestTheRouteList` lists: `/ping`, `/version`, `/health`, one bulk route, `/bulk/{level}/{outcome}`, and one slice route, `/slice/{level}/{outcome}`, for the specification's three levels (`grid`, `admin1`, `country`) and every outcome. The slice takes exactly the specification's options (places, months, columns; the outcome is in the path), returns summary columns and the recorded deaths, and never samples (#204, #206). The subset and HDI-MAP routes it replaced are gone. There is no endpoint index at `/`, no `/provenance`, and no `/files` route (removed for the service specification, #207). The levels admin 0 (`gaul0`) and admin 2 (`gaul2`) were removed (#205). The bulk route serves one Parquet file per level and outcome, the table a slice with no options returns (`forecast/serialize/bulk_file.py`), with the header `X-Forecast-Made-In`; a slice's JSON carries `forecast_made_in`; it is built on the first request and kept on disk under the store's file ids of the forecast and history it came from, shared by every key, until a new delivery replaces it (scratch and one-request files older than `STALE_SECONDS`, an hour, are swept at the next hand-over of a delivery: when a new one is served, or at the hourly retry of an incomplete one) (`managers/bulk_files.py`, #203; the decision and its reasons: ADR-043). A dataset loaded without a store id gets a file built for that request only. Like the slice, it answers 503 without the history. The loader builds the files before a delivery is served; a route builds a file only if that failed, and then on the event loop (register C-285).
-- **Provenance/lineage (C-86 / ADR-023):** When an artifact is brought into service, the composed `DatasetService.get_latest_dataset` (reached through `_get_latest_dataset`) resolves and logs a `PredictionProvenance` record (file ID, declared upstream `source`/`pipeline`, hash, timestamp) and stores it on the dataframe cache. `/health` reads the served run's creation time from it for the freshness verdict. No route returns the record itself (`/provenance` was removed, #207).
+- **Provenance/lineage (C-86 / ADR-023):** When an artifact is brought into service, the composed `DatasetService.get_latest_dataset` (called by the loader) resolves and logs a `PredictionProvenance` record (file ID, declared upstream `source`/`pipeline`, hash, timestamp) and stores it on the dataframe cache. `/health` reads the served run's creation time from it for the freshness verdict. No route returns the record itself (`/provenance` was removed, #207).
 - **Value/metadata plausibility (C-72):** Before caching/serving, `DatasetService.get_latest_dataset` calls `dataset.validate_value_plausibility()` (prediction samples finite + non-negative) and `dataset.validate_metadata_plausibility()` (coordinate ranges, ISO3 shape, non-negative GAUL codes). A violation is surfaced as HTTP 500 — implausible data fails loud rather than reaching FAO. The disk-cache read re-runs both checks (C-277, #168), so a slot whose bytes no longer pass is never served: it is rebuilt from source, or answered with 503 on the last-good fallback.
 - **Error translation:** All exceptions within endpoint handlers are caught and translated to appropriate HTTP status codes (401 when the store refuses the key, 404 for an unknown level or outcome, 413 for a slice too large to send, 422 for invalid query parameters, 500 for unhandled errors, 503 when nothing is loaded, the recorded deaths are missing, or the store cannot be asked about a key — see §6). Most data routes still echo the exception text in a 500 (`detail=str(e)`, the C-264 remainder).
 - **Format auto-detection:** When downloading prediction files, attempts to parse as parquet, CSV (utf-8 only), JSON, and feather in sequence. **Pickle is intentionally excluded** (register C-59): `pd.read_pickle` runs `pickle.load`, which executes arbitrary code on deserialization — a remote-code-execution path on untrusted Appwrite bytes. If a file has a parquet magic header (`PAR1`) but fails to parse, the cascade is short-circuited immediately to prevent silent format misparse (C-52). Raises HTTP 500 with details of all attempted formats if none succeed.
 - **Prediction staleness detection:** After a cache hit, calls `_check_staleness()` to compare the cached entry's timestamp against a configurable threshold (default 24 hours). Staleness is purely advisory — stale data is always served, and staleness check failures are caught and logged at DEBUG level (never block the response). Returns a `StalenessResult` dataclass with `is_stale`, `age_hours`, and `threshold_hours` fields.
-- **Lifecycle methods:** Implements four abstract methods from `APIManager`: `_startup()` configures and launches uvicorn; `_shutdown()` clears the in-memory caches and **preserves** the durable on-disk dataset cache (C-66), but nothing in production calls it since #236 (only tests do); `_health_check()` returns server and cache status; `_maintenance()` conditionally clears caches based on config flags.
 
 ---
 
@@ -59,7 +58,7 @@
 - **API key per request (ADR-044):** Every data endpoint requires an `X-API-Key` header holding a partner key. `_check_partner_key` checks it with the store (`_validate_api_key`, `list_buckets(limit=1)`) and remembers a valid key for 60 seconds, so a key deleted in Appwrite is refused within a minute. The key only decides who gets in: no data route reads the store with it. `/health` still asks the store with the caller's key.
 - **The server's own key (ADR-044):** `APPWRITE_CRAFDAPI_SERVER_API_KEY` (its own environment file on the server). Without it the service starts, loads nothing and answers 503 to every data request.
 - **Appwrite reachability:** The Appwrite server must be reachable at runtime. There is no offline fallback beyond cached data.
-- **Parent class chain:** Inherits `CrafdApiManager` -> `APIManager` -> `ModelManager`. Path management uses a separate hierarchy (`APIPathManager` -> `ModelPathManager`) via composition: `ModelManager` stores a `ModelPathManager` instance as `self._model_path`. The parent `ModelManager` provides `self.configs` as a computed `@property` that merges deployment, hyperparameters, and meta configuration dicts on each access. Parent constructors also initialize `self._model_path` and `self._is_running`.
+- **Parent class chain:** Inherits `CrafdApiManager` -> `APIManager` -> `ModelManager`. Path management uses a separate hierarchy (`APIPathManager` -> `ModelPathManager`) via composition: `ModelManager` stores a `ModelPathManager` instance as `self._model_path`. The parent `ModelManager` provides `self.configs` as a computed `@property` that merges deployment, hyperparameters, and meta configuration dicts on each access. Parent constructors also initialize `self._model_path`.
 
 ---
 
@@ -72,8 +71,8 @@
   - **In-memory state:** The loader populates `_dataframe_cache` and `_file_cache` under the server key when it loads a delivery (ADR-044); `_manager_cache` and the 60-second valid-key cache fill as partner requests arrive. Bounded by LRU eviction (`_manager_cache`, `_file_cache`) and TTL expiry (`_dataframe_cache`, 4-hour TTL). Cleared by the lifespan shutdown hook, unless the load does not stop within `_STOP_WAIT_SECONDS` (then kept for its thread); there is no clearing endpoint (`DELETE /cache` was removed 2026-11-11, C-269).
   - **Disk state:** Delegated to `CrafdDiskCacheManager` (`managers/disk_cache.py`), which creates and manages the `{cache}/datasets/` directory. Writes a **value directory** (`_value/`, columnar arrow/npz — no pickle, C-149), a metadata sidecar (`_meta.json`), and a lock file (`.lock`) per partition. Partitions are labelled by a salted HMAC of the API-key-hash + category (ADR-031/#323).
   - **Remote reads:** Downloads files from Appwrite storage. The API is read-only with respect to Appwrite storage. No endpoint reads the store's files or the shared file cache directly (`/files/*`, `/cache/stats` and `DELETE /cache` are removed: C-269, #207).
-  - **Signal handlers:** none of its own since #236. Before, handlers registered at construction replaced uvicorn's, called `_shutdown()` and `sys.exit(0)`, and so skipped the lifespan shutdown (checked with a real SIGTERM, 2026-11-22). `_shutdown()` is no longer called in production (only by tests); the lifespan shutdown does the work. Nothing sets `_is_running` in production (#238).
-  - **Shutdown preserves the durable cache (C-66):** `_shutdown()` and the lifespan shutdown clear only the ephemeral in-memory caches; the durable on-disk dataset cache (`CrafdDiskCacheManager`, 3.5-week TTL per ADR-011) **survives** a signal-triggered shutdown, so it is reused across restarts/redeploys instead of being cold-rebuilt. Purging the durable cache is a deliberate, opt-in operation: `_maintenance()` removes it only when `clear_cache` is set (and clears the in-memory caches only when `clear_manager_cache` is set).
+  - **Signal handlers:** none of its own since #236. Before, handlers registered at construction replaced uvicorn's, called `_shutdown()` and `sys.exit(0)`, and so skipped the lifespan shutdown (checked with a real SIGTERM, 2026-11-22). That old `_shutdown()` method is removed (#309); the lifespan shutdown does the work.
+  - **Shutdown preserves the durable cache (C-66):** the lifespan shutdown clears only the ephemeral in-memory caches; the durable on-disk dataset cache (`CrafdDiskCacheManager`, 3.5-week TTL per ADR-011) **survives** a signal-triggered shutdown, so it is reused across restarts/redeploys instead of being cold-rebuilt.
   - **Logging:** Logs at INFO level for cache hits/misses, downloads, startup/shutdown. Logs at WARNING for disk cache failures and stale predictions. Logs at DEBUG for non-blocking staleness check failures. Logs at ERROR for unhandled exceptions.
 
 ---
@@ -103,7 +102,7 @@
 ## 7. Boundaries and Interactions
 
 - **Layer:** Infrastructure (`src/views_crafdapi/managers/api.py`). This is the top-level orchestration class in the infrastructure layer.
-- **Inheritance chain:** `CrafdApiManager` -> `APIManager` -> `ModelManager`. `ModelPathManager` is composed (not inherited) via `self._model_path`. The parent classes provide `self.configs` (computed property), `self._model_path`, `self._is_running`, and abstract lifecycle methods (`_startup`, `_shutdown`, `_health_check`, `_maintenance`).
+- **Inheritance chain:** `CrafdApiManager` -> `APIManager` -> `ModelManager`. `ModelPathManager` is composed (not inherited) via `self._model_path`. The parent classes provide `self.configs` (computed property) and `self._model_path`.
 - **Calls (downstream):**
   - `ForecastDataset` (Domain layer, `data/handlers/forecast_dataset.py`) -- constructs datasets from DataFrames, delegates `get_subset_dataframe()` and `calculate_hdi_map()`.
   - `CrafdDiskCacheManager` (Infrastructure, `managers/disk_cache.py`) -- owns disk-based dataset caching with file-locking, TTL, and auto-derived schema versioning. Composed as `self._disk_cache`.
@@ -113,26 +112,16 @@
 - **Called by (upstream):**
   - FastAPI/uvicorn (external) -- invokes the registered endpoint handlers.
   - `create_app()` (module-level factory function) -- constructs the singleton instance.
-- **Module-level helpers** (not methods, but co-located):
-  - `convert_numpy_types(obj)` -> native Python types: Recursive conversion for JSON serialization.
-  - `flatten_numeric_list_columns(df)` -> DataFrame: Flattens single-element arrays to scalars.
-  - `dataframe_to_dict(df)` -> `List[Dict]`: Converts DataFrame to JSON-ready records with numpy type conversion.
-- **Accepted topology deviation:** The parent class `APIManager.run()` imports `wandb_alert` from the `wandb/` observability layer via a lazy import inside the function body (`model.py:792-793`). This is permitted per ADR-012 Decision 4 — the import creates no load-time dependency and the module remains importable without wandb installed.
 - **Must not depend on:** Test infrastructure, CLI entry points, or external services other than Appwrite.
 
 ---
 
 ## 8. Examples of Correct Usage
 
-**Starting the API server (production entry point):**
+**Starting the API server (production entry point):** uvicorn imports the factory, as the unit file does (`deployment/views-crafdapi.service`):
 
-```python
-from views_crafdapi.managers.model import APIPathManager
-from views_crafdapi.managers.api import CrafdApiManager
-
-model_path = APIPathManager("un_crafd")
-manager = CrafdApiManager(model_path=model_path)
-manager._startup()
+```bash
+uvicorn views_crafdapi.managers.api:create_app --factory --host 127.0.0.1 --port 8001 --timeout-graceful-shutdown 30
 ```
 
 **Using the factory function with uvicorn (multi-worker mode):**
@@ -212,7 +201,6 @@ manager._dataframe_cache = {}
 
 - **Dedicated test files:**
   - `tests/test_api_endpoints.py` — endpoint routing, HTTP status codes, response format for all dynamic routes; `TestTheRouteList` pins the exact route list (#207).
-  - `tests/test_api_utilities.py` — `convert_numpy_types()`, `dataframe_to_dict()` unit tests.
   - `tests/test_cache_bounds.py` — LRU/TTL eviction behavior, cache size limits.
   - `tests/test_disk_cache_versioning.py` — schema version embed and mismatch detection.
   - `tests/test_format_cascade.py` — format auto-detection pipeline including parquet magic-bytes guard (C-52).
@@ -222,8 +210,6 @@ manager._dataframe_cache = {}
 - **Integration coverage via downstream tests:** `tests/test_datastore_manager.py` exercises `PredictionStoreManager`, which is a key dependency.
 - **Green tests (must pass):**
   - The slice refuses a badly written or unknown option with HTTP 422 (`tests/test_api_endpoints.py::TestSliceRoute`).
-  - `convert_numpy_types()` recursively converts numpy scalars to Python natives.
-  - `dataframe_to_dict()` produces JSON-serializable list-of-dicts output.
   - Bounded caches evict entries at capacity (LRU) and after TTL expiry.
   - Schema version mismatch triggers cache miss, not corrupted deserialization.
 - **Beige tests (behavioral expectations):**

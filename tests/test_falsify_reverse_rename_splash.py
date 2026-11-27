@@ -11,31 +11,6 @@ from pathlib import Path
 import pytest
 
 PLATFORM_ROOT = Path(__file__).resolve().parent.parent.parent
-SRC_ROOT = Path(__file__).resolve().parent.parent / "src"
-
-
-class TestP1_APIResponseExposesColumnName:
-    """The CRAF'd API serializes DataFrames via reset_index() + to_dict().
-    This puts the index column name into the JSON response.
-    Renaming priogrid_id → priogrid_gid breaks external consumers."""
-
-    def test_dataframe_to_dict_exposes_index_names(self):
-        """dataframe_to_dict() calls reset_index(), which makes the index
-        name a column, which becomes a JSON key in the response.
-        Any rename of the index propagates to the external API.
-
-        (dataframe_to_dict was extracted from api.py to serialization.py in
-        epic #144 / S1; this probe follows it to its new home.)"""
-        serde_py = SRC_ROOT / "views_crafdapi" / "managers" / "serialization.py"
-        source = serde_py.read_text()
-        assert "reset_index" in source, (
-            "dataframe_to_dict no longer calls reset_index — "
-            "verify whether index names still leak into API response"
-        )
-        assert "to_dict" in source, (
-            "dataframe_to_dict no longer calls to_dict — "
-            "verify response serialization mechanism"
-        )
 
 
 @pytest.mark.requires_sibling_repos("views-pipeline-core")

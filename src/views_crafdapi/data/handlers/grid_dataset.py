@@ -1049,8 +1049,7 @@ class _GridDataset:
 
         # Feature/historical path: rebuild the requested columns from the contiguous
         # `_feature_store` (S4e) as float64 size-1 object cells — byte-identical to the pre-S4e
-        # object-cell slice, which `flatten_numeric_list_columns` then flattens to scalars on the
-        # wire. Any non-scalar column left in `.dataframe` (rare) is sliced directly.
+        # object-cell slice. Any non-scalar column left in `.dataframe` (rare) is sliced directly.
         positions = np.flatnonzero(mask)
         index = self.dataframe.index[mask]
         feat = getattr(self, "_feature_store", {})

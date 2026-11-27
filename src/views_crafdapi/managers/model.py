@@ -8,7 +8,6 @@ import importlib
 import hashlib
 from pathlib import Path
 
-from abc import abstractmethod
 from views_crafdapi.managers.log import LoggingModule
 
 logger = logging.getLogger(__name__)
@@ -702,15 +701,7 @@ class APIPathManager(ModelPathManager):
         return self.artifacts / artifact_files[0]
 
 class APIManager(ModelManager):
-    """
-    Manages the API lifecycle activities including startup, shutdown, and maintenance.
-
-    Attributes:
-        _api_path (APIPathManager): The path manager for the API.
-        _config_api (dict): API configuration.
-        _config_endpoints (dict): Endpoints configuration.
-        _config_middleware (dict): Middleware configuration.
-    """
+    """The base of `CrafdApiManager`: a `ModelManager` built from an `APIPathManager`."""
 
     def __init__(
         self,
@@ -723,29 +714,4 @@ class APIManager(ModelManager):
             model_path (APIPathManager): The path manager for the API.
         """
         super().__init__(model_path=model_path)
-        
-        # Load API-specific configurations
-        self._api_server = None
-        self._is_running = False
-
-
-    @abstractmethod
-    def _startup(self):
-        """Initialize and start the API server."""
-        pass
-
-    @abstractmethod 
-    def _shutdown(self):
-        """Gracefully shutdown the API server."""
-        pass
-
-    @abstractmethod
-    def _health_check(self):
-        """Perform health checks on the API server."""
-        pass
-
-    @abstractmethod
-    def _maintenance(self):
-        """Perform maintenance tasks on the API."""
-        pass
 

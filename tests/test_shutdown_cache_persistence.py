@@ -5,10 +5,9 @@
 SIGTERM — under a `systemd Restart=always` service that meant a full cold rebuild
 (~2 min for the 5.7M-row historical set) on *every* restart.
 
-These tests pin the corrected contract: shutdown clears only the **ephemeral in-memory**
-caches and leaves the **durable on-disk** cache intact, and that cache survives a process
-"restart". Deliberate purging stays available via the explicit `_maintenance(clear_cache=True)`
-path (unchanged), not as a shutdown side-effect.
+These tests pin the corrected contract: shutdown (the lifespan, which uvicorn runs on a stop)
+clears only the **ephemeral in-memory** caches and leaves the **durable on-disk** cache intact,
+and that cache survives a process "restart".
 """
 
 import types
@@ -38,30 +37,6 @@ def _manager_with_disk_cache(cache_root: Path) -> CrafdApiManager:
 
 
 class TestShutdownPreservesDurableCache:
-
-    def test_shutdown_keeps_disk_cache_and_clears_memory(self, tmp_path):
-        mgr = _manager_with_disk_cache(tmp_path)
-
-        # durable on-disk entry
-        mgr._disk_cache.write("hash1", "forecast", _dataset(), "file_1")
-        value_dir = mgr._disk_cache._value_dir("hash1", "forecast")
-        assert value_dir.is_dir()
-
-        # ephemeral in-memory entries
-        mgr._manager_cache["k"] = {"x": 1}
-        mgr._dataframe_cache["k"] = {"x": 1}
-        mgr._file_cache["k"] = b"bytes"
-
-        mgr._shutdown()
-
-        # the durable disk cache survives (the C-66 fix) and is still usable
-        assert value_dir.is_dir(), "shutdown must not delete the durable disk cache"
-        assert mgr._disk_cache.read("hash1", "forecast") is not None
-        # ephemeral caches are cleared
-        assert len(mgr._manager_cache) == 0
-        assert len(mgr._dataframe_cache) == 0
-        assert len(mgr._file_cache) == 0
-
 
     def test_the_lifespan_shutdown_keeps_disk_cache_and_clears_memory(self, tmp_path):
         """The stop production uses (#236): uvicorn runs the lifespan shutdown, not `_shutdown()`."""

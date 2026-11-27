@@ -63,7 +63,7 @@
 ## 7. Boundaries and Interactions
 
 - **Depends on:** `forecast/` modules → `views_frames` / `views_frames_summarize` (the frozen leaf). Dependency direction is one-way toward the leaf (ADP/SDP).
-- **Called by:** `CrafdApiManager._get_latest_dataframe` / `_get_latest_dataset`.
+- **Called by:** the loader, through `DatasetService.get_latest_dataset`; and `CrafdApiManager._get_latest_dataframe` (a test seam).
 
 ## 8. Test Alignment
 

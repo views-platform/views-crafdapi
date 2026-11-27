@@ -596,13 +596,8 @@ class TestSliceRoute:
         ).json()["rows"]
         assert [(r["priogrid_id"], r["month"]) for r in rows] == [(100, "2029-12")]
 
-    def test_an_unknown_outcome_is_refused_before_the_forecast_loads(self, app_client):
-        """On a cold server the load can take minutes; a typo should not wait for it."""
-        client, mgr, _ = app_client
-
-        def must_not_load(*args, **kwargs):
-            raise AssertionError("the forecast was loaded for an unknown outcome")
-        mgr._get_latest_dataset = must_not_load
+    def test_an_unknown_outcome_is_refused(self, app_client):
+        client, _, _ = app_client
         resp = client.get("/slice/grid/sbb", headers=HEADERS)
         assert resp.status_code == 404 and "sbb" in resp.json()["detail"]
 
