@@ -35,8 +35,7 @@ _GridDataset  (generic (time, entity)-grid sample dataset; the frame-native comp
 > (a 2-method refused-bequest that only added a `priogrid_id` index check) was **retired** — its
 > check folded into `ForecastDataset.validate_indices`. `_ViewsDataset` was **renamed
 > `_GridDataset`** and kept deliberately as the generic, geo-less base (the unit the
-> parity/validation suites instantiate directly, and the vehicle `check_integrity` uses to
-> round-trip a metadata-free subset). A full single-class merge was rejected (register D-21): it
+> parity/validation suites instantiate directly). A full single-class merge was rejected (register D-21): it
 > would complect the generic and FAO responsibilities and relocate a UN-facing fail-loud. The
 > object-dtype spine the epic set out to drain is gone (S4); this two-level structure is the
 > end-state.

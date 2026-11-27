@@ -263,7 +263,6 @@ class ForecastDataset(_GridDataset):
         ds.levels = LEVELS
         ds._entity_metadata_cache = None
         ds._split_tensor_cache = {}
-        ds._max_tensor_cache_size = 128
 
         ds._feature_store = {}
         if ds.is_prediction:
@@ -288,7 +287,6 @@ class ForecastDataset(_GridDataset):
                 ds._feature_store[col] = arr
             ds.dataframe = pd.DataFrame(index=index)
 
-        ds.original_index = ds.dataframe.index.copy()
         ds._rebuild_index_mappings()
         ds.geo_metadata = geo_metadata
 
@@ -775,15 +773,3 @@ class ForecastDataset(_GridDataset):
         if aggregate and level is not None:
             result = self._aggregate_distributions(df=result, level=level)
         return result
-
-    def _subset_for_integrity(self, time_ids, features, sample_idx, entity_ids):
-        """Exclude the geo-metadata columns from the integrity subset (C-68).
-
-        The base ``check_integrity`` re-wraps the subset in a bare ``_GridDataset``,
-        which would classify the 9 GAUL metadata columns (added by this class's
-        ``get_subset_dataframe`` when ``with_metadata=True``, the default) as feature
-        columns and raise. Restrict the round-trip to the ``pred_*`` columns.
-        """
-        return self.get_subset_dataframe(
-            time_ids, features, sample_idx, entity_ids, with_metadata=False
-        )

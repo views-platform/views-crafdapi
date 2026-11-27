@@ -103,25 +103,6 @@ class TestTensorOperations:
         tensor = ds.to_tensor()
         assert tensor.shape == (2, 4, 10, 2)  # (time, entities, samples, features)
 
-    def test_tensor_dataframe_roundtrip(self):
-        ds = _GridDataset(_make_raw_multiindex_df(n_cells=4, n_months=2, n_samples=10))
-        assert ds.check_integrity()
-
-    def test_check_integrity_passes_valid(self):
-        ds = _GridDataset(_make_raw_multiindex_df())
-        assert ds.check_integrity() is True
-
-    def test_check_integrity_on_fao_subset_does_not_raise(self):
-        # C-68 regression: ForecastDataset.get_subset_dataframe defaults to
-        # with_metadata=True, so the integrity round-trip used to re-wrap the 9
-        # geo-metadata columns as features and raise ValueError. The
-        # _subset_for_integrity seam excludes them; subset check_integrity must
-        # now return a bool without raising.
-        ds = ForecastDataset(make_fao_df(n_cells=4, n_months=2, n_samples=10))
-        months = ds.dataframe.index.get_level_values(0).unique().tolist()
-        result = ds.check_integrity(time_ids=months[:1])
-        assert isinstance(result, bool)
-
     def test_get_subset_tensor_reduces_dimensions(self):
         ds = _GridDataset(_make_raw_multiindex_df(n_cells=4, n_months=3, n_samples=10))
         subset = ds.get_subset_tensor(time_ids=[600], features=["pred_x"])

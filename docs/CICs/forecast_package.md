@@ -18,15 +18,7 @@ This is a consolidated, brief contract for the package; the facade contract is `
 - **`builder.build_prediction_frame(values, time, unit, level=PGM)`** / **`build_target_frame(...)`** — `(N,S)` → `PredictionFrame`, `(N,)`→`TargetFrame (N,1)`. Geography is **not** embedded (ADR-013/014). *One reason: how faoapi makes leaf frames.*
 
 ## `summarize/` — point + interval estimation (no geography — CRP; pandas-free, ADR-030 ratchet)
-- **`estimator.collapse(values, masses=(0.5,0.9,0.95), tail=0.05, enforce_non_negative=False)`** —
-  the ADR-025 reduction: MAP (`tower_point`) + three nested HDIs (`hdi_tower`, multi-mass) +
-  `severe_scenario`, returning a **`result.CollapseResult`** value object. `estimator.tower_collapse(values, mass, ...)`
-  is the single-mass tuple subset it retains. Raw space (ADR-024); no `log→collapse→exp`.
-- **`result.CollapseResult`** — value object holding `.map`, `.hdi[mass]` (each `(N,2)`), `.severe`, `.bimodality`,
-  with `.lower(mass)` / `.upper(mass)` / `.masses()`. Float64 (the served collapse dtype).
-- **`severe.expected_shortfall(values, tail=0.05)`** — the `severe_scenario` reducer: mean of the
-  worst (largest) `tail` fraction of draws. An **arithmetic** surface → computed in float64
-  (ADR-030 §6). *One reason: the published-number methodology.*
+- **`draws.summarize_draws`** reduces a forecast's draws to the served summary columns (the chances, the mean, the deaths if any, the severe case, `n_draws`). *One reason: the published-number methodology.*
 
 ## `geography/` — the GAUL metadata the leaf cannot carry (RETAINED)
 - **`metadata_table.LEVELS` / `LEVEL_METADATA_COLUMNS` / `resolve_level_cells(...)`** — the admin-level vocabulary + cell→level resolution. Identity grounded in `views-postprocessing/unfao/gaul_schema.py`; country = GAUL admin-0, not M49 (ADR-025).
@@ -44,7 +36,7 @@ This is a consolidated, brief contract for the package; the facade contract is `
 - **`json_contract`** — numpy/`CollapseResult` → the served columns: `series_value_dataframe` /
   `series_value_data` / `series_value_column_names` build `{var}_map` + `{var}_hdi{50,90,95}_{lower,upper}`
   + `{var}_severe_scenario`; **`to_consumer_columns(df)`** applies the `{var}_→{series}_` rename at the
-  API/bulk boundary. (`map_dataframe`/`hdi_dataframe` remain for the legacy single-HDI shape.)
+  API/bulk boundary.
   *One reason: the output column shape/names (ADR-025).*
 - **`outcome_table`** — the table for one outcome at one level, what a slice serves.
 - **`bulk_file`** — that table for every place and month, written as Parquet a few months at a
@@ -56,4 +48,4 @@ This is a consolidated, brief contract for the package; the facade contract is `
 ---
 
 ## Test alignment
-`tests/forecast/` mirrors the package: `test_ingestion_modules.py`, `test_frame_builder.py`, `test_summarize_estimator.py`, `test_cross_level_aggregate.py`, `test_serialize.py`, `test_facade.py`, plus the byte-identical gate `test_served_output_golden.py` and `test_disk_cache_resilience.py`.
+`tests/forecast/` mirrors the package: `test_ingestion_modules.py`, `test_frame_builder.py`, `test_summarize_draws.py`, `test_cross_level_aggregate.py`, `test_facade.py`, plus the byte-identical gate `test_served_output_golden.py` and `test_disk_cache_resilience.py`.

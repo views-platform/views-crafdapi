@@ -1,8 +1,7 @@
 """Lay the summaries (numpy) onto the served `{var}_*` columns, and rename them for serving.
 
 `series_value_*` build the summary columns per target (`schema.SUMMARY_QUANTITIES`, #204);
-`to_consumer_columns` renames them to the outcome code. `map_dataframe` / `hdi_dataframe` serve
-only the older `_GridDataset.calculate_map` / `calculate_hdi`, which no route uses. Pure
+`to_consumer_columns` renames them to the outcome code. Pure
 functions: the caller supplies the `(time, entity)` axis labels and the index level names.
 """
 
@@ -30,54 +29,6 @@ def _resolve_axes(time_ids, entity_ids, default_time, default_entity):
     else:
         entities = default_entity
     return time_steps, entities
-
-
-def map_dataframe(
-    var_name: str,
-    values,
-    time_id: str,
-    entity_id: str,
-    default_time: pd.Index,
-    default_entity: pd.Index,
-    time_ids: Optional[Union[int, List[int]]] = None,
-    entity_ids: Optional[Union[int, List[int]]] = None,
-) -> pd.DataFrame:
-    """Format a `(time, entity)` value matrix into a single `{var_name}_map` column."""
-    time_steps, entities = _resolve_axes(time_ids, entity_ids, default_time, default_entity)
-    result = (
-        pd.DataFrame(values, index=time_steps, columns=entities)
-        .stack()
-        .to_frame(f"{var_name}_map")
-    )
-    result.index.names = [time_id, entity_id]
-    return result
-
-
-def hdi_dataframe(
-    var_name: str,
-    lower,
-    upper,
-    time_id: str,
-    entity_id: str,
-    default_time: pd.Index,
-    default_entity: pd.Index,
-    time_ids: Optional[Union[int, List[int]]] = None,
-    entity_ids: Optional[Union[int, List[int]]] = None,
-) -> pd.DataFrame:
-    """Format flat HDI bound arrays into `{var_name}_hdi_lower` / `{var_name}_hdi_upper`."""
-    time_steps, entities = _resolve_axes(time_ids, entity_ids, default_time, default_entity)
-    index = pd.MultiIndex.from_product(
-        [time_steps, entities], names=[time_id, entity_id]
-    )
-    result = pd.DataFrame(
-        {
-            f"{var_name}_hdi_lower": lower.flatten(),
-            f"{var_name}_hdi_upper": upper.flatten(),
-        },
-        index=index,
-    )
-    result.index.names = [time_id, entity_id]
-    return result
 
 
 # --- The summary columns per target (#204) ----------------------------------------------------
