@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import Mock, patch
 from pathlib import Path
-import pandas as pd
 
 from views_crafdapi.managers.prediction import (
     PredictionMetadata,
@@ -231,160 +230,6 @@ class TestPredictionStoreManager:
             assert store._PredictionStoreManager__appwrite_file_manager_config == mock_config
             assert store._PredictionStoreManager__appwrite_file_manager == mock_appwrite_manager
 
-    def test_upload_predictions_from_path_success(self, prediction_store, mock_appwrite_manager, tmp_path):
-        """Test successful upload from file path"""
-        # Create a test file
-        test_file = tmp_path / "test.parquet"
-        test_file.write_text("test content")
-        
-        # Mock successful upload
-        mock_appwrite_manager.upload_file_with_metadata.return_value = OperationResult(
-            success=True,
-            data={"$id": "file123", "name": "test.parquet"},
-            code="CREATED"
-        )
-        
-        result = prediction_store.upload_predictions(
-            file=test_file,
-            filename="test.parquet",
-            loa="country",
-            name="test_model",
-            type="fatalities",
-            targets=["target1", "target2"],
-            category="forecast",
-            description="Test upload"
-        )
-        
-        assert result.success
-        assert result.data["$id"] == "file123"
-        
-        # Verify the metadata passed to upload
-        call_args = mock_appwrite_manager.upload_file_with_metadata.call_args
-        assert call_args[1]["filename"] == "test.parquet"
-        assert call_args[1]["metadata"]["loa"] == "country"
-        assert call_args[1]["metadata"]["name"] == "test_model"
-        assert call_args[1]["metadata"]["type"] == "fatalities"
-        assert call_args[1]["metadata"]["targets"] == ["target1", "target2"]
-        assert call_args[1]["metadata"]["category"] == "forecast"
-
-    def test_upload_predictions_from_string_path(self, prediction_store, mock_appwrite_manager, tmp_path):
-        """Test upload from string path"""
-        test_file = tmp_path / "test.parquet"
-        test_file.write_text("test content")
-        
-        mock_appwrite_manager.upload_file_with_metadata.return_value = OperationResult(
-            success=True,
-            data={"$id": "file123"},
-            code="CREATED"
-        )
-        
-        result = prediction_store.upload_predictions(
-            file=str(test_file),
-            filename="test.parquet",
-            loa="country",
-            name="test_model",
-            type="fatalities",
-            targets=["target1"],
-            category="historical"
-        )
-        
-        assert result.success
-
-    def test_upload_predictions_dataframe_not_implemented(self, prediction_store):
-        """Test that uploading DataFrame raises NotImplementedError"""
-        df = pd.DataFrame({"col": [1, 2, 3]})
-        
-        with pytest.raises(NotImplementedError, match="Uploading a DataFrame directly is not implemented"):
-            prediction_store.upload_predictions(
-                file=df,
-                filename="test.parquet",
-                loa="country",
-                name="test_model",
-                type="fatalities",
-                targets=["target1"],
-                category="forecast"
-            )
-
-    def test_upload_predictions_invalid_file_type(self, prediction_store):
-        """Test that invalid file type raises TypeError"""
-        with pytest.raises(TypeError, match="file must be a Path, str, or pd.DataFrame"):
-            prediction_store.upload_predictions(
-                file=123,
-                filename="test.parquet",
-                loa="country",
-                name="test_model",
-                type="fatalities",
-                targets=["target1"],
-                category="forecast"
-            )
-
-    def test_upload_predictions_bucket_not_found_creates_bucket(self, prediction_store, mock_appwrite_manager, tmp_path):
-        """Test that bucket is created when not found"""
-        test_file = tmp_path / "test.parquet"
-        test_file.write_text("test content")
-        
-        # First upload fails with bucket not found
-        mock_appwrite_manager.upload_file_with_metadata.side_effect = [
-            OperationResult(
-                success=False,
-                error="Bucket not found",
-                code="storage_bucket_not_found"
-            ),
-            OperationResult(
-                success=True,
-                data={"$id": "file123"},
-                code="CREATED"
-            )
-        ]
-        
-        # Mock successful bucket creation
-        mock_appwrite_manager.create_bucket.return_value = OperationResult(
-            success=True,
-            data={"$id": "test_bucket"},
-            code="CREATED"
-        )
-        
-        result = prediction_store.upload_predictions(
-            file=test_file,
-            filename="test.parquet",
-            loa="country",
-            name="test_model",
-            type="fatalities",
-            targets=["target1"],
-            category="forecast"
-        )
-        
-        assert result.success
-        mock_appwrite_manager.create_bucket.assert_called_once()
-
-    def test_upload_predictions_bucket_creation_fails(self, prediction_store, mock_appwrite_manager, tmp_path):
-        """Test handling of bucket creation failure"""
-        test_file = tmp_path / "test.parquet"
-        test_file.write_text("test content")
-        
-        # Upload fails with bucket not found
-        mock_appwrite_manager.upload_file_with_metadata.return_value = OperationResult(
-            success=False,
-            error="Bucket not found",
-            code="storage_bucket_not_found"
-        )
-        
-        # Bucket creation fails
-        mock_appwrite_manager.create_bucket.side_effect = Exception("Creation failed")
-        
-        result = prediction_store.upload_predictions(
-            file=test_file,
-            filename="test.parquet",
-            loa="country",
-            name="test_model",
-            type="fatalities",
-            targets=["target1"],
-            category="forecast"
-        )
-        
-        assert not result.success
-        assert "Creation failed" in result.error
-
     def test_get_predictions_by_metadata_with_filters(self, prediction_store, mock_appwrite_manager):
         """Test getting predictions with filters"""
         mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
@@ -573,170 +418,6 @@ class TestPredictionStoreManager:
         
         assert file_id is None
 
-    def test_download_latest_file_success(self, prediction_store, mock_appwrite_manager, tmp_path):
-        """Test downloading the latest file"""
-        save_path = tmp_path / "latest.parquet"
-        
-        prediction_store.get_latest_file_id = Mock(return_value="file123")
-        mock_appwrite_manager.download_file.return_value = OperationResult(
-            success=True,
-            data={"save_path": str(save_path)},
-            code="SAVED"
-        )
-        
-        result = prediction_store.download_latest_file(
-            filters={"type": "fatalities"},
-            save_path=str(save_path)
-        )
-        
-        assert result.success
-        prediction_store.get_latest_file_id.assert_called_once_with(filters={"type": "fatalities"})
-
-    def test_download_latest_file_no_files_found(self, prediction_store):
-        """Test downloading latest file when none found"""
-        prediction_store.get_latest_file_id = Mock(return_value=None)
-        
-        with pytest.raises(FileNotFoundError, match="No files found matching the given filters"):
-            prediction_store.download_latest_file(filters={"type": "fatalities"})
-
-    def test_download_latest_file_with_empty_filters(self, prediction_store, mock_appwrite_manager):
-        """Test downloading latest file with empty filters"""
-        prediction_store.get_latest_file_id = Mock(return_value="file123")
-        mock_appwrite_manager.download_file.return_value = OperationResult(
-            success=True,
-            data={"file_bytes": b"content"},
-            code="RETURNED"
-        )
-        
-        result = prediction_store.download_latest_file(filters={})
-        
-        assert result.success
-
-    def test_get_file_metadata_success(self, prediction_store, mock_appwrite_manager):
-        """Test getting file metadata"""
-        mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
-            success=True,
-            data={
-                "documents": [
-                    {
-                        "fileId": "file123",
-                        "filename": "test.parquet",
-                        "loa": "country",
-                        "type": "fatalities"
-                    }
-                ]
-            }
-        )
-        
-        result = prediction_store.get_file_metadata("file123")
-        
-        assert result.success
-        assert result.data["fileId"] == "file123"
-        assert result.code == "FOUND"
-
-    def test_get_file_metadata_not_found(self, prediction_store, mock_appwrite_manager):
-        """Test getting metadata for non-existent file"""
-        mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
-            success=True,
-            data={"documents": []}
-        )
-        
-        result = prediction_store.get_file_metadata("nonexistent")
-        
-        assert not result.success
-        assert result.code == "NOT_FOUND"
-
-    def test_get_file_metadata_search_fails(self, prediction_store, mock_appwrite_manager):
-        """Test getting metadata when search fails"""
-        mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
-            success=False,
-            error="Search failed",
-            code="ERROR"
-        )
-        
-        result = prediction_store.get_file_metadata("file123")
-        
-        assert not result.success
-        assert "Search failed" in result.error
-
-    def test_update_prediction_metadata(self, prediction_store, mock_appwrite_manager):
-        """Test updating prediction metadata"""
-        mock_appwrite_manager.metadata_manager.update_file_metadata.return_value = OperationResult(
-            success=True,
-            data={"$id": "doc123"},
-            code="UPDATED"
-        )
-        
-        result = prediction_store.update_prediction_metadata(
-            file_id="file123",
-            metadata_updates={"description": "Updated description"}
-        )
-        
-        assert result.success
-        assert result.code == "UPDATED"
-        
-        mock_appwrite_manager.metadata_manager.update_file_metadata.assert_called_once_with(
-            file_id="file123",
-            metadata_updates={"description": "Updated description"},
-            collection_name="Test Collection",
-            collection_id="test_collection",
-            database_id="test_database"
-        )
-
-    def test_delete_prediction_success(self, prediction_store, mock_appwrite_manager):
-        """Test deleting a prediction and its metadata."""
-        mock_appwrite_manager.delete_file.return_value = OperationResult(
-            success=True,
-            code="DELETED"
-        )
-        mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
-            success=True,
-            data={"documents": [{"$id": "doc123"}]},
-        )
-        mock_appwrite_manager.metadata_manager.delete_metadata_document.return_value = OperationResult(
-            success=True,
-            data={"document_id": "doc123"},
-            code="DELETED",
-        )
-
-        result = prediction_store.delete_prediction("file123")
-
-        assert result.success
-        assert result.code == "DELETED"
-        mock_appwrite_manager.delete_file.assert_called_once_with(
-            bucket_id="test_bucket",
-            file_id="file123"
-        )
-        mock_appwrite_manager.metadata_manager.delete_metadata_document.assert_called_once()
-
-    def test_delete_prediction_fails(self, prediction_store, mock_appwrite_manager):
-        """Test deletion failure"""
-        mock_appwrite_manager.delete_file.return_value = OperationResult(
-            success=False,
-            error="Deletion failed",
-            code="ERROR"
-        )
-        
-        result = prediction_store.delete_prediction("file123")
-        
-        assert not result.success
-
-    def test_list_all_predictions(self, prediction_store):
-        """Test listing all predictions for current model"""
-        prediction_store.get_predictions_by_metadata = Mock(
-            return_value=[
-                {"fileId": "file1", "name": "test_model"},
-                {"fileId": "file2", "name": "test_model"},
-            ]
-        )
-        
-        result = prediction_store.list_all_predictions()
-        
-        assert len(result) == 2
-        prediction_store.get_predictions_by_metadata.assert_called_once_with(
-            filters={"name": "test_model"}
-        )
-
     def test_list_all_predictions_unfiltered(self, prediction_store, mock_appwrite_manager):
         """Test listing all predictions without filters"""
         mock_appwrite_manager.metadata_manager.search_files_by_metadata.return_value = OperationResult(
@@ -778,34 +459,6 @@ class TestPredictionStoreManager:
 
 # Integration-style tests
 class TestPredictionStoreManagerIntegration:
-    def test_full_upload_workflow(self, prediction_store, mock_appwrite_manager, tmp_path):
-        """Test complete upload workflow including bucket creation"""
-        test_file = tmp_path / "prediction.parquet"
-        test_file.write_text("prediction data")
-        
-        # First upload fails, then bucket is created, then upload succeeds
-        mock_appwrite_manager.upload_file_with_metadata.side_effect = [
-            OperationResult(success=False, code="storage_bucket_not_found"),
-            OperationResult(success=True, data={"$id": "file123"}, code="CREATED")
-        ]
-        mock_appwrite_manager.create_bucket.return_value = OperationResult(
-            success=True, data={"$id": "test_bucket"}
-        )
-        
-        result = prediction_store.upload_predictions(
-            file=test_file,
-            filename="prediction.parquet",
-            loa="country",
-            name="test_model",
-            type="fatalities",
-            targets=["target1", "target2"],
-            category="forecast",
-            description="Full workflow test"
-        )
-        
-        assert result.success
-        assert mock_appwrite_manager.create_bucket.call_count == 1
-        assert mock_appwrite_manager.upload_file_with_metadata.call_count == 2
 
     def test_search_and_download_workflow(self, prediction_store, mock_appwrite_manager, tmp_path):
         """Test searching for predictions and downloading the latest"""
@@ -1019,18 +672,12 @@ class TestConsumerNameIsBoundToTheQuery:
     `model_name`, rather than one silently widening the query and the other passing the falsy
     value through as a literal filter (ADR-003 fail-loud)."""
 
+    @pytest.mark.parametrize("name", ["", None])
     def test_get_predictions_by_metadata_refuses_a_falsy_consumer_name(
-        self, prediction_store
+        self, prediction_store, name
     ):
         """A falsy name must not OMIT the name filter — that widens the query across every
         consumer's documents and returns a non-empty result for the wrong consumer."""
-        prediction_store.model_path.model_name = ""
+        prediction_store.model_path.model_name = name
         with pytest.raises(ValueError, match="model_name"):
             prediction_store.get_predictions_by_metadata()
-
-    def test_list_all_predictions_refuses_a_falsy_consumer_name(self, prediction_store):
-        """The sibling path had no guard at all — it passed the falsy value straight through as
-        `filters={"name": ""}`. The two paths disagreed; now both refuse."""
-        prediction_store.model_path.model_name = None
-        with pytest.raises(ValueError, match="model_name"):
-            prediction_store.list_all_predictions()

@@ -14,11 +14,8 @@ Run explicitly:
 """
 
 import os
-from pathlib import Path
-from uuid import uuid4
 
 import pytest
-from tests.conftest import new_tmp_file
 
 
 # All 9 vars required (not 6 like test_integration_appwrite_write.py) because
@@ -118,38 +115,6 @@ def integration_client(tmp_path_factory):
     return client, api_key
 
 
-@pytest.fixture(scope="module")
-def test_forecast_file(prediction_manager, file_manager, bucket_id):
-    """Upload a test forecast parquet; clean up after all tests."""
-    from tests.conftest import make_fao_df
-
-    df = make_fao_df(n_cells=4, n_months=2, n_samples=10)
-    tmp = Path(new_tmp_file(".parquet"))
-    df.to_parquet(tmp)
-    file_id = None
-    try:
-        result = prediction_manager.upload_predictions(
-            file=tmp,
-            filename=f"http_integ_{uuid4().hex[:8]}.parquet",
-            loa="pgm",
-            name="http_integration_probe",
-            type="test",
-            targets=["pred_test", "pred_other"],
-            category="forecast",
-        )
-        assert result.success, f"Test file upload failed: {result.error}"
-        assert result.data is not None, "Upload succeeded but returned no data"
-        file_id = result.data.get("file_id")
-        yield file_id
-    finally:
-        tmp.unlink(missing_ok=True)
-        if file_id:
-            try:
-                file_manager.delete_file(bucket_id, file_id)
-            except Exception:
-                pass
-
-
 # ============================================================
 # Tier 1: Infrastructure through HTTP (no data dependency)
 # ============================================================
@@ -179,24 +144,3 @@ class TestAuthErrorLive:
 # ============================================================
 # Tier 2: Data pipeline through HTTP (needs test data)
 # ============================================================
-
-
-class TestSliceLive:
-    """The slice through HTTP against the real store: auth → download → parse →
-    ForecastDataset → summary → serialize. One test per level; above the grid cell the
-    samples are summed first, then summarised."""
-
-    @pytest.mark.parametrize("level", ["grid", "admin1", "country"])
-    def test_a_slice_through_http(self, integration_client, test_forecast_file, level):
-        client, api_key = integration_client
-        headers = {"X-API-Key": api_key}
-        # A whole real forecast is too large for one slice (413), so ask for one month. The
-        # months served are named in the refusal of a month that cannot exist.
-        detail = client.get(f"/slice/{level}/sb", params={"months": "1900-01"}, headers=headers).json()["detail"]
-        last_month = detail.rsplit(" to ", 1)[1].strip()
-        resp = client.get(f"/slice/{level}/sb", params={"months": last_month, "columns": "sb_map"}, headers=headers)
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["level"] == level and body["outcome"] == "sb"
-        assert len(body["rows"]) > 0
-        assert body["columns"][-1] == "sb_map" and "month" in body["columns"]

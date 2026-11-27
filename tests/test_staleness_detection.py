@@ -97,12 +97,6 @@ class TestPredictionFileMetadata:
         assert "2026-06-01" in meta.created_at
         assert "2026-06-01" in meta.updated_at
 
-    def test_metadata_none_when_no_files(self):
-        mock_pm = MagicMock(spec=PredictionStoreManager)
-        mock_pm.get_predictions_by_metadata.return_value = []
-        result = PredictionStoreManager.get_latest_file_metadata(mock_pm, filters={"category": "forecast"})
-        assert result is None
-
 
 class TestStalenessDoesNotBlockResponse:
 

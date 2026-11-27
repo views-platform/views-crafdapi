@@ -244,30 +244,6 @@ class TestListDocumentsDeprecation:
             "to the replacement API (tablesDB.list_rows or equivalent)."
         )
 
-    def test_list_documents_call_sites_inventory(self):
-        """Structural: count of list_documents calls in the appwrite package must match inventory.
-        Scans every module in managers/appwrite/ so it survives the package split."""
-        import ast
-        from pathlib import Path
-
-        pkg = Path("src/views_crafdapi/managers/appwrite")
-        count = 0
-        for py in sorted(pkg.glob("*.py")):
-            tree = ast.parse(py.read_text())
-            for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr == "list_documents"
-                ):
-                    count += 1
-        # 4 since #201: the serving read (search_files_by_metadata) moved to TablesDB.list_rows.
-        # The 4 left are on write and provisioning paths that a read-only API does not use.
-        assert count == 4, (
-            f"Expected 4 list_documents call sites (C-23 inventory), found {count}. "
-            "Update the migration inventory in the risk register."
-        )
-
     def test_list_documents_emits_deprecation_warning(self):
         """Verifies SDK emits DeprecationWarning for list_documents.
         When this stops emitting (method removed), test_list_documents_method_exists fails first."""

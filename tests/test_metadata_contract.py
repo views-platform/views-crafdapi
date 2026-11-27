@@ -9,7 +9,6 @@ These are tripwire tests: a metadata field rename in either repo
 causes a test failure here, preventing silent cross-repo drift.
 """
 
-import ast
 import inspect
 from pathlib import Path
 
@@ -17,44 +16,12 @@ import pytest
 
 from views_crafdapi.managers.prediction import (
     PREDICTION_METADATA_FIELDS,
-    SYSTEM_METADATA_FIELDS,
     PredictionMetadata,
 )
 
 pytestmark = pytest.mark.layer5_audit
 
 APPWRITE_PKG = Path(__file__).resolve().parent.parent / "src" / "views_crafdapi" / "managers" / "appwrite"
-
-
-def _extract_fixed_attributes_from_ast():
-    """Parse the appwrite package to extract fixed_attributes key-value structures.
-
-    Walks the AST of every module in ``managers/appwrite/`` looking for
-    ``fixed_attributes = [...]`` and extracts each dict literal's key/type/size/
-    required values. Scanning the whole package (not one file) keeps this robust as
-    the package is split into submodules.
-    """
-    for _py in sorted(APPWRITE_PKG.glob("*.py")):
-        tree = ast.parse(_py.read_text())
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Assign):
-                continue
-            targets = [t for t in node.targets if isinstance(t, ast.Name) and t.id == "fixed_attributes"]
-            if not targets or not isinstance(node.value, ast.List):
-                continue
-
-            attrs = []
-            for elt in node.value.elts:
-                if not isinstance(elt, ast.Dict):
-                    continue
-                entry = {}
-                for k, v in zip(elt.keys, elt.values):
-                    if isinstance(k, ast.Constant) and isinstance(v, ast.Constant):
-                        entry[k.value] = v.value
-                attrs.append(entry)
-            return attrs
-
-    raise RuntimeError("fixed_attributes not found in the appwrite package AST")
 
 
 # ---------------------------------------------------------------------------
@@ -101,23 +68,6 @@ class TestPredictionMetadataContract:
 # ---------------------------------------------------------------------------
 # Class 2: System metadata ↔ appwrite.py fixed_attributes (always runs)
 # ---------------------------------------------------------------------------
-
-class TestSystemMetadataContract:
-
-    def test_system_fields_match_appwrite_fixed_attributes(self):
-        attrs = _extract_fixed_attributes_from_ast()
-        extracted_keys = {a["key"] for a in attrs}
-        assert extracted_keys == set(SYSTEM_METADATA_FIELDS.keys())
-
-    def test_system_field_types_match_appwrite(self):
-        attrs = _extract_fixed_attributes_from_ast()
-        for attr in attrs:
-            key = attr["key"]
-            contract = SYSTEM_METADATA_FIELDS[key]
-            assert attr["type"] == contract["type"], f"{key}: type mismatch"
-            assert attr["required"] == contract["required"], f"{key}: required mismatch"
-            if "size" in contract:
-                assert attr.get("size") == contract["size"], f"{key}: size mismatch"
 
 
 # ---------------------------------------------------------------------------

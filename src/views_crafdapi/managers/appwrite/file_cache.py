@@ -233,20 +233,6 @@ class CacheManager:
         except FileNotFoundError:
             return None
 
-    def remove_from_cache(self, bucket_id: str, file_id: str):
-        cache_key = self._get_cache_key(bucket_id, file_id)
-
-        if cache_key in self.cache_metadata:
-            cache_path = self._cached_path(self.cache_metadata[cache_key])
-            if cache_path is not None and cache_path.exists():
-                try:
-                    cache_path.unlink()
-                except OSError as e:
-                    logger.warning(f"Failed to delete cache file {cache_path}: {e}")
-
-            del self.cache_metadata[cache_key]
-            self._save_cache_metadata()
-
     def get_cached_file_path(self, bucket_id: str, file_id: str) -> OperationResult:
         cache_key = self._get_cache_key(bucket_id, file_id)
 
@@ -281,75 +267,3 @@ class CacheManager:
                 "metadata": metadata.__dict__,
             },
         )
-
-    def clear_cache(
-        self, bucket_id: str = None, older_than_hours: int = None
-    ) -> OperationResult:
-        deleted_count = 0
-        deleted_bytes = 0
-        errors = []
-        keys_to_delete = []
-
-        for cache_key, metadata in self.cache_metadata.items():
-            should_delete = False
-
-            if bucket_id and metadata.bucket_id != bucket_id:
-                continue
-
-            if older_than_hours:
-                cached_at = datetime.fromisoformat(metadata.cached_at)
-                if datetime.now() - cached_at < timedelta(hours=older_than_hours):
-                    continue
-
-            should_delete = True
-
-            if should_delete:
-                cache_path = self._cached_path(metadata)
-                if cache_path is not None and cache_path.exists():
-                    try:
-                        size = cache_path.stat().st_size
-                        cache_path.unlink()
-                        deleted_count += 1
-                        deleted_bytes += size
-                    except OSError as e:
-                        errors.append(f"Failed to delete {cache_path}: {e}")
-
-                keys_to_delete.append(cache_key)
-
-        for key in keys_to_delete:
-            del self.cache_metadata[key]
-
-        self._save_cache_metadata()
-
-        return OperationResult(
-            success=True,
-            data={
-                "deleted_files": deleted_count,
-                "deleted_bytes": deleted_bytes,
-                "errors": errors if errors else None,
-            },
-        )
-
-    def get_stats(self) -> Dict[str, Any]:
-        total_files = len(self.cache_metadata)
-        total_bytes = 0
-        by_bucket = {}
-
-        for metadata in self.cache_metadata.values():
-            bucket_id = metadata.bucket_id
-            size = metadata.size_bytes
-            total_bytes += size
-
-            if bucket_id not in by_bucket:
-                by_bucket[bucket_id] = {"files": 0, "bytes": 0}
-
-            by_bucket[bucket_id]["files"] += 1
-            by_bucket[bucket_id]["bytes"] += size
-
-        return {
-            "total_files": total_files,
-            "total_size_bytes": total_bytes,
-            "total_size_mb": round(total_bytes / (1024 * 1024), 2),
-            "cache_dir": str(self.cache_dir),
-            "by_bucket": by_bucket,
-        }
