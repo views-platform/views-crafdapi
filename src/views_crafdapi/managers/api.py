@@ -1,4 +1,5 @@
-from views_crafdapi.managers.model import APIManager, APIPathManager
+from views_crafdapi.managers.log import LoggingModule
+from views_crafdapi.managers.model import APIPathManager
 import logging
 import pandas as pd
 from dataclasses import dataclass
@@ -256,7 +257,7 @@ from views_crafdapi.forecast.serialize.bulk_file import write_bulk_file  # noqa:
 from views_crafdapi.managers.bulk_files import BulkFiles  # noqa: E402
 from views_crafdapi.managers.forecast_loader import ForecastLoader, check_minutes, read_server_key  # noqa: E402
 
-class CrafdApiManager(APIManager):
+class CrafdApiManager:
     """
     Manages the CRAF'd API lifecycle including startup, shutdown, and maintenance.
     """
@@ -271,7 +272,10 @@ class CrafdApiManager(APIManager):
         Args:
             model_path (APIPathManager): The path manager for the API.
         """
-        super().__init__(model_path=model_path)
+        self._model_path = model_path
+        self._logger = LoggingModule(logging_path=model_path.logging).get_logger()
+        # Settings only the test constructor `from_config` fills; the service has none.
+        self._config_deployment = self._config_hyperparameters = self._config_meta = None
 
         logger.info(f"{str(self._model_path.dotenv)}")
         load_dotenv(dotenv_path=self._model_path.dotenv)
@@ -355,6 +359,14 @@ class CrafdApiManager(APIManager):
         self._dataframe_cache.clear()
         self._file_cache.clear()
         logger.info("Cleared all caches")
+
+    @property
+    def configs(self) -> Dict:
+        """The three settings dicts merged; later ones win: hyperparameters, deployment, meta."""
+        config = {}
+        for part in (self._config_hyperparameters, self._config_deployment, self._config_meta):
+            config.update(part or {})
+        return config
 
     @classmethod
     def from_config(
@@ -918,7 +930,7 @@ app: Optional[FastAPI] = None
 
 def _service_paths() -> APIPathManager:
     """The service's paths, named by the store-document name it serves (seam_contract)."""
-    return APIPathManager(CONSUMER_DOCUMENT_NAME, validate=False)
+    return APIPathManager(CONSUMER_DOCUMENT_NAME)
 
 
 def create_app() -> FastAPI:
@@ -933,14 +945,8 @@ def create_app() -> FastAPI:
     """
     global _fao_manager, app
     if app is None:
-        # The API is a read-only CONSUMER, not a model trainer, so it must boot from a
-        # clean checkout that has no apis/un_crafd/ model-training tree — that directory is
-        # gitignored (a pure runtime artifact holding cache/ and logs/). With the default
-        # validate=True, APIPathManager both (a) raises FileNotFoundError when the tree is
-        # absent and (b) returns None for runtime dirs like .cache, which then crashes
-        # CrafdDiskCacheManager (`None / "datasets"`). validate=False makes .cache a real
-        # Path the disk-cache manager creates on demand. Regression-tested by
-        # tests/test_create_app_boot.py (the from_config test seam did not cover this path).
+        # The service must boot from a clean checkout: `apis/un_crafd/` (cache and logs) is
+        # ignored by git and created on demand. Tested by tests/test_create_app_boot.py.
         model_path = _service_paths()
         _fao_manager = CrafdApiManager(model_path=model_path)
         app = _fao_manager.app

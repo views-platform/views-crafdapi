@@ -54,6 +54,21 @@ def test_create_app_boots_without_model_tree(clean_boot):
     assert isinstance(clean_boot, FastAPI)
 
 
+def test_a_clean_boot_resolves_the_service_folders(clean_boot, tmp_path):
+    """The folders the service reads and writes, relative to the checkout it is started in. The
+    cache folder holds gigabytes of prepared data on the server: a different path there means
+    a cold reload, so these are pinned."""
+    manager = api_module._fao_manager
+    paths, root = manager._model_path, tmp_path.resolve()
+    assert paths.model_name == "un_crafd"          # the name every store query is filtered on
+    assert paths.dotenv == root / ".env"
+    assert paths.cache == root / "apis" / "un_crafd" / "cache"
+    assert paths.logging == root / "apis" / "un_crafd" / "logs" and paths.logging.is_dir()
+    assert manager._disk_cache.cache_dir == root / "apis" / "un_crafd" / "cache" / "datasets"
+    assert manager.configs == {}
+
+
+
 def test_booted_app_exposes_liveness_and_version(clean_boot):
     """A clean boot wires the unauthenticated probes (what the deploy verifies)."""
     paths = {route.path for route in clean_boot.routes}
@@ -123,4 +138,6 @@ def test_a_real_sigterm_runs_the_lifespan_shutdown(tmp_path):
     assert "Waiting for application shutdown" in text and "Cleared all caches" in text
     assert "did not stop within" not in text      # the idle loader stopped at once
     assert "Application shutdown complete" in text
+    # #274: the start used to log three ERROR lines about config scripts the service never had.
+    assert "failed AST safety check" not in text and "ERROR" not in text, text
     assert server.returncode == -signal.SIGTERM   # ended by the signal, as systemd expects

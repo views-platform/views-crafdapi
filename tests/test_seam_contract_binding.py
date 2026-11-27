@@ -140,7 +140,7 @@ def test_the_config_carries_the_path_manager_so_the_name_filter_actually_applies
 
     with patch.dict(os.environ, env, clear=False):
         mgr = CrafdApiManager(
-            model_path=APIPathManager(CONSUMER_DOCUMENT_NAME, validate=False)
+            model_path=APIPathManager(CONSUMER_DOCUMENT_NAME)
         )
         config = mgr._create_appwrite_config("a-key")
 
