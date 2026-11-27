@@ -1,20 +1,15 @@
 """PredictionStoreManager — the Appwrite-backed forecast artifact store.
 
-Fuses the read (serving) surface with the producer write/delete surface. The
-producer methods (upload_predictions / update_prediction_metadata /
-delete_prediction) are dead on the crafdapi serving path (locked by
-tests/test_serving_isolation.py) and activate only in a write clone. The
-reader/writer *class* severance is deferred to the writer extraction (S12)."""
+Read only: finds the newest delivery and downloads its files."""
 import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
 
-import pandas as pd
 
 from views_crafdapi.managers.appwrite import AppwriteConfig, AppWriteFileManager, OperationResult
 
 from .constants import FORECAST_CATEGORY, LEGACY_ARTIFACT_TYPE, MANIFEST_ARTIFACT_TYPE
-from .metadata import PredictionFileMetadata, PredictionMetadata, PredictionProvenance
+from .metadata import PredictionProvenance
 from .quarantine import (
     APPROVED_FILE_IDS_ENV,
     QUARANTINED_FILE_IDS_ENV,
@@ -55,67 +50,6 @@ class PredictionStoreManager:
             self.__appwrite_file_manager_config
         )
 
-    def upload_predictions(
-        self,
-        file: Union[Path, str, pd.DataFrame],
-        filename: str,
-        loa: str,
-        name: str,
-        type: str,
-        targets: List[str],
-        category: str,
-        description: Optional[str] = None,
-    ) -> OperationResult:
-
-        metadata = PredictionMetadata(
-            loa=loa, name=name, type=type, targets=targets, description=description, category=category
-        ).to_dict()
-        if isinstance(file, pd.DataFrame):
-            raise NotImplementedError(
-                "Uploading a DataFrame directly is not implemented."
-            )
-        elif isinstance(file, (Path, str)):
-            file_path = str(file)
-            upload_result = self.__appwrite_file_manager.upload_file_with_metadata(
-                bucket_id=self.__appwrite_file_manager_config.bucket_id,
-                filename=filename,
-                file_path=file_path,
-                metadata=metadata,
-                collection_name=self.__appwrite_file_manager_config.collection_name,
-                collection_id=self.__appwrite_file_manager_config.collection_id,
-            ).to_dict()
-        else:
-            raise TypeError("file must be a Path, str, or pd.DataFrame")
-
-        if upload_result.get("code") == "storage_bucket_not_found":
-            # þing-01 #276 / PLATFORM-001 D5: a missing bucket is a misconfiguration, not a signal
-            # to auto-create a phantom. create_bucket now RAISES unless provisioning is explicitly
-            # enabled (CRAFDAPI_ALLOW_PROVISIONING=1) on a deliberate setup entrypoint — so by default
-            # this fails visible naming the coordinate rather than uploading into a phantom bucket.
-            logger.warning(
-                f"Bucket '{self.__appwrite_file_manager_config.bucket_id}' not found — "
-                f"auto-provisioning is opt-in (off by default)."
-            )
-            try:
-                self.__appwrite_file_manager.create_bucket(
-                    bucket_id=self.__appwrite_file_manager_config.bucket_id,
-                    name=self.__appwrite_file_manager_config.bucket_name,
-                )
-            except Exception as e:
-                logger.error(f"Refusing to provision bucket (fail-visible): {e}")
-                return OperationResult(success=False, error=str(e))
-
-            upload_result = self.__appwrite_file_manager.upload_file_with_metadata(
-                bucket_id=self.__appwrite_file_manager_config.bucket_id,
-                file_path=file_path,
-                filename=filename,
-                metadata=metadata,
-                collection_name=self.__appwrite_file_manager_config.collection_name,
-                collection_id=self.__appwrite_file_manager_config.collection_id,
-            ).to_dict()
-        
-        return OperationResult(**upload_result)
-
     def _require_consumer_name(self) -> str:
         """Return this consumer's document name, or raise.
 
@@ -123,8 +57,7 @@ class PredictionStoreManager:
         constant. `test_seam_contract_binding.py` binds the constant to the registry row, but a
         falsy name used to be handled two different ways — `get_predictions_by_metadata` **omitted**
         the filter, silently widening the query across every consumer's documents and returning a
-        non-empty result for the wrong consumer; `list_all_predictions` passed the falsy value
-        through as a literal filter. Both now refuse (ADR-003 fail-loud).
+        non-empty result for the wrong consumer. It now refuses (ADR-003 fail-loud).
 
         The two callers share this guard deliberately: the defect was that they disagreed, so the
         check is the thing that must not be duplicated.
@@ -264,23 +197,6 @@ class PredictionStoreManager:
         
         return file_id
 
-    def get_latest_file_metadata(self, filters: Dict[str, Any]) -> Optional[PredictionFileMetadata]:
-        """Like get_latest_file_id() but includes creation/update timestamps."""
-        files_list = self.get_predictions_by_metadata(filters=filters)
-        if not files_list:
-            return None
-
-        latest = files_list[0]
-        file_id = latest.get("fileId")
-        if not file_id:
-            return None
-
-        return PredictionFileMetadata(
-            file_id=file_id,
-            created_at=latest.get("$createdAt", ""),
-            updated_at=latest.get("$updatedAt", ""),
-        )
-
     def get_latest_provenance(self, filters: Dict[str, Any]) -> Optional[PredictionProvenance]:
         """C-86: build a lineage record for the newest matching artifact — its identity
         (file ID, hash, timestamp, filename) plus the declared upstream `source`/`pipeline`
@@ -349,150 +265,6 @@ class PredictionStoreManager:
                 if file_id:
                     resolved[filename] = file_id
         return resolved
-
-    def download_latest_file(
-        self,
-        filters: Optional[Dict[str, Any]] = None,
-        save_path: Union[Path, str] = None,
-        use_cache: bool = True,
-        validate_cache: bool = True,
-    ) -> OperationResult:
-        if filters is None:
-            filters = {}
-
-        latest_file_id = self.get_latest_file_id(filters=filters)
-        if latest_file_id is None:
-            error_msg = f"No files found matching the given filters: {filters}"
-            logger.error(error_msg)
-            raise FileNotFoundError(error_msg)
-        
-        logger.info(f"Downloading latest file: {latest_file_id}")
-        return self.download_prediction(
-            file_id=latest_file_id,
-            save_path=save_path,
-            use_cache=use_cache,
-            validate_cache=validate_cache,
-        )
-    
-    def get_file_metadata(self, file_id: str) -> OperationResult:
-        """
-        Get metadata for a specific file from the metadata collection.
-        
-        Args:
-            file_id: The ID of the file to get metadata for
-            
-        Returns:
-            OperationResult with the file metadata
-        """
-        try:
-            search_result = self.__appwrite_file_manager.metadata_manager.search_files_by_metadata(
-                filters={"fileId": file_id},
-                collection_name=self.__appwrite_file_manager_config.collection_name,
-                collection_id=self.__appwrite_file_manager_config.collection_id,
-                database_id=self.__appwrite_file_manager_config.database_id,
-            )
-            
-            if not search_result.success:
-                return OperationResult(
-                    success=False,
-                    error=f"Failed to get metadata for file {file_id}: {search_result.error}",
-                    code=search_result.code
-                )
-            
-            documents = search_result.data.get("documents", [])
-            if not documents:
-                return OperationResult(
-                    success=False,
-                    error=f"No metadata found for file {file_id}",
-                    code="NOT_FOUND"
-                )
-            
-            return OperationResult(
-                success=True,
-                data=documents[0],
-                code="FOUND"
-            )
-        
-        except Exception as e:
-            logger.error(f"Error getting file metadata: {e}")
-            return OperationResult(
-                success=False,
-                error=str(e),
-                code="UNKNOWN_ERROR"
-            )
-    
-    def update_prediction_metadata(
-        self,
-        file_id: str,
-        metadata_updates: Dict[str, Any]
-    ) -> OperationResult:
-        """
-        Update metadata for a specific prediction file.
-        
-        Args:
-            file_id: The ID of the file to update
-            metadata_updates: Dictionary of metadata fields to update
-            
-        Returns:
-            OperationResult with the update status
-        """
-        return self.__appwrite_file_manager.metadata_manager.update_file_metadata(
-            file_id=file_id,
-            metadata_updates=metadata_updates,
-            collection_name=self.__appwrite_file_manager_config.collection_name,
-            collection_id=self.__appwrite_file_manager_config.collection_id,
-            database_id=self.__appwrite_file_manager_config.database_id,
-        )
-    
-    def delete_prediction(self, file_id: str) -> OperationResult:
-        """
-        Delete a prediction file and its metadata.
-
-        Args:
-            file_id: The ID of the file to delete
-
-        Returns:
-            OperationResult with the deletion status
-        """
-        delete_result = self.__appwrite_file_manager.delete_file(
-            bucket_id=self.__appwrite_file_manager_config.bucket_id,
-            file_id=file_id
-        )
-
-        if not delete_result.success:
-            logger.error(f"Failed to delete file {file_id}: {delete_result.error}")
-            return delete_result
-
-        search = self.__appwrite_file_manager.metadata_manager.search_files_by_metadata(
-            filters={"fileId": file_id},
-            collection_name=self.__appwrite_file_manager_config.collection_name,
-            collection_id=self.__appwrite_file_manager_config.collection_id,
-            database_id=self.__appwrite_file_manager_config.database_id,
-        )
-        if search.success:
-            for doc in search.data.get("documents", []):
-                doc_id = doc.get("$id")
-                if doc_id:
-                    result = self.__appwrite_file_manager.metadata_manager.delete_metadata_document(
-                        document_id=doc_id,
-                        collection_id=self.__appwrite_file_manager_config.collection_id,
-                        database_id=self.__appwrite_file_manager_config.database_id,
-                    )
-                    if not result.success:
-                        logger.warning(f"Failed to delete metadata doc {doc_id}: {result.error}")
-
-        return delete_result
-    
-    def list_all_predictions(
-        self,
-    ) -> List[Dict[str, Any]]:
-        """
-        List all predictions for the current model.
-        
-        Returns:
-            List of prediction metadata documents
-        """
-        return self.get_predictions_by_metadata(filters={"name": self._require_consumer_name()})
     
     # Debug
     def list_all_predictions_unfiltered(self) -> List[Dict[str, Any]]:

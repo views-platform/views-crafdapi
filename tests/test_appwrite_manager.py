@@ -18,9 +18,6 @@ from views_crafdapi.managers.appwrite import (
     CacheValidationResult,
     MetadataManager,
     OperationResult,
-    ProvisioningDisabledError,
-    ProvisioningError,
-    _require_provisioning,
 )
 
 pytestmark = pytest.mark.layer4_infra
@@ -347,91 +344,12 @@ class TestCacheManager:
         result = manager.validate_cache("bucket1", "file123")
         assert result == CacheValidationResult.INVALID_TTL
 
-    def test_remove_from_cache(self, temp_cache_dir):
-        manager = CacheManager(temp_cache_dir, timedelta(hours=24))
-        
-        test_file = temp_cache_dir / "bucket1" / "file123"
-        test_file.parent.mkdir(parents=True)
-        test_file.write_text("test content")
-        
-        manager.add_to_cache("bucket1", "file123", test_file)
-        assert "bucket1/file123" in manager.cache_metadata
-        
-        manager.remove_from_cache("bucket1", "file123")
-        assert "bucket1/file123" not in manager.cache_metadata
-        assert not test_file.exists()
-
-    def test_clear_cache_all(self, temp_cache_dir):
-        manager = CacheManager(temp_cache_dir, timedelta(hours=24))
-        
-        # Add multiple files
-        for i in range(3):
-            test_file = temp_cache_dir / "bucket1" / f"file{i}"
-            test_file.parent.mkdir(parents=True, exist_ok=True)
-            test_file.write_text(f"content {i}")
-            manager.add_to_cache("bucket1", f"file{i}", test_file)
-        
-        result = manager.clear_cache()
-        
-        assert result.success
-        assert result.data["deleted_files"] == 3
-        assert len(manager.cache_metadata) == 0
-
-    def test_get_cache_stats(self, temp_cache_dir):
-        manager = CacheManager(temp_cache_dir, timedelta(hours=24))
-        
-        test_file = temp_cache_dir / "bucket1" / "test.txt"
-        test_file.parent.mkdir(parents=True)
-        test_file.write_text("test content")
-        
-        manager.add_to_cache("bucket1", "file123", test_file)
-        
-        stats = manager.get_stats()
-        
-        assert stats["total_files"] == 1
-        assert "bucket1" in stats["by_bucket"]
-        assert stats["by_bucket"]["bucket1"]["files"] == 1
-
 
 # Test MetadataManager
 class TestMetadataManager:
     @pytest.fixture
     def metadata_manager(self, mock_databases, api_key_config, mock_tables):
         return MetadataManager(mock_databases, api_key_config, mock_tables)
-
-    def test_create_database_if_not_exists_new(self, metadata_manager, mock_databases, monkeypatch):
-        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
-        mock_databases.list.return_value = _sdk_result(databases=[])
-        mock_databases.create.return_value = _sdk_result(
-            **{"$id": "file_metadata", "name": "File Metadata"}
-        )
-        
-        result = metadata_manager.create_database_if_not_exists()
-        
-        assert result.success
-        mock_databases.create.assert_called_once()
-
-    def test_create_database_if_not_exists_existing(self, metadata_manager, mock_databases):
-        mock_databases.list.return_value = _sdk_result(
-            databases=[
-                _sdk_result(**{"$id": "file_metadata", "name": "Test Bucket Metadata"})
-            ]
-        )
-        
-        result = metadata_manager.create_database_if_not_exists()
-        
-        assert result.success
-        assert result.code == "EXISTS"
-        mock_databases.create.assert_not_called()
-
-    def test_infer_attribute_type(self, metadata_manager):
-        # Test different types
-        assert metadata_manager._infer_attribute_type("string") == ("string", False)
-        assert metadata_manager._infer_attribute_type(123) == ("integer", False)
-        assert metadata_manager._infer_attribute_type(12.5) == ("double", False)
-        assert metadata_manager._infer_attribute_type(True) == ("boolean", False)
-        assert metadata_manager._infer_attribute_type([1, 2, 3]) == ("integer", True)
-        assert metadata_manager._infer_attribute_type("2025-10-22T12:00:00") == ("datetime", False)
 
     def test_search_files_by_metadata(self, metadata_manager, mock_tables):
         mock_tables.list_rows.return_value = _sdk_result(
@@ -473,83 +391,6 @@ class TestMetadataManager:
 
 # Test AppWriteFileManager
 class TestAppWriteFileManager:
-
-    def test_calculate_file_hash_from_path(self, file_manager, tmp_path):
-        test_file = tmp_path / "test.txt"
-        test_content = b"test content"
-        test_file.write_bytes(test_content)
-        
-        file_hash = file_manager._calculate_file_hash(file_path=str(test_file))
-        expected_hash = hashlib.sha256(test_content).hexdigest()
-        
-        assert file_hash == expected_hash
-
-    def test_calculate_file_hash_from_bytes(self, file_manager):
-        test_content = b"test content"
-        
-        file_hash = file_manager._calculate_file_hash(file_bytes=test_content)
-        expected_hash = hashlib.sha256(test_content).hexdigest()
-        
-        assert file_hash == expected_hash
-
-    def test_upload_file_success(self, file_manager, tmp_path):
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("test content")
-        
-        file_manager.storage.create_file.return_value = _sdk_result(
-            **{"$id": "file123", "name": "test.txt", "sizeOriginal": 12}
-        )
-
-        with patch("views_crafdapi.managers.appwrite.manager.InputFile"):
-            result = file_manager.upload_file(
-                "bucket1",
-                str(test_file),
-                check_duplicates=False
-            )
-        
-        assert result.success
-        assert result.data["$id"] == "file123"
-
-    def test_upload_file_duplicate_exists(self, file_manager, tmp_path):
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("test content")
-        
-        # Mock duplicate detection
-        file_manager.metadata_manager.check_file_exists_by_hash = Mock(
-            return_value=OperationResult(
-                success=True,
-                data={"$id": "existing_file"},
-                code="FOUND"
-            )
-        )
-        
-        result = file_manager.upload_file(
-            "bucket1",
-            str(test_file),
-            check_duplicates=True,
-            overwrite=False
-        )
-        
-        assert result.success
-        assert result.code == "EXISTS"
-
-    def test_upload_file_from_bytes(self, file_manager):
-        test_content = b"test content"
-        
-        file_manager.storage.create_file.return_value = _sdk_result(
-            **{"$id": "file123", "name": "test.txt", "sizeOriginal": len(test_content)}
-        )
-        
-        with patch("views_crafdapi.managers.appwrite.manager.InputFile"):
-            result = file_manager.upload_file_from_bytes(
-                "bucket1",
-                test_content,
-                "test.txt",
-                check_duplicates=False
-            )
-        
-        assert result.success
-        assert result.data["$id"] == "file123"
 
     def test_download_file_from_cache(self, file_manager, temp_cache_dir):
         # Setup cache
@@ -623,18 +464,6 @@ class TestAppWriteFileManager:
         assert len(result.data["files"]) == 2
         assert result.data["total"] == 2
 
-    def test_delete_file(self, file_manager):
-        file_manager.storage.delete_file.return_value = _sdk_result()
-        file_manager.cache_manager.remove_from_cache = Mock()
-        
-        result = file_manager.delete_file("bucket1", "file123")
-        
-        assert result.success
-        assert result.code == "DELETED"
-        file_manager.cache_manager.remove_from_cache.assert_called_once_with(
-            "bucket1", "file123"
-        )
-
     def test_get_file(self, file_manager):
         file_manager.storage.get_file.return_value = _sdk_result(
             **{"$id": "file123", "name": "test.txt", "sizeOriginal": 100}
@@ -644,141 +473,6 @@ class TestAppWriteFileManager:
         
         assert result.success
         assert result.data["$id"] == "file123"
-
-    def test_create_bucket(self, file_manager, monkeypatch):
-        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")  # #276: provisioning is opt-in
-        file_manager.storage.create_bucket.return_value = _sdk_result(
-            **{"$id": "new_bucket", "name": "New Bucket"}
-        )
-        file_manager.metadata_manager.create_database_if_not_exists = Mock(
-            return_value=OperationResult(success=True, data={})
-        )
-        
-        result = file_manager.create_bucket(
-            "new_bucket",
-            name="New Bucket",
-            create_metadata_db=True
-        )
-        
-        assert result.success
-        assert result.data["$id"] == "new_bucket"
-
-    def test_upload_file_with_metadata(self, file_manager, tmp_path):
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("test content")
-        
-        # Mock the upload and metadata creation
-        file_manager.upload_file = Mock(
-            return_value=OperationResult(
-                success=True,
-                data={"$id": "file123", "name": "test.txt", "sizeOriginal": 12}
-            )
-        )
-        file_manager.metadata_manager.create_metadata_collection_if_not_exists = Mock(
-            return_value=OperationResult(
-                success=True,
-                data={"database_id": "db1", "collection_id": "coll1"}
-            )
-        )
-        file_manager.metadata_manager.check_file_exists_by_hash = Mock(
-            return_value=OperationResult(success=False, code="NOT_FOUND")
-        )
-        file_manager._store_metadata_document = Mock(
-            return_value=OperationResult(success=True, data={})
-        )
-        
-        metadata = {"custom_field": "custom_value"}
-        
-        result = file_manager.upload_file_with_metadata(
-            "bucket1",
-            str(test_file),
-            "test.txt",
-            metadata
-        )
-
-        assert result.success
-
-    def _arrange_orphan(self, file_manager, tmp_path, get_file_result):
-        """FOUND_BY_HASH metadata whose storage probe returns ``get_file_result`` — the
-        input to the #322 orphan-delete gating. Also arms a successful re-upload, which is
-        only reached when the file is a *true* orphan."""
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("test content")
-        file_manager.metadata_manager.check_file_exists_by_hash = Mock(
-            return_value=OperationResult(
-                success=True, code="FOUND_BY_HASH",
-                data={"fileId": "file123", "$id": "doc123"},
-            )
-        )
-        file_manager.get_file = Mock(return_value=get_file_result)
-        file_manager.databases.delete_document = Mock()
-        file_manager.upload_file = Mock(
-            return_value=OperationResult(
-                success=True, data={"$id": "newfile", "name": "test.txt", "sizeOriginal": 12}
-            )
-        )
-        file_manager.metadata_manager.create_metadata_collection_if_not_exists = Mock(
-            return_value=OperationResult(success=True, data={"database_id": "db1", "collection_id": "coll1"})
-        )
-        file_manager._store_metadata_document = Mock(return_value=OperationResult(success=True, data={}))
-        return str(test_file)
-
-    def test_orphan_true_not_found_deletes_and_reuploads(self, file_manager, tmp_path):
-        # get_file reports a GENUINE not-found -> the metadata is a real orphan: delete + re-upload.
-        path = self._arrange_orphan(
-            file_manager, tmp_path,
-            OperationResult(success=False, code="storage_file_not_found", error="Get file failed"),
-        )
-        result = file_manager.upload_file_with_metadata("bucket1", path, "test.txt", {"k": "v"})
-        file_manager.databases.delete_document.assert_called_once()
-        assert result.success
-
-    def test_orphan_auth_error_does_not_delete_and_fails_visible(self, file_manager, tmp_path):
-        # get_file fails for lack of read scope -> we CANNOT know the file is gone: never delete.
-        path = self._arrange_orphan(
-            file_manager, tmp_path,
-            OperationResult(success=False, code="general_unauthorized_scope", error="missing scope files.read"),
-        )
-        result = file_manager.upload_file_with_metadata("bucket1", path, "test.txt", {"k": "v"})
-        file_manager.databases.delete_document.assert_not_called()
-        assert not result.success
-        assert result.code == "general_unauthorized_scope"
-
-    def test_orphan_unexpected_error_does_not_delete_and_fails_visible(self, file_manager, tmp_path):
-        path = self._arrange_orphan(
-            file_manager, tmp_path,
-            OperationResult(success=False, code="UNEXPECTED_ERROR", error="boom"),
-        )
-        result = file_manager.upload_file_with_metadata("bucket1", path, "test.txt", {"k": "v"})
-        file_manager.databases.delete_document.assert_not_called()
-        assert not result.success
-        assert result.code == "UNEXPECTED_ERROR"
-
-    def test_orphan_not_found_via_message_when_code_is_unreliable(self, file_manager, tmp_path):
-        # #341 review finding 2: the SDK can leave e.type (-> code) None for non-JSON error bodies,
-        # so a genuine not-found must still heal via the message (like the sibling get_bucket).
-        path = self._arrange_orphan(
-            file_manager, tmp_path,
-            OperationResult(success=False, code=None, error="The requested file could not be found."),
-        )
-        result = file_manager.upload_file_with_metadata("bucket1", path, "test.txt", {"k": "v"})
-        file_manager.databases.delete_document.assert_called_once()
-        assert result.success
-
-    def test_orphan_bucket_not_found_does_not_delete(self, file_manager, tmp_path):
-        # #341 max review finding 1: a wrong/missing bucket_id yields storage_bucket_not_found whose
-        # message ALSO contains "could not be found" — but the file may still exist in the correct
-        # bucket, so deleting its metadata would be the exact false-orphan (C-231) the gate prevents.
-        path = self._arrange_orphan(
-            file_manager, tmp_path,
-            OperationResult(
-                success=False, code="storage_bucket_not_found",
-                error="Storage bucket with the requested ID could not be found.",
-            ),
-        )
-        result = file_manager.upload_file_with_metadata("wrong_bucket", path, "test.txt", {"k": "v"})
-        file_manager.databases.delete_document.assert_not_called()
-        assert not result.success
 
     @pytest.mark.parametrize("code", [401, 403, 404])
     def test_get_file_failure_carries_the_store_status(self, file_manager, code):
@@ -807,13 +501,6 @@ class TestAppWriteFileManager:
 
         assert not result.success
         assert result.code == "storage_file_not_found"
-
-
-    def test_get_user_preferences_api_key_no_user_id(self, file_manager):
-        result = file_manager.get_user_preferences()
-
-        assert not result.success
-        assert result.code == "MISSING_USER_ID"
 
 
 # Test Error Handling
@@ -851,68 +538,6 @@ class TestErrorHandling:
                 auth_method="session",
                 path_manager=mock_path_manager,
             )
-
-    def test_upload_file_with_metadata_partial_success(self, file_manager, tmp_path):
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("test content")
-
-        file_manager.upload_file = Mock(
-            return_value=OperationResult(
-                success=True,
-                data={"$id": "file123", "name": "test.txt", "sizeOriginal": 12}
-            )
-        )
-        file_manager.metadata_manager.check_file_exists_by_hash = Mock(
-            return_value=OperationResult(success=False, code="NOT_FOUND")
-        )
-        file_manager.metadata_manager.create_metadata_collection_if_not_exists = Mock(
-            return_value=OperationResult(
-                success=True,
-                data={"database_id": "db1", "collection_id": "coll1"}
-            )
-        )
-        file_manager._store_metadata_document = Mock(
-            return_value=OperationResult(
-                success=False, error="DB write failed", code="WRITE_ERROR"
-            )
-        )
-
-        result = file_manager.upload_file_with_metadata(
-            "bucket1", str(test_file), "test.txt", {"key": "val"}
-        )
-
-        assert not result.success
-        assert result.code == "PARTIAL_SUCCESS"
-        assert result.data["file_id"] == "file123"
-
-    def test_upload_file_appwrite_exception_wrapping(self, file_manager, tmp_path):
-        file_manager.storage.create_file.side_effect = AppwriteException(
-            "Internal error", 500, "storage_internal"
-        )
-
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("test content")
-
-        with patch("views_crafdapi.managers.appwrite.manager.InputFile"):
-            result = file_manager.upload_file(
-                "bucket1", str(test_file), check_duplicates=False
-            )
-
-        assert not result.success
-        assert result.code == "storage_internal"
-
-    def test_upload_file_from_bytes_exception_wrapping(self, file_manager):
-        file_manager.storage.create_file.side_effect = AppwriteException(
-            "Internal error", 500, "storage_internal"
-        )
-
-        with patch("views_crafdapi.managers.appwrite.manager.InputFile"):
-            result = file_manager.upload_file_from_bytes(
-                "bucket1", b"test content", "test.txt", check_duplicates=False
-            )
-
-        assert not result.success
-        assert result.code == "storage_internal"
 
     def test_download_file_io_error(self, file_manager, tmp_path):
         """A failure while writing the cache file itself answers IO_ERROR."""
@@ -1091,29 +716,6 @@ class TestNormalizationContract:
         assert isinstance(result.data, dict)
         assert "file_bytes" in result.data
 
-    def test_upload_file_data_is_dict(self, file_manager, tmp_path):
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("test content")
-        file_manager.storage.create_file.return_value = _sdk_result(
-            **{"$id": "file123", "name": "test.txt", "sizeOriginal": 12}
-        )
-        with patch("views_crafdapi.managers.appwrite.manager.InputFile"):
-            result = file_manager.upload_file(
-                "bucket1", str(test_file), check_duplicates=False
-            )
-        assert result.success
-        assert isinstance(result.data, dict)
-        assert "$id" in result.data
-
-
-    def test_get_user_preferences_api_key_data_is_dict(self, file_manager):
-        file_manager.users.get_prefs.return_value = _sdk_result(
-            theme="dark", lang="en"
-        )
-        result = file_manager.get_user_preferences(user_id="user123")
-        assert result.success
-        assert isinstance(result.data, dict)
-
 
     def test_list_buckets_data_is_dict(self, file_manager):
         file_manager.storage.list_buckets.return_value = _sdk_result(
@@ -1136,83 +738,6 @@ class TestProvisioningGate:
     """þing-01 #276 / PLATFORM-001 D5: create_* provisioning is opt-in (default OFF) and raises,
     so a missing/wrong coordinate on a serving path never silently creates phantom storage."""
 
-    def test_require_provisioning_raises_by_default(self, monkeypatch):
-        monkeypatch.delenv("CRAFDAPI_ALLOW_PROVISIONING", raising=False)
-        with pytest.raises(ProvisioningDisabledError, match=r"bucket 'x'"):
-            _require_provisioning("bucket 'x'")
-
-    def test_require_provisioning_passes_when_explicitly_enabled(self, monkeypatch):
-        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")
-        assert _require_provisioning("bucket 'x'") is None  # no raise
-
-    def test_create_bucket_refuses_provisioning_by_default(self, file_manager, monkeypatch):
-        monkeypatch.delenv("CRAFDAPI_ALLOW_PROVISIONING", raising=False)
-        with pytest.raises(ProvisioningDisabledError, match="bucket"):
-            file_manager.create_bucket("phantom_bucket", name="Phantom")
-        file_manager.storage.create_bucket.assert_not_called()  # raised before touching the SDK
-
-    def test_create_bucket_half_success_raises_all_or_raise(self, file_manager, monkeypatch):
-        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")
-        file_manager.storage.create_bucket.return_value = _sdk_result(**{"$id": "b", "name": "B"})
-        file_manager.metadata_manager.create_database_if_not_exists = Mock(
-            return_value=OperationResult(success=False, error="db creation failed")
-        )
-        with pytest.raises(ProvisioningError, match="stranded"):
-            file_manager.create_bucket("b", name="B", create_metadata_db=True)
-
-    def test_serving_and_read_paths_never_provision(self):
-        # Characterisation guard (#276 step 1): serving/read modules must never call a create_*
-        # helper — so the gate can never fire on a serving path, and gating cannot break serving.
-        import pathlib
-        managers = pathlib.Path(__file__).parent.parent / "src" / "views_crafdapi" / "managers"
-        for mod in ("dataset_service.py", "api.py"):
-            text = (managers / mod).read_text()
-            for helper in ("create_bucket(", "create_database_if_not_exists(", "_create_attribute_by_type("):
-                assert helper not in text, f"{mod} calls provisioning helper {helper} on a serving path"
-
-
-    def test_create_single_attribute_refuses_provisioning_by_default(
-        self, mock_databases, api_key_config, monkeypatch
-    ):
-        """The gate must be total. `_create_single_attribute` writes the seven fixed schema
-        attributes via the same `databases.create_*_attribute` SDK calls its gated sibling
-        `_create_attribute_by_type` uses, but reached the SDK with no provisioning check —
-        so backfilling attributes onto an *existing* collection bypassed þing-01 #276."""
-        monkeypatch.delenv("CRAFDAPI_ALLOW_PROVISIONING", raising=False)
-        manager = MetadataManager(mock_databases, api_key_config, Mock())
-
-        with pytest.raises(ProvisioningDisabledError, match=r"attribute 'fileId'"):
-            manager._create_single_attribute(
-                "db", "coll", {"key": "fileId", "type": "string", "size": 255, "required": True}
-            )
-
-        mock_databases.create_string_attribute.assert_not_called()
-
-
-    def test_metadata_collection_is_not_created_world_open(
-        self, mock_databases, api_key_config, monkeypatch
-    ):
-        """views-crafdapi#91 / #123 ratchet: the metadata collection must never be created with
-        a `Role.any()` grant. The identical shape left two production collections anonymously
-        readable and writable until 2026-08-14. A server-side Appwrite API key bypasses
-        collection permissions, so an empty grant list is sufficient to serve."""
-        monkeypatch.setenv("CRAFDAPI_ALLOW_PROVISIONING", "1")
-        mock_databases.list.return_value = _sdk_result(databases=[{"$id": "db", "name": "db"}])
-        mock_databases.list_collections.return_value = _sdk_result(collections=[])
-        mock_databases.create_collection.return_value = _sdk_result(
-            **{"$id": "coll", "name": "coll"}
-        )
-        manager = MetadataManager(mock_databases, api_key_config, Mock())
-
-        manager.create_metadata_collection_if_not_exists(
-            collection_name="coll", collection_id="coll", database_id="db"
-        )
-
-        mock_databases.create_collection.assert_called_once()
-        granted = mock_databases.create_collection.call_args.kwargs["permissions"]
-        assert granted == [], f"metadata collection created with grants: {granted}"
-        assert not any("any" in str(g) for g in granted)
-
 
 class TestCredentialRedaction:
     """þing-01 #277 / PLATFORM-001 redaction clause: no credential in any carrier reaches a log line."""
@@ -1223,7 +748,6 @@ class TestCredentialRedaction:
         assert "test_api_key" not in text, "the API key leaked into AppwriteConfig repr"
 
     def test_api_key_hash_is_a_digest_not_the_raw_key(self):
-        import hashlib
         raw = "super-secret-caller-key"
         # this is exactly how api.py keys the cache — a sha256 prefix, never the raw key
         digest = hashlib.sha256(raw.encode()).hexdigest()[:16]

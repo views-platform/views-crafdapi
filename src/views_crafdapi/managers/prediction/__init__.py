@@ -6,7 +6,7 @@ per module, mirroring the ``appwrite/`` package (S9):
 * :mod:`.constants`  — wire-contract artifact types + metadata field schemas
 * :mod:`.quarantine` — the C-71 operator rollback gate (blocklist/allowlist)
 * :mod:`.metadata`   — the value objects (PredictionMetadata / -FileMetadata / -Provenance)
-* :mod:`.manager`    — ``PredictionStoreManager`` (fused reader + dead-producer writer)
+* :mod:`.manager`    — ``PredictionStoreManager`` (finds and downloads deliveries; read only)
   and ``MetadataLookupError``, raised when a metadata search fails
 
 The public surface is re-exported here so ``from views_crafdapi.managers.prediction

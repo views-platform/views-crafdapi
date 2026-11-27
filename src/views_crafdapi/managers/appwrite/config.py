@@ -29,7 +29,6 @@ class AppwriteConfig:
 
     # Authentication settings
     auth_method: AuthMethod = AuthMethod.API_KEY
-    allow_metadata_only_updates: bool = True
 
     # Cache settings
     cache_dir: Optional[str] = None
