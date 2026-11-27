@@ -1,12 +1,21 @@
 """
 Lightweight client for the VIEWS CRAF'd Prediction API.
 
-Convenience wrappers for fetching slices and converting responses to pandas
+Convenience wrappers for downloading bulk files and fetching slices as pandas
 DataFrames. Intended for notebooks, scripts, and external consumers.
 """
 
+import os
+import tempfile
+import time
+from pathlib import Path
+
 import pandas as pd
 import requests
+
+_BUSY = (502, 503, 504)   # a busy server; 503 also while the service loads a new forecast
+_DROPPED = (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError)
 
 
 class CrafdApiClient:
@@ -93,3 +102,60 @@ class CrafdApiClient:
             params["columns"] = ",".join(columns)
         payload = self._get_json(f"slice/{level}/{outcome}", params=params)
         return pd.DataFrame.from_records(payload["rows"], columns=payload["columns"])
+
+    def download_bulk_to(self, level: str, outcome: str, path, *, wait_seconds: float = 60) -> str:
+        """Save one bulk file (``GET /bulk/{level}/{outcome}``) at ``path`` and return the month
+        the forecast was made in (the ``X-Forecast-Made-In`` header, such as ``"2026-11"``).
+
+        The file is written beside ``path`` and renamed only when complete, so an interrupted
+        download never leaves a file that looks whole. A busy server (502, 503, 504) or a
+        dropped connection is tried again twice, ``wait_seconds`` apart. Any other answer
+        raises ``RuntimeError`` with the service's own explanation.
+        """
+        path = Path(path)
+        partial = path.with_name(path.name + ".part")
+        route = f"/bulk/{level}/{outcome}"
+        try:
+            for attempt in (1, 2, 3):
+                try:
+                    with requests.get(f"{self._base_url}{route}", headers=self._headers,
+                                      timeout=600, stream=True) as response:
+                        if response.status_code in _BUSY and attempt < 3:
+                            print(f"The server answered {response.status_code}; "
+                                  f"trying again in {wait_seconds:.0f} seconds...")
+                        elif not response.ok:
+                            raise RuntimeError(f"API error {response.status_code} on {route}: "
+                                               f"{self._extract_detail(response)}")
+                        else:
+                            made_in = response.headers.get("X-Forecast-Made-In")
+                            if not made_in:
+                                raise RuntimeError(f"{route} did not say which month the forecast "
+                                                   "was made in (no X-Forecast-Made-In header).")
+                            with open(partial, "wb") as out:
+                                for chunk in response.iter_content(chunk_size=1 << 20):
+                                    out.write(chunk)
+                            partial.replace(path)
+                            return made_in
+                except _DROPPED:
+                    if attempt == 3:
+                        raise
+                    print(f"The download timed out or dropped; trying again in {wait_seconds:.0f} seconds...")
+                time.sleep(wait_seconds)
+        finally:
+            partial.unlink(missing_ok=True)   # never leave a partial file behind
+
+    def download_bulk(self, level: str, outcome: str, months: list[str] | None = None,
+                      columns: list[str] | None = None) -> tuple[pd.DataFrame, str]:
+        """One bulk file as a DataFrame, and the month the forecast was made in.
+
+        The file is saved to a temporary file first (the grid file is about 130 MB); with
+        ``months`` and ``columns``, only those are read from it. Retries as ``download_bulk_to``.
+        """
+        handle, name = tempfile.mkstemp(suffix=".parquet")
+        os.close(handle)
+        try:
+            made_in = self.download_bulk_to(level, outcome, name)
+            filters = [("month", "in", list(months))] if months else None
+            return pd.read_parquet(name, columns=columns, filters=filters), made_in
+        finally:
+            os.unlink(name)

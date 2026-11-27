@@ -1,6 +1,8 @@
 from unittest.mock import patch, MagicMock
 
+import pandas as pd
 import pytest
+import requests
 
 from views_crafdapi.client import CrafdApiClient
 
@@ -154,3 +156,90 @@ class TestTimeout:
         c = CrafdApiClient("http://localhost", "key", timeout=15.0)
         c.slice("country", "sb")
         assert mock_get.call_args[1]["timeout"] == 15.0
+
+
+class _Download:
+    """Stands in for a streamed ``requests.get`` answer."""
+
+    def __init__(self, status=200, body=b"", made_in="2026-11", breaks=False, detail="no such file"):
+        self.status_code, self.ok = status, status == 200
+        self.headers = {"X-Forecast-Made-In": made_in} if made_in else {}
+        self._body, self._breaks, self.text = body, breaks, detail
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def json(self):
+        return {"detail": self.text}
+
+    def iter_content(self, chunk_size):
+        yield self._body[:3]
+        if self._breaks:
+            raise requests.exceptions.ChunkedEncodingError("cut off")
+        yield self._body[3:]
+
+
+def _parquet_bytes():
+    table = pd.DataFrame({"month": ["2026-11", "2026-12"], "country_code": [1, 1], "sb_mean": [2.0, 3.0]})
+    return table.to_parquet()
+
+
+class TestDownloadBulk:
+    @patch("views_crafdapi.client.requests.get")
+    def test_saves_the_file_and_returns_the_month(self, mock_get, client, tmp_path):
+        mock_get.return_value = _Download(body=b"abcdef")
+        target = tmp_path / "country_sb.parquet"
+        assert client.download_bulk_to("country", "sb", target) == "2026-11"
+        assert target.read_bytes() == b"abcdef" and list(tmp_path.iterdir()) == [target]
+        assert mock_get.call_args.args == ("http://localhost:8080/bulk/country/sb",)
+        assert mock_get.call_args.kwargs["headers"] == {"X-API-Key": "test-api-key"}
+
+    @pytest.mark.parametrize("status", [502, 503, 504])
+    @patch("views_crafdapi.client.requests.get")
+    def test_a_busy_server_is_tried_again(self, mock_get, client, tmp_path, status):
+        mock_get.side_effect = [_Download(status), _Download(status), _Download(body=b"abcdef")]
+        assert client.download_bulk_to("grid", "ns", tmp_path / "f", wait_seconds=0) == "2026-11"
+        assert (tmp_path / "f").read_bytes() == b"abcdef"
+
+    @patch("views_crafdapi.client.requests.get")
+    def test_a_server_busy_three_times_is_an_error(self, mock_get, client, tmp_path):
+        mock_get.side_effect = [_Download(503, detail="loading")] * 3
+        with pytest.raises(RuntimeError, match="API error 503 on /bulk/grid/sb: loading"):
+            client.download_bulk_to("grid", "sb", tmp_path / "f", wait_seconds=0)
+        assert list(tmp_path.iterdir()) == []
+
+    @patch("views_crafdapi.client.requests.get")
+    def test_a_refusal_is_not_tried_again(self, mock_get, client, tmp_path):
+        mock_get.return_value = _Download(401, detail="Invalid API key")
+        with pytest.raises(RuntimeError, match="API error 401 on /bulk/grid/sb: Invalid API key"):
+            client.download_bulk_to("grid", "sb", tmp_path / "f", wait_seconds=0)
+        assert mock_get.call_count == 1 and list(tmp_path.iterdir()) == []
+
+    @patch("views_crafdapi.client.requests.get")
+    def test_a_download_cut_off_is_tried_again_and_leaves_no_partial_file(self, mock_get, client, tmp_path):
+        mock_get.side_effect = [_Download(body=b"abcdef", breaks=True), _Download(body=b"abcdef")]
+        client.download_bulk_to("grid", "sb", tmp_path / "f", wait_seconds=0)
+        assert [p.name for p in tmp_path.iterdir()] == ["f"] and (tmp_path / "f").read_bytes() == b"abcdef"
+
+        mock_get.side_effect = [_Download(body=b"abcdef", breaks=True)] * 3
+        with pytest.raises(requests.exceptions.ChunkedEncodingError):
+            client.download_bulk_to("grid", "sb", tmp_path / "g", wait_seconds=0)
+        assert [p.name for p in tmp_path.iterdir()] == ["f"]   # no g, no g.part
+
+    @patch("views_crafdapi.client.requests.get")
+    def test_an_answer_without_the_forecast_month_is_refused(self, mock_get, client, tmp_path):
+        mock_get.return_value = _Download(body=b"abcdef", made_in=None)
+        with pytest.raises(RuntimeError, match="did not say which month"):
+            client.download_bulk_to("grid", "sb", tmp_path / "f")
+        assert list(tmp_path.iterdir()) == []
+
+    @patch("views_crafdapi.client.requests.get")
+    def test_the_table_with_months_and_columns_chosen(self, mock_get, client):
+        mock_get.return_value = _Download(body=_parquet_bytes())
+        table, made_in = client.download_bulk("country", "sb")
+        assert made_in == "2026-11" and table.shape == (2, 3)
+        table, _ = client.download_bulk("country", "sb", ["2026-12"], ["month", "sb_mean"])
+        assert table.to_dict("list") == {"month": ["2026-12"], "sb_mean": [3.0]}
