@@ -204,6 +204,21 @@ class TestDownloadBulk:
         assert client.download_bulk_to("grid", "ns", tmp_path / "f", wait_seconds=0) == "2026-11"
         assert (tmp_path / "f").read_bytes() == b"abcdef"
 
+    @patch("views_crafdapi.client.time.sleep")
+    @patch("views_crafdapi.client.requests.get")
+    def test_the_wait_between_tries_and_the_request_made(self, mock_get, mock_sleep, client, tmp_path):
+        # Busy once, then no answer at all, then the file: two waits of the default minute.
+        mock_get.side_effect = [_Download(503), requests.exceptions.ConnectionError("refused"),
+                                _Download(body=b"abcdef")]
+        client.download_bulk_to("grid", "sb", tmp_path / "f")
+        assert [call.args for call in mock_sleep.call_args_list] == [(60,), (60,)]
+        assert mock_get.call_args.kwargs["stream"] is True and mock_get.call_args.kwargs["timeout"] == 600
+
+        mock_get.side_effect = requests.exceptions.Timeout("slow")
+        with pytest.raises(requests.exceptions.Timeout):
+            client.download_bulk_to("grid", "sb", tmp_path / "g", wait_seconds=0)
+        assert mock_get.call_count == 6   # three more tries, then the error
+
     @patch("views_crafdapi.client.requests.get")
     def test_a_server_busy_three_times_is_an_error(self, mock_get, client, tmp_path):
         mock_get.side_effect = [_Download(503, detail="loading")] * 3
@@ -237,9 +252,11 @@ class TestDownloadBulk:
         assert list(tmp_path.iterdir()) == []
 
     @patch("views_crafdapi.client.requests.get")
-    def test_the_table_with_months_and_columns_chosen(self, mock_get, client):
+    def test_the_table_with_months_and_columns_chosen(self, mock_get, client, tmp_path, monkeypatch):
+        monkeypatch.setattr("tempfile.tempdir", str(tmp_path))
         mock_get.return_value = _Download(body=_parquet_bytes())
         table, made_in = client.download_bulk("country", "sb")
         assert made_in == "2026-11" and table.shape == (2, 3)
         table, _ = client.download_bulk("country", "sb", ["2026-12"], ["month", "sb_mean"])
         assert table.to_dict("list") == {"month": ["2026-12"], "sb_mean": [3.0]}
+        assert list(tmp_path.iterdir()) == []   # the temporary copy is gone

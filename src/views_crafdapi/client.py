@@ -5,7 +5,6 @@ Convenience wrappers for downloading bulk files and fetching slices as pandas
 DataFrames. Intended for notebooks, scripts, and external consumers.
 """
 
-import os
 import tempfile
 import time
 from pathlib import Path
@@ -151,11 +150,8 @@ class CrafdApiClient:
         The file is saved to a temporary file first (the grid file is about 130 MB); with
         ``months`` and ``columns``, only those are read from it. Retries as ``download_bulk_to``.
         """
-        handle, name = tempfile.mkstemp(suffix=".parquet")
-        os.close(handle)
-        try:
+        with tempfile.TemporaryDirectory() as folder:   # private to this user, removed after
+            name = Path(folder) / "bulk.parquet"
             made_in = self.download_bulk_to(level, outcome, name)
             filters = [("month", "in", list(months))] if months else None
             return pd.read_parquet(name, columns=columns, filters=filters), made_in
-        finally:
-            os.unlink(name)
