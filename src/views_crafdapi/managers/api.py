@@ -19,7 +19,6 @@ from views_crafdapi.managers.dataset_service import (
 )
 from views_crafdapi.managers.prediction import PredictionStoreManager
 from views_crafdapi.managers import freshness
-from views_crafdapi.data.handlers import ForecastDataset
 from views_crafdapi.time import date_to_month_id, month_id_to_date
 from views_crafdapi.version import version_info
 from views_crafdapi.seam_contract import CONSUMER_DOCUMENT_NAME
@@ -30,7 +29,6 @@ from fastapi.responses import Response
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from contextlib import asynccontextmanager
-import uvicorn
 from dotenv import load_dotenv
 import hashlib
 from cachetools import LRUCache, TTLCache
@@ -312,14 +310,7 @@ class CrafdApiManager(APIManager):
             lifespan=self._lifespan
         )
         
-        self.appwrite_manager: Optional[AppWriteFileManager] = None
-        self._server_config = {
-            "host": self.configs.get("host", "0.0.0.0"),
-            "port": int(self.configs.get("port", 80)),
-            "reload": self.configs.get("reload", "false").lower() == "true",
-            "workers": int(self.configs.get("workers", 1)),
-        }
-        
+
         # No signal handlers of our own (#236): uvicorn's handle SIGTERM and SIGINT and run the
         # lifespan shutdown (`_lifespan`: stop the loader, wait for it, then clear the caches).
         # A handler installed here replaced uvicorn's, so a stop skipped all of that and cleared
@@ -596,10 +587,6 @@ class CrafdApiManager(APIManager):
         """Delegate the data-fetch pipeline to the composed DatasetService (epic #144 / S2)."""
         return self._dataset_service.get_latest_dataframe(manager, x_api_key, category, force_refresh)
 
-    def _get_latest_dataset(self, manager: PredictionStoreManager, x_api_key: str, category: str, force_refresh: bool = False) -> ForecastDataset:
-        """Delegate the data-fetch pipeline to the composed DatasetService (epic #144 / S2)."""
-        return self._dataset_service.get_latest_dataset(manager, x_api_key, category, force_refresh)
-
     @staticmethod
     def _history_holding(served, outcome: str):
         """The loaded history, which must hold `outcome`; otherwise a 503. Served empty, the
@@ -645,8 +632,7 @@ class CrafdApiManager(APIManager):
         # caller to stop; a valueless 200 does not.
         #
         # `_get_latest_dataframe` survives deliberately as a test seam (~30 tests drive the pipeline
-        # through it). Every route uses `_get_latest_dataset`, which returns the dataset the request
-        # selected; `_get_latest_dataframe` is that dataset's frame (C-356, #156).
+        # through it). The routes read what the loader has loaded (`_served`, ADR-044).
 
         @self.app.get("/bulk/{level}/{outcome}")
         async def get_bulk(
@@ -923,147 +909,6 @@ class CrafdApiManager(APIManager):
                     status_code=503,
                     detail="Service unhealthy"  # the cause goes to the log, not the response (C-264)
                 ) from e
-
-        
-
-    def _startup(self):
-        """Initialize and start the API server."""
-        logger.info("Starting CRAF'd API server...")
-        
-        try:
-            # Start the server
-            logger.info(f"Starting server on {self._server_config['host']}:{self._server_config['port']}")
-            
-            workers = self._server_config["workers"]
-            reload_enabled = self._server_config["reload"]
-            
-            # When using workers > 1 or reload, uvicorn requires an import string
-            if workers > 1 or reload_enabled:
-                # Cannot use both reload and workers > 1 simultaneously
-                if reload_enabled and workers > 1:
-                    logger.warning("Cannot use reload with multiple workers. Disabling reload.")
-                    reload_enabled = False
-                
-                # Use import string format for multi-worker or reload mode
-                uvicorn.run(
-                    "views_crafdapi.managers.api:create_app",
-                    host=self._server_config["host"],
-                    port=self._server_config["port"],
-                    reload=reload_enabled,
-                    workers=workers if not reload_enabled else 1,
-                    log_level="info",
-                    factory=True,
-                )
-            else:
-                # Single worker mode can use the app object directly
-                uvicorn.run(
-                    self.app,
-                    host=self._server_config["host"],
-                    port=self._server_config["port"],
-                    reload=False,
-                    workers=1,
-                    log_level="info"
-                )
-            
-        except Exception as e:
-            logger.error(f"Failed to start API server: {e}")
-            raise
-
-    def _shutdown(self):
-        """Gracefully shutdown the API server."""
-        logger.info("Shutting down CRAF'd API server...")
-        
-        try:
-            # Clear manager cache
-            for api_key_hash, managers in self._manager_cache.items():
-                # Clear any resources held by managers
-                if isinstance(managers, dict):
-                    managers.clear()
-            
-            self._manager_cache.clear()
-            self._dataframe_cache.clear()
-            self._file_cache.clear()
-            logger.info("Cleared in-memory caches")
-
-            # C-66: shutdown must NOT delete the on-disk dataset cache.
-            # `CrafdDiskCacheManager` (cache/datasets/) is a durable, 3.5-week
-            # cross-restart cache (ADR-011); wiping it on shutdown forced a full
-            # cold rebuild on every restart under a systemd Restart=always service.
-            # Shutdown releases only ephemeral, process-local state. Purging the
-            # durable cache is a deliberate, explicit operation
-            # (`_maintenance(clear_cache=True)`), never a shutdown side-effect;
-            # version-based invalidation (C-138) lives in `disk_cache.read`.
-
-            # Close any open file handles or database connections
-            logger.info("Cleaning up resources...")
-            
-            self._is_running = False
-            logger.info("CRAF'd API server shutdown complete")
-            
-        except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
-            raise
-
-
-    def _health_check(self):
-        """Perform health checks on the API server."""
-        logger.info("Performing health check...")
-        
-        health_status = {
-            "status": "healthy",
-            "checks": {}
-        }
-        
-        try:
-            # Check if server is running
-            health_status["checks"]["server"] = "running" if self._is_running else "stopped"
-            
-            # Check manager cache
-            health_status["checks"]["manager_cache_size"] = len(self._manager_cache)
-            
-            # Check cache directory
-            if hasattr(self._model_path, 'cache'):
-                cache_exists = self._model_path.cache.exists()
-                health_status["checks"]["cache"] = "available" if cache_exists else "unavailable"
-                
-            logger.info(f"Health check complete: {health_status}")
-            return health_status
-            
-        except Exception as e:
-            logger.error(f"Health check failed: {e}")
-            health_status["status"] = "unhealthy"
-            health_status["error"] = str(e)
-            return health_status
-
-    def _maintenance(self):
-        """Perform maintenance tasks on the API."""
-        logger.info("Starting maintenance tasks...")
-        
-        try:
-            # Deliberate, opt-in purge of the durable on-disk cache (C-66). This is
-            # the *explicit* way to wipe the persistent dataset cache — gated on the
-            # `clear_cache` config, never automatic. Shutdown does NOT do this.
-            if self.configs.get('clear_cache', False):
-                logger.info("Clearing cache...")
-                if hasattr(self._model_path, 'cache') and self._model_path.cache.exists():
-                    import shutil
-                    shutil.rmtree(self._model_path.cache)
-                    self._model_path.cache.mkdir(parents=True, exist_ok=True)
-                    logger.info("Cache cleared successfully")
-            
-            # Clear manager cache
-            if self.configs.get('clear_manager_cache', False):
-                logger.info("Clearing manager cache...")
-                self._manager_cache.clear()
-                self._dataframe_cache.clear()
-                self._file_cache.clear()
-                logger.info("Manager cache cleared successfully")
-                
-            logger.info("Maintenance tasks completed successfully")
-            
-        except Exception as e:
-            logger.error(f"Maintenance tasks failed: {e}")
-            raise
 
 
 # Module-level app instance for uvicorn import string (required for multi-worker mode)

@@ -1,12 +1,10 @@
-"""Post-deploy smoke test + cache warmer for the LIVE CRAF'd API (C-173).
+"""Post-deploy smoke test for the LIVE CRAF'd API (C-173).
 
 Our 899 unit tests are all mocked/in-process — none hit the deployed service, so a slow / broken /
 scope-regressed deploy reached the maintainer only in Jupyter. This is the live check that runs right
-after a deploy. It (1) VERIFIES the service — process up, correct build, Appwrite reachable, and BOTH
-historical & forecast serve with GLOBAL coverage (a non-African country returns cells — the exact
-regional-historical regression that bit us) — and (2) WARMS the server caches: a one-month slice
-still forces the full server-side dataset load (`api.py` `_get_latest_dataset`), so the first real
-consumer call afterwards is fast instead of timing out.
+after a deploy. It verifies the service: process up, correct build, the store reachable, the
+expected run served, and the data right (months, summaries, totals adding up across levels). It
+warms nothing: since ADR-044 the service loads the forecast by itself, never in a request.
 
 Run with a reader key from the `crafdapi` project in `CRAFD_KEY` (the name the partner guide
 uses), typed at a hidden prompt, never on the command line:
